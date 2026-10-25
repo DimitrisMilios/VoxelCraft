@@ -115,43 +115,131 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			if top_y > _highest_solid_y:
 				_highest_solid_y = top_y
 
-			# Deterministic tree or desert cactus placement above water level
+			# Deterministic tree, cactus, boulder, or mountain waterfall spring placement
 			if surface_y > WATER_LEVEL + 1 and lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
 				var surface_id: int = get_block_local(lx, surface_y, lz)
 				var biome: int = sample_biome(wx, wz)
 				if biome == Biome.DESERT and surface_id == BlockRegistry.BlockId.SAND:
-					if _should_spawn_tree(wx, wz):
+					if _should_spawn_tree(wx, wz, biome):
 						_place_cactus(lx, surface_y + 1, lz)
-				elif _should_spawn_tree(wx, wz) and (surface_id == BlockRegistry.BlockId.GRASS or surface_id == BlockRegistry.BlockId.SNOW):
-					if biome == Biome.SNOWY_TAIGA or surface_y >= SEA_LEVEL + 4:
+				elif _should_spawn_tree(wx, wz, biome) and (surface_id == BlockRegistry.BlockId.GRASS or surface_id == BlockRegistry.BlockId.SNOW):
+					if biome == Biome.SNOWY_TAIGA or surface_y >= SEA_LEVEL + 10:
 						_place_pine_tree(lx, surface_y + 1, lz)
 					else:
 						_place_tree(lx, surface_y + 1, lz)
+				elif (biome == Biome.FOREST or biome == Biome.SNOWY_TAIGA) and _should_spawn_boulder(wx, wz) and surface_id != BlockRegistry.BlockId.AIR:
+					_place_mossy_boulder(lx, surface_y, lz)
 
 	_generate_chunk_structures(surface_noise)
 
 
 ## Deterministic 2D climate biome sampler (Plains, Forest, Desert, Snowy Taiga).
 static func sample_biome(wx: int, wz: int) -> int:
-	var temp: float = sin(float(wx) * 0.0085 + cos(float(wz) * 0.0065) * 1.4) + cos(float(wz) * 0.0075)
-	var humid: float = cos(float(wx) * 0.0072 - float(wz) * 0.0080)
-	if temp > 0.68:
+	var fx: float = float(wx)
+	var fz: float = float(wz)
+	var warp_x: float = fx + sin(fz * 0.012) * 24.0
+	var warp_z: float = fz + cos(fx * 0.012) * 24.0
+	var temp: float = sin(warp_x * 0.0065 + cos(warp_z * 0.0052) * 1.3) + cos(warp_z * 0.0060)
+	var humid: float = cos(warp_x * 0.0058 - warp_z * 0.0068) + sin(warp_x * 0.011) * 0.35
+	if temp > 0.72:
 		return Biome.DESERT
-	if temp < -0.72:
+	if temp < -0.70:
 		return Biome.SNOWY_TAIGA
-	if humid > 0.25:
+	if humid > 0.18:
 		return Biome.FOREST
 	return Biome.PLAINS
 
 
-## Deterministic heightmap helper shared with WorldManager for cross-chunk border culling.
+## Multi-Scale Continental + Ridged Mountain + Winding River Valley Heightmap.
+## Shared with WorldManager for cross-chunk border culling.
 static func sample_surface_height(surface_noise: FastNoiseLite, wx: int, wz: int) -> int:
-	var height_sample: float = surface_noise.get_noise_2d(float(wx), float(wz))
-	return clampi(
-		SEA_LEVEL + int(round(height_sample * 16.0)),
-		8,
-		CHUNK_SIZE_Y - 12
-	)
+	var fx: float = float(wx)
+	var fz: float = float(wz)
+
+	# 1. Continentalness (Low-frequency landmass vs ocean/lake basins: -1..+1)
+	var continent: float = surface_noise.get_noise_2d(fx * 0.24, fz * 0.24)
+	# 2. Medium hills & rolling terrain
+	var hills: float = surface_noise.get_noise_2d(fx * 0.85 + 310.0, fz * 0.85 - 210.0)
+	# 3. Fine surface detail
+	var detail: float = surface_noise.get_noise_2d(fx * 2.2 - 710.0, fz * 2.2 + 540.0)
+
+	# 4. Ridged Multifractal Mountain Ranges & Jagged Alpine Peaks
+	var m_mask_raw: float = surface_noise.get_noise_2d(fx * 0.28 - 1400.0, fz * 0.28 + 1400.0)
+	var mountain_mask: float = clampf((m_mask_raw + 0.12) * 1.45, 0.0, 1.0)
+	var ridge_1: float = 1.0 - absf(surface_noise.get_noise_2d(fx * 0.62 + 820.0, fz * 0.62 - 640.0))
+	var ridge_2: float = 1.0 - absf(surface_noise.get_noise_2d(fx * 1.35 - 420.0, fz * 1.35 + 910.0))
+	var mountain_peak: float = pow(clampf(ridge_1 * 0.72 + ridge_2 * 0.28, 0.0, 1.0), 2.15)
+
+	var base_elevation: float = float(SEA_LEVEL) + continent * 11.0 + hills * 7.5 + detail * 2.2
+	var mountain_boost: float = mountain_mask * mountain_peak * 42.0
+	var total_y: float = base_elevation + mountain_boost
+
+	# 5. Winding River Channels carved across inland terrain
+	var river_raw: float = absf(surface_noise.get_noise_2d(fx * 0.34 + 2500.0, fz * 0.34 - 2500.0))
+	if river_raw < 0.058 and mountain_mask < 0.55:
+		var river_t: float = 1.0 - (river_raw / 0.058)
+		var river_bed: float = float(WATER_LEVEL - 3)
+		total_y = lerpf(total_y, river_bed, smoothstep(0.0, 1.0, river_t))
+
+	return clampi(int(round(total_y)), 8, CHUNK_SIZE_Y - 14)
+
+
+## Evaluates whether `(wx, ly, wz)` is carved out by:
+## 1) A Deep Surface Ravine / Canyon
+## 2) A Walk-In Surface Cave Entrance / Cliff Cavern
+## 3) A Winding 3D "Spaghetti" Cave Tunnel
+## 4) A Vaulted Underground "Cheese" Cavern
+static func _is_carved_cave_or_ravine(
+	surface_y: int,
+	wx: int,
+	ly: int,
+	wz: int,
+	cave_noise: FastNoiseLite
+) -> bool:
+	if cave_noise == null or ly <= 2:
+		return false
+
+	# Protect ocean/river/lake floors so water basins never drain into caves
+	if surface_y <= WATER_LEVEL + 2 and ly >= surface_y - 4:
+		return false
+
+	var fx: float = float(wx)
+	var fy: float = float(ly)
+	var fz: float = float(wz)
+
+	# 1. Deep Surface Ravines / Canyons (narrow vertical fault trenches slicing from surface down to y=14)
+	if surface_y >= WATER_LEVEL + 4 and ly >= 14 and ly <= surface_y:
+		var rav_region: float = cave_noise.get_noise_2d(fx * 0.16 + 1900.0, fz * 0.16 - 1900.0)
+		if rav_region > 0.38:
+			var rav_line: float = absf(cave_noise.get_noise_2d(fx * 0.32 - 600.0, fz * 0.32 + 600.0))
+			var ledge_wobble: float = cave_noise.get_noise_3d(fx * 0.8, fy * 1.6, fz * 0.8) * 0.008
+			if rav_line + ledge_wobble < 0.026:
+				return true
+
+	# 2. Walk-In Surface Cave Entrances & Cliffside Caverns (breaches right through hills/mountains!)
+	var can_breach_surface: bool = (surface_y >= WATER_LEVEL + 4)
+	if not can_breach_surface and ly >= surface_y - 3:
+		return false
+
+	# 3. Winding 3D "Spaghetti" Tunnels (dual-noise intersection)
+	var n1: float = cave_noise.get_noise_3d(fx * 0.78, fy * 1.05, fz * 0.78)
+	var n2: float = cave_noise.get_noise_3d(fx * 0.78 + 413.0, fy * 1.05 + 719.0, fz * 0.78 - 521.0)
+	var tunnel_radius: float = 0.145 if ly < surface_y - 3 else 0.125
+	if absf(n1) < tunnel_radius and absf(n2) < tunnel_radius:
+		if ly <= surface_y - 3:
+			return true
+		# Near the surface (`surface_y - 2 .. surface_y`), gate with an entrance mask so discrete walk-in cave mouths form!
+		var entrance_mask: float = cave_noise.get_noise_2d(fx * 0.45 - 880.0, fz * 0.45 + 880.0)
+		if entrance_mask > 0.12:
+			return true
+
+	# 4. Vaulted Underground "Cheese" Caverns (large subterranean halls below y = surface_y - 5)
+	if ly <= surface_y - 5 and ly >= 6:
+		var cavern_val: float = cave_noise.get_noise_3d(fx * 0.55 - 1200.0, fy * 0.85, fz * 0.55 + 1200.0)
+		if cavern_val > 0.47:
+			return true
+
+	return false
 
 
 ## Deterministic terrain voxel sampler shared with WorldManager for cross-chunk border culling.
@@ -170,11 +258,17 @@ static func sample_terrain_voxel(
 		return BlockRegistry.BlockId.AIR
 	if ly == 0:
 		return BlockRegistry.BlockId.STONE
-	# Do not carve open caves directly underneath water basins to avoid draining lakes
-	if cave_noise != null and surface_y > WATER_LEVEL and ly < surface_y - 3 and ly > 2:
-		var cave_val: float = cave_noise.get_noise_3d(float(wx), float(ly) * 1.4, float(wz))
-		if cave_val > 0.46:
-			return BlockRegistry.BlockId.AIR
+
+	if _is_carved_cave_or_ravine(surface_y, wx, ly, wz, cave_noise):
+		return BlockRegistry.BlockId.AIR
+
+	# Rare glowing crystal clusters hanging from deep cavern ceilings
+	if cave_noise != null and ly >= 10 and ly <= 30 and ly < surface_y - 7:
+		if _is_carved_cave_or_ravine(surface_y, wx, ly - 1, wz, cave_noise):
+			var glow_hash: int = absi((wx * 73856093) ^ (ly * 19349663) ^ (wz * 83492791)) % 1000
+			if glow_hash < 6:
+				return BlockRegistry.BlockId.GLOWSTONE
+
 	# Low-lying basins and shorelines near/below water level generate sandy beaches
 	if surface_y <= WATER_LEVEL + 1 and ly >= surface_y - 2:
 		return BlockRegistry.BlockId.SAND
@@ -183,15 +277,23 @@ static func sample_terrain_voxel(
 	if biome == Biome.DESERT and surface_y > WATER_LEVEL:
 		if ly == surface_y or ly == surface_y - 1:
 			return BlockRegistry.BlockId.SAND
-		if ly >= surface_y - 4:
+		if ly >= surface_y - 5:
 			return BlockRegistry.BlockId.SANDSTONE
 
-	# High alpine mountain peaks or Snowy Taiga biome generate snow caps
-	if surface_y >= SEA_LEVEL + 8 or (biome == Biome.SNOWY_TAIGA and surface_y > WATER_LEVEL + 1):
+	# High alpine mountain peaks & steep cliffs:
+	# Snowline at `SEA_LEVEL + 18`, rocky crags & bare stone cliffs at `SEA_LEVEL + 11..17`
+	if surface_y >= SEA_LEVEL + 18 or (biome == Biome.SNOWY_TAIGA and surface_y > WATER_LEVEL + 1):
 		if ly == surface_y:
 			return BlockRegistry.BlockId.SNOW
-		if ly >= surface_y - 2 and surface_y >= SEA_LEVEL + 8:
+		if ly >= surface_y - 3 and surface_y >= SEA_LEVEL + 14:
 			return BlockRegistry.BlockId.STONE
+	elif surface_y >= SEA_LEVEL + 12:
+		# Steep rocky mountain slopes expose bare Stone & Cobblestone crags
+		var crag_hash: int = absi((wx * 374761) ^ (wz * 668265)) % 100
+		if crag_hash < 68 or surface_y >= SEA_LEVEL + 15:
+			if ly >= surface_y - 3:
+				return BlockRegistry.BlockId.STONE
+
 	if ly == surface_y:
 		return BlockRegistry.BlockId.GRASS
 	if ly >= surface_y - 3:
@@ -212,21 +314,54 @@ static func _sample_underground_stone_or_ore(wx: int, ly: int, wz: int) -> int:
 	if sub_hash >= 68:
 		return BlockRegistry.BlockId.STONE
 
-	if ly <= 15 and cell_hash < 7:
+	if ly <= 16 and cell_hash < 8:
 		return BlockRegistry.BlockId.DIAMOND_ORE
-	if ly <= 26 and cell_hash >= 10 and cell_hash < 24:
+	if ly <= 28 and cell_hash >= 10 and cell_hash < 26:
 		return BlockRegistry.BlockId.GOLD_ORE
-	if ly <= 44 and cell_hash >= 30 and cell_hash < 68:
+	if ly <= 48 and cell_hash >= 30 and cell_hash < 74:
 		return BlockRegistry.BlockId.IRON_ORE
-	if ly <= 54 and cell_hash >= 70 and cell_hash < 130:
+	if ly <= 62 and cell_hash >= 75 and cell_hash < 142:
 		return BlockRegistry.BlockId.COAL_ORE
 
 	return BlockRegistry.BlockId.STONE
 
 
-func _should_spawn_tree(wx: int, wz: int) -> bool:
+func _should_spawn_tree(wx: int, wz: int, biome: int = Biome.PLAINS) -> bool:
 	var hash_val: int = absi((wx * 73428767) ^ (wz * 912931)) % 1000
-	return hash_val < 9
+	match biome:
+		Biome.FOREST:
+			return hash_val < 20
+		Biome.SNOWY_TAIGA:
+			return hash_val < 14
+		Biome.DESERT:
+			return hash_val < 7
+		_:
+			return hash_val < 5
+
+
+func _should_spawn_boulder(wx: int, wz: int) -> bool:
+	var hash_val: int = absi((wx * 19349663) ^ (wz * 83492791)) % 1000
+	return hash_val == 1
+
+
+func _place_mossy_boulder(lx: int, base_y: int, lz: int) -> void:
+	if base_y + 2 >= CHUNK_SIZE_Y:
+		return
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			for dy in range(0, 2):
+				if dy == 1 and (absi(dx) + absi(dz) > 1):
+					continue
+				if is_in_bounds(lx + dx, base_y + dy, lz + dz):
+					var is_mossy: bool = ((dx + dy + dz) % 2 == 0)
+					_set_voxel_raw(
+						lx + dx,
+						base_y + dy,
+						lz + dz,
+						BlockRegistry.BlockId.MOSSY_COBBLE if is_mossy else BlockRegistry.BlockId.COBBLESTONE
+					)
+	if base_y + 2 > _highest_solid_y:
+		_highest_solid_y = base_y + 2
 
 
 func _place_tree(lx: int, base_y: int, lz: int) -> void:

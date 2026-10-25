@@ -9,7 +9,7 @@ const WATER_TICK_INTERVAL: float = 0.12
 const MAX_WATER_SPREAD_PER_TICK: int = 48
 
 @export_group("World Generation")
-@export var world_seed: int = 2026
+@export var world_seed: int = 2027
 @export var render_distance: int = 5
 @export var max_concurrent_tasks: int = 4
 @export var max_main_thread_applies_per_frame: int = 3
@@ -117,6 +117,55 @@ func set_render_distance(new_distance: int) -> void:
 	if _player != null:
 		_last_player_chunk = world_to_chunk_coords(_player.global_position)
 		_update_chunk_targets(_last_player_chunk)
+
+
+## Generates a fresh world map with a new seed, clearing active chunks and respawning on the new surface.
+func regenerate_world_with_new_seed() -> int:
+	_is_shutting_down = true
+	for tid in _active_task_ids:
+		WorkerThreadPool.wait_for_task_completion(tid)
+	_active_task_ids.clear()
+	_in_flight_coords.clear()
+	_load_queue.clear()
+	_completed_mutex.lock()
+	_completed_builds.clear()
+	_completed_mutex.unlock()
+	_water_flow_queue.clear()
+	_water_flow_pending.clear()
+
+	for coord_variant in _active_chunks.keys():
+		var chunk: VoxelChunk = _active_chunks[coord_variant]
+		if is_instance_valid(chunk):
+			chunk.queue_free()
+	_active_chunks.clear()
+
+	_mirror_mutex.lock()
+	_chunk_voxel_mirror.clear()
+	_mirror_mutex.unlock()
+
+	world_seed += 1
+	_storage = ChunkStorage.new(world_seed)
+	_configure_noise()
+	_is_shutting_down = false
+
+	var start_chunk := Vector2i.ZERO
+	if _player != null:
+		_player.global_position = Vector3(8.5, 65.0, 8.5)
+		start_chunk = world_to_chunk_coords(_player.global_position)
+
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			_spawn_chunk_immediate(start_chunk + Vector2i(dx, dz))
+
+	if _player != null:
+		var spawn_wx: int = int(floor(_player.global_position.x))
+		var spawn_wz: int = int(floor(_player.global_position.z))
+		var surface_y: int = get_surface_height_at(spawn_wx, spawn_wz)
+		_player.global_position = Vector3(float(spawn_wx) + 0.5, float(surface_y) + 2.5, float(spawn_wz) + 0.5)
+
+	_update_chunk_targets(start_chunk)
+	_last_player_chunk = start_chunk
+	return world_seed
 
 
 func _configure_noise() -> void:

@@ -1308,6 +1308,16 @@ func _build_pause_menu() -> void:
 	)
 	vbox.add_child(save_btn)
 
+	var new_map_btn := Button.new()
+	new_map_btn.text = "Generate New World Map (New Seed)"
+	new_map_btn.custom_minimum_size = Vector2(0, 34)
+	new_map_btn.pressed.connect(func() -> void:
+		if _world_manager != null:
+			var new_seed: int = _world_manager.regenerate_world_with_new_seed()
+			_pause_status_label.text = "Generated New World Map (Seed %d)" % new_seed
+	)
+	vbox.add_child(new_map_btn)
+
 	var quit_btn := Button.new()
 	quit_btn.text = "Save & Quit to Desktop"
 	quit_btn.custom_minimum_size = Vector2(0, 34)
