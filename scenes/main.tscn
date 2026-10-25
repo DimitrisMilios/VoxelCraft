@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://c8v0x3lmain01"]
+[gd_scene load_steps=11 format=3 uid="uid://c8v0x3lmain01"]
 
 [ext_resource type="PackedScene" uid="uid://b6v0x3lplayer" path="res://scenes/player/player.tscn" id="1_player_scene"]
 [ext_resource type="Script" path="res://scripts/world/world_manager.gd" id="2_world_manager"]
@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://scripts/entities/mob_spawner.gd" id="4_mob_spawner"]
 [ext_resource type="Script" path="res://scripts/world/day_night_cycle.gd" id="5_day_night"]
 [ext_resource type="Script" path="res://scripts/voxel/voxel_particle_spawner.gd" id="6_particle_spawner"]
+[ext_resource type="Script" path="res://scripts/audio/retro_sfx_player.gd" id="7_retro_sfx"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_retro"]
 sky_top_color = Color(0.32, 0.58, 0.92, 1)
@@ -47,6 +48,9 @@ player_path = NodePath("../Player")
 
 [node name="VoxelParticleSpawner" type="Node3D" parent="."]
 script = ExtResource("6_particle_spawner")
+
+[node name="RetroSfxPlayer" type="Node" parent="."]
+script = ExtResource("7_retro_sfx")
 
 [node name="MobSpawner" type="Node3D" parent="."]
 script = ExtResource("4_mob_spawner")
