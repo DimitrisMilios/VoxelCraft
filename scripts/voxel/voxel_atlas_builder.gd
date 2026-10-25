@@ -179,8 +179,64 @@ static func _sample_tile_pixel(
 			var glow_col: Color = Color(1.0, 0.94, 0.55) if core else Color(0.92, 0.72, 0.24)
 			return _tint(glow_col, jitter * 0.5)
 
+		12: # Coal Ore (Stone with dark anthracite coal nuggets)
+			if _is_ore_fleck(x, y):
+				return _tint(Color(0.12, 0.13, 0.15), jitter * 0.4)
+			return _tint(stone_base, jitter)
+
+		13: # Iron Ore (Stone with warm copper-tan metallic veins)
+			if _is_ore_fleck(x, y):
+				return _tint(Color(0.84, 0.62, 0.46), jitter * 0.5)
+			return _tint(stone_base, jitter)
+
+		14: # Gold Ore (Stone with bright golden nuggets)
+			if _is_ore_fleck(x, y):
+				return _tint(Color(0.98, 0.85, 0.20), jitter * 0.4)
+			return _tint(stone_base, jitter)
+
+		15: # Diamond Ore (Stone with glowing cyan diamond crystals)
+			if _is_ore_fleck(x, y):
+				return _tint(Color(0.28, 0.94, 0.96), jitter * 0.4)
+			return _tint(stone_base, jitter)
+
+		16: # Crafting Table Top (3x3 Workbench Grid on Oak)
+			var border: bool = (x <= 1 or x >= size - 2 or y <= 1 or y >= size - 2)
+			if border:
+				return _tint(bark_base, jitter * 0.5)
+			var grid_line: bool = (x == 5 or x == 10 or y == 5 or y == 10)
+			if grid_line:
+				return _tint(Color(0.32, 0.20, 0.10), jitter * 0.3)
+			return _tint(plank_base, jitter * 0.5)
+
+		17: # Crafting Table Side (Planks with dark top rim & tool silhouettes)
+			if y < 3:
+				return _tint(bark_base, jitter * 0.5)
+			if (x >= 4 and x <= 6 and y >= 5 and y <= 11) or (x >= 10 and x <= 12 and y >= 6 and y <= 10):
+				return _tint(Color(0.36, 0.38, 0.42), jitter * 0.4)
+			return _tint(plank_base, jitter * 0.6)
+
+		18: # Furnace / Oven Front (Cobblestone arch with dark firebox & glowing embers)
+			var in_upper_opening: bool = (x >= 4 and x <= 11 and y >= 3 and y <= 7)
+			var in_lower_hearth: bool = (x >= 4 and x <= 11 and y >= 10 and y <= 13)
+			if in_upper_opening:
+				return _tint(Color(0.12, 0.12, 0.14), jitter * 0.3)
+			if in_lower_hearth:
+				var ember: bool = ((x + y) % 2 == 0)
+				return _tint(Color(0.98, 0.48, 0.14) if ember else Color(0.22, 0.14, 0.12), jitter * 0.4)
+			return _tint(cobble_base, jitter)
+
 		_:
 			return _tint(stone_base, jitter)
+
+
+static func _is_ore_fleck(x: int, y: int) -> bool:
+	return (
+		(x >= 3 and x <= 5 and y >= 3 and y <= 4)
+		or (x >= 10 and x <= 12 and y >= 4 and y <= 6)
+		or (x >= 4 and x <= 6 and y >= 10 and y <= 12)
+		or (x >= 9 and x <= 11 and y >= 11 and y <= 13)
+		or (x >= 7 and x <= 8 and y >= 7 and y <= 8)
+	)
 
 
 static func _tint(base: Color, delta: float) -> Color:

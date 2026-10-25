@@ -159,6 +159,31 @@ static func sample_terrain_voxel(
 		return BlockRegistry.BlockId.GRASS
 	if ly >= surface_y - 3:
 		return BlockRegistry.BlockId.DIRT
+	return _sample_underground_stone_or_ore(wx, ly, wz)
+
+
+## Deterministically places Coal, Iron, Gold, and Diamond ore clusters inside underground Stone strata.
+static func _sample_underground_stone_or_ore(wx: int, ly: int, wz: int) -> int:
+	# Group coordinates into 2x2x2 vein cells so ores spawn in natural multi-block clusters
+	var vx: int = wx >> 1
+	var vy: int = ly >> 1
+	var vz: int = wz >> 1
+	var cell_hash: int = absi((vx * 73856093) ^ (vy * 19349663) ^ (vz * 83492791)) % 1000
+	var sub_hash: int = absi((wx * 374761393) + (ly * 668265263) + (wz * 2147483647)) % 100
+
+	# Sub-block irregular shape (roughly 65% of the 2x2x2 vein cell becomes ore)
+	if sub_hash >= 68:
+		return BlockRegistry.BlockId.STONE
+
+	if ly <= 15 and cell_hash < 7:
+		return BlockRegistry.BlockId.DIAMOND_ORE
+	if ly <= 26 and cell_hash >= 10 and cell_hash < 24:
+		return BlockRegistry.BlockId.GOLD_ORE
+	if ly <= 44 and cell_hash >= 30 and cell_hash < 68:
+		return BlockRegistry.BlockId.IRON_ORE
+	if ly <= 54 and cell_hash >= 70 and cell_hash < 130:
+		return BlockRegistry.BlockId.COAL_ORE
+
 	return BlockRegistry.BlockId.STONE
 
 

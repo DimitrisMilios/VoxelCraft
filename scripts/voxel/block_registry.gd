@@ -1,6 +1,6 @@
 class_name BlockRegistry
 extends RefCounted
-## Central registry for VoxelCraft block IDs, properties, colors, and texture atlas coordinates.
+## Central registry for VoxelCraft block IDs, properties, hardness, colors, and texture atlas coordinates.
 
 enum BlockId {
 	AIR = 0,
@@ -15,6 +15,12 @@ enum BlockId {
 	WATER = 9,
 	SNOW = 10,
 	GLOWSTONE = 11,
+	COAL_ORE = 12,
+	IRON_ORE = 13,
+	GOLD_ORE = 14,
+	DIAMOND_ORE = 15,
+	CRAFTING_TABLE = 16,
+	FURNACE = 17,
 }
 
 enum FaceDir {
@@ -26,37 +32,80 @@ enum FaceDir {
 	NORTH = 5,  # -Z
 }
 
-## Atlas grid layout (12 tiles wide x 1 tile tall, each tile 16x16 pixels):
+## Atlas grid layout (19 tiles wide x 1 tile tall, each tile 16x16 pixels):
 ## Tile 0: Grass Top
-## Tile 1: Grass Side (Dirt with grass top fringe)
+## Tile 1: Grass Side
 ## Tile 2: Dirt
 ## Tile 3: Stone
-## Tile 4: Wood Log Side (Bark)
-## Tile 5: Wood Log Top/Bottom (Rings)
+## Tile 4: Wood Log Side
+## Tile 5: Wood Log Top
 ## Tile 6: Leaves
 ## Tile 7: Sand
 ## Tile 8: Cobblestone
 ## Tile 9: Wood Planks
 ## Tile 10: Snow
-## Tile 11: Glowstone (Luminous lantern crystal)
-const ATLAS_COLUMNS: int = 12
+## Tile 11: Glowstone
+## Tile 12: Coal Ore
+## Tile 13: Iron Ore
+## Tile 14: Gold Ore
+## Tile 15: Diamond Ore
+## Tile 16: Crafting Table Top (Grid)
+## Tile 17: Crafting Table Side (Workbench Tools)
+## Tile 18: Furnace Front (Stone Oven Opening & Embers)
+const ATLAS_COLUMNS: int = 19
 const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 16
 
 
-## Returns true if the block has solid collision and occludes adjacent solid block faces.
 static func is_solid(block_id: int) -> bool:
 	return block_id != BlockId.AIR and block_id != BlockId.WATER
 
 
-## Returns true if the block is a swimmable liquid (e.g. Water).
 static func is_liquid(block_id: int) -> bool:
 	return block_id == BlockId.WATER
 
 
-## Returns true if the block emits point light in dark caves and at night.
 static func is_light_emitter(block_id: int) -> bool:
-	return block_id == BlockId.GLOWSTONE
+	return block_id == BlockId.GLOWSTONE or block_id == BlockId.FURNACE
+
+
+static func is_interactive_station(block_id: int) -> bool:
+	return block_id == BlockId.CRAFTING_TABLE or block_id == BlockId.FURNACE
+
+
+static func is_stone_Or_ore(block_id: int) -> bool:
+	return (
+		block_id == BlockId.STONE
+		or block_id == BlockId.COBBLESTONE
+		or block_id == BlockId.COAL_ORE
+		or block_id == BlockId.IRON_ORE
+		or block_id == BlockId.GOLD_ORE
+		or block_id == BlockId.DIAMOND_ORE
+		or block_id == BlockId.FURNACE
+	)
+
+
+## Base time in seconds to break this block by hand (reduced by equipped Pickaxe multiplier).
+static func get_block_hardness(block_id: int) -> float:
+	match block_id:
+		BlockId.AIR, BlockId.WATER:
+			return 0.0
+		BlockId.LEAVES, BlockId.SNOW:
+			return 0.22
+		BlockId.GRASS, BlockId.DIRT, BlockId.SAND:
+			return 0.38
+		BlockId.WOOD_LOG, BlockId.WOOD_PLANKS, BlockId.CRAFTING_TABLE, BlockId.GLOWSTONE:
+			return 0.65
+		BlockId.STONE, BlockId.COBBLESTONE, BlockId.COAL_ORE, BlockId.FURNACE:
+			return 1.15
+		BlockId.IRON_ORE:
+			return 1.45
+		BlockId.GOLD_ORE:
+			return 1.75
+		BlockId.DIAMOND_ORE:
+			return 2.10
+		_:
+			return 0.5
 
 
 static func get_block_name(block_id: int) -> String:
@@ -84,7 +133,19 @@ static func get_block_name(block_id: int) -> String:
 		BlockId.SNOW:
 			return "Snow"
 		BlockId.GLOWSTONE:
-			return "Glow"
+			return "Glowstone"
+		BlockId.COAL_ORE:
+			return "Coal Ore"
+		BlockId.IRON_ORE:
+			return "Iron Ore"
+		BlockId.GOLD_ORE:
+			return "Gold Ore"
+		BlockId.DIAMOND_ORE:
+			return "Diamond Ore"
+		BlockId.CRAFTING_TABLE:
+			return "Craft Table"
+		BlockId.FURNACE:
+			return "Furnace"
 		_:
 			return "Unknown"
 
@@ -113,6 +174,18 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.93, 0.96, 0.99)
 		BlockId.GLOWSTONE:
 			return Color(1.0, 0.84, 0.32)
+		BlockId.COAL_ORE:
+			return Color(0.24, 0.25, 0.27)
+		BlockId.IRON_ORE:
+			return Color(0.78, 0.58, 0.44)
+		BlockId.GOLD_ORE:
+			return Color(0.96, 0.82, 0.22)
+		BlockId.DIAMOND_ORE:
+			return Color(0.28, 0.92, 0.94)
+		BlockId.CRAFTING_TABLE:
+			return Color(0.62, 0.42, 0.22)
+		BlockId.FURNACE:
+			return Color(0.38, 0.40, 0.43)
 		_:
 			return Color.GRAY
 
@@ -147,6 +220,28 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 			return 10
 		BlockId.GLOWSTONE:
 			return 11
+		BlockId.COAL_ORE:
+			return 12
+		BlockId.IRON_ORE:
+			return 13
+		BlockId.GOLD_ORE:
+			return 14
+		BlockId.DIAMOND_ORE:
+			return 15
+		BlockId.CRAFTING_TABLE:
+			if face_dir == FaceDir.TOP:
+				return 16
+			elif face_dir == FaceDir.BOTTOM:
+				return 9
+			else:
+				return 17
+		BlockId.FURNACE:
+			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
+				return 3
+			elif face_dir == FaceDir.SOUTH or face_dir == FaceDir.NORTH:
+				return 18
+			else:
+				return 8
 		_:
 			return 3
 
@@ -154,8 +249,7 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 static func get_tile_uv_rect(block_id: int, face_dir: int) -> Rect2:
 	var tile_idx: int = get_tile_index(block_id, face_dir)
 	var u_step: float = 1.0 / float(ATLAS_COLUMNS)
-	# Small UV inset prevents texture bleeding across adjacent atlas tiles
-	var uv_margin: float = 0.0015
+	var uv_margin: float = 0.0012
 	var u0: float = float(tile_idx) * u_step + uv_margin
 	var v0: float = uv_margin
 	var u_width: float = u_step - (uv_margin * 2.0)
