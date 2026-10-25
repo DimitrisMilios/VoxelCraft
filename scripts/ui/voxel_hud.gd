@@ -26,13 +26,28 @@ var _inventory: InventoryManager = null
 
 # Bottom HUD widgets
 var _hotbar_panels: Array[PanelContainer] = []
+var _hotbar_icons: Array[TextureRect] = []
 var _hotbar_swatches: Array[ColorRect] = []
 var _hotbar_labels: Array[Label] = []
 var _hotbar_dur_bars: Array[ColorRect] = []
-var _heart_rects: Array[ColorRect] = []
-var _hunger_rects: Array[ColorRect] = []
-var _oxygen_rects: Array[ColorRect] = []
+var _heart_icons: Array[TextureRect] = []
+var _hunger_icons: Array[TextureRect] = []
+var _oxygen_icons: Array[TextureRect] = []
 var _oxygen_hbox: HBoxContainer = null
+
+# Cached Blender 5.2 UI & HUD Textures
+var _tex_panel_bg: Texture2D = null
+var _tex_slot_normal: Texture2D = null
+var _tex_slot_selected: Texture2D = null
+var _tex_slot_output: Texture2D = null
+var _tex_heart_full: Texture2D = null
+var _tex_heart_half: Texture2D = null
+var _tex_heart_empty: Texture2D = null
+var _tex_hunger_full: Texture2D = null
+var _tex_hunger_half: Texture2D = null
+var _tex_hunger_empty: Texture2D = null
+var _tex_bubble_full: Texture2D = null
+var _tex_bubble_empty: Texture2D = null
 
 var _debug_label: Label = null
 var _loot_label: Label = null
@@ -70,6 +85,7 @@ var _inv_modal_slots: Array[Dictionary] = [] # 36 slots (9..35 backpack, 0..8 ho
 
 # Floating mouse cursor item stack
 var _cursor_float: PanelContainer = null
+var _cursor_icon: TextureRect = null
 var _cursor_swatch: ColorRect = null
 var _cursor_label: Label = null
 
@@ -84,6 +100,7 @@ var _damage_flash_alpha: float = 0.0
 
 
 func _ready() -> void:
+	_load_blender_ui_textures()
 	_build_screen_tints()
 	_build_crosshair_and_mining_bar()
 	_build_bottom_hud()
@@ -92,6 +109,38 @@ func _ready() -> void:
 	_build_floating_cursor_item()
 	_build_pause_menu()
 	call_deferred("_bind_references")
+
+
+func _load_blender_ui_textures() -> void:
+	_tex_panel_bg = InventoryManager.load_ui_texture("res://assets/ui/gui_panels/panel_bg.png")
+	_tex_slot_normal = InventoryManager.load_ui_texture("res://assets/ui/gui_panels/slot_normal.png")
+	_tex_slot_selected = InventoryManager.load_ui_texture("res://assets/ui/gui_panels/slot_selected.png")
+	_tex_slot_output = InventoryManager.load_ui_texture("res://assets/ui/gui_panels/slot_output.png")
+	_tex_heart_full = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/heart_full.png")
+	_tex_heart_half = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/heart_half.png")
+	_tex_heart_empty = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/heart_empty.png")
+	_tex_hunger_full = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/hunger_full.png")
+	_tex_hunger_half = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/hunger_half.png")
+	_tex_hunger_empty = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/hunger_empty.png")
+	_tex_bubble_full = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/bubble_full.png")
+	_tex_bubble_empty = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/bubble_empty.png")
+
+
+func _make_blender_stylebox(tex: Texture2D, margin: float = 6.0, fallback_bg := Color(0.16, 0.17, 0.20, 0.96)) -> StyleBox:
+	if tex != null:
+		var sb := StyleBoxTexture.new()
+		sb.texture = tex
+		sb.texture_margin_left = margin
+		sb.texture_margin_right = margin
+		sb.texture_margin_top = margin
+		sb.texture_margin_bottom = margin
+		return sb
+	var flat := StyleBoxFlat.new()
+	flat.bg_color = fallback_bg
+	flat.border_color = Color(0.55, 0.57, 0.62, 0.95)
+	flat.set_border_width_all(2)
+	flat.set_corner_radius_all(4)
+	return flat
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -134,8 +183,17 @@ func _process(delta: float) -> void:
 		if _modal_mode != ModalMode.NONE and cid != 0 and ccnt > 0:
 			_cursor_float.visible = true
 			_cursor_float.position = get_viewport().get_mouse_position() + Vector2(12, 12)
-			_cursor_swatch.color = InventoryManager.get_item_color(cid)
-			_cursor_label.text = "%s\nx%d" % [InventoryManager.get_item_short_label(cid), ccnt]
+			var icon_tex: Texture2D = InventoryManager.get_item_icon_texture(cid)
+			if _cursor_icon != null and icon_tex != null:
+				_cursor_icon.texture = icon_tex
+				_cursor_icon.visible = true
+				_cursor_swatch.visible = false
+			else:
+				if _cursor_icon != null:
+					_cursor_icon.visible = false
+				_cursor_swatch.visible = true
+				_cursor_swatch.color = InventoryManager.get_item_color(cid)
+			_cursor_label.text = str(ccnt) if ccnt > 1 else ""
 		else:
 			_cursor_float.visible = false
 
@@ -279,38 +337,47 @@ func _on_player_damaged(_amount: int) -> void:
 
 func _on_health_changed(current_hp: int, _max_hp: int) -> void:
 	var is_creative: bool = _player != null and _player.is_flying
-	for i in range(_heart_rects.size()):
+	for i in range(_heart_icons.size()):
 		var heart_hp: int = current_hp - (i * 2)
 		if is_creative:
-			_heart_rects[i].color = Color(0.28, 0.82, 0.96, 0.92)
+			_heart_icons[i].texture = _tex_heart_full
+			_heart_icons[i].modulate = Color(0.45, 0.90, 1.0, 1.0)
 		elif heart_hp >= 2:
-			_heart_rects[i].color = Color(0.92, 0.18, 0.22, 0.96)
+			_heart_icons[i].texture = _tex_heart_full
+			_heart_icons[i].modulate = Color(1, 1, 1, 1)
 		elif heart_hp == 1:
-			_heart_rects[i].color = Color(0.95, 0.56, 0.24, 0.96)
+			_heart_icons[i].texture = _tex_heart_half
+			_heart_icons[i].modulate = Color(1, 1, 1, 1)
 		else:
-			_heart_rects[i].color = Color(0.18, 0.18, 0.22, 0.78)
+			_heart_icons[i].texture = _tex_heart_empty
+			_heart_icons[i].modulate = Color(1, 1, 1, 0.92)
 
 
 func _on_hunger_changed(current_hunger: int, _max_hunger: int) -> void:
 	var is_creative: bool = _player != null and _player.is_flying
-	for i in range(_hunger_rects.size()):
+	for i in range(_hunger_icons.size()):
 		var food_pts: int = current_hunger - (i * 2)
 		if is_creative or food_pts >= 2:
-			_hunger_rects[i].color = Color(0.84, 0.52, 0.22, 0.96)
+			_hunger_icons[i].texture = _tex_hunger_full
+			_hunger_icons[i].modulate = Color(1, 1, 1, 1)
 		elif food_pts == 1:
-			_hunger_rects[i].color = Color(0.68, 0.42, 0.18, 0.92)
+			_hunger_icons[i].texture = _tex_hunger_half
+			_hunger_icons[i].modulate = Color(1, 1, 1, 1)
 		else:
-			_hunger_rects[i].color = Color(0.18, 0.18, 0.22, 0.78)
+			_hunger_icons[i].texture = _tex_hunger_empty
+			_hunger_icons[i].modulate = Color(1, 1, 1, 0.92)
 
 
 func _on_oxygen_changed(current_oxygen: int, max_oxygen: int) -> void:
 	if _oxygen_hbox != null:
 		_oxygen_hbox.visible = (_player != null and _player.is_head_underwater) or (current_oxygen < max_oxygen)
-	for i in range(_oxygen_rects.size()):
+	for i in range(_oxygen_icons.size()):
 		if i < current_oxygen:
-			_oxygen_rects[i].color = Color(0.24, 0.82, 0.98, 0.95)
+			_oxygen_icons[i].texture = _tex_bubble_full
+			_oxygen_icons[i].modulate = Color(1, 1, 1, 1)
 		else:
-			_oxygen_rects[i].color = Color(0.12, 0.22, 0.34, 0.45)
+			_oxygen_icons[i].texture = _tex_bubble_empty
+			_oxygen_icons[i].modulate = Color(1, 1, 1, 0.72)
 
 
 func _build_screen_tints() -> void:
@@ -406,120 +473,104 @@ func _build_bottom_hud() -> void:
 	_loot_label.visible = false
 	root_vbox.add_child(_loot_label)
 
-	# Underwater Oxygen Bubbles Bar (10 Bubbles)
+	# Underwater Oxygen Bubbles Bar (10 Blender-Rendered 3D Bubbles)
 	_oxygen_hbox = HBoxContainer.new()
 	_oxygen_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	_oxygen_hbox.add_theme_constant_override("separation", 4)
+	_oxygen_hbox.add_theme_constant_override("separation", 3)
 	_oxygen_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_oxygen_hbox.visible = false
 	root_vbox.add_child(_oxygen_hbox)
 
 	for i in range(10):
-		var b_frame := PanelContainer.new()
-		b_frame.custom_minimum_size = Vector2(14, 14)
-		b_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var b_style := StyleBoxFlat.new()
-		b_style.bg_color = Color(0.05, 0.14, 0.24, 0.85)
-		b_style.border_color = Color(0.18, 0.65, 0.92, 0.95)
-		b_style.set_border_width_all(1)
-		b_style.set_corner_radius_all(6)
-		b_frame.add_theme_stylebox_override("panel", b_style)
+		var b_icon := TextureRect.new()
+		b_icon.custom_minimum_size = Vector2(18, 18)
+		b_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		b_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		b_icon.texture = _tex_bubble_full
+		b_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_oxygen_hbox.add_child(b_icon)
+		_oxygen_icons.append(b_icon)
 
-		var b_fill := ColorRect.new()
-		b_fill.custom_minimum_size = Vector2(10, 10)
-		b_fill.color = Color(0.24, 0.82, 0.98, 0.95)
-		b_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		b_frame.add_child(b_fill)
-
-		_oxygen_hbox.add_child(b_frame)
-		_oxygen_rects.append(b_fill)
-
-	# Status Row: Left = 10 Hearts (Health) | Right = 10 Drumsticks (Hunger)
+	# Status Row: Left = 10 Blender 3D Hearts | Right = 10 Blender 3D Hunger Drumsticks
 	var vitals_row := HBoxContainer.new()
 	vitals_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	vitals_row.add_theme_constant_override("separation", 56)
+	vitals_row.add_theme_constant_override("separation", 64)
 	vitals_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root_vbox.add_child(vitals_row)
 
 	var hearts_hbox := HBoxContainer.new()
 	hearts_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hearts_hbox.add_theme_constant_override("separation", 4)
+	hearts_hbox.add_theme_constant_override("separation", 2)
 	hearts_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vitals_row.add_child(hearts_hbox)
 
 	for i in range(HEART_COUNT):
-		var heart_frame := PanelContainer.new()
-		heart_frame.custom_minimum_size = Vector2(16, 16)
-		heart_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var h_style := StyleBoxFlat.new()
-		h_style.bg_color = Color(0.08, 0.08, 0.10, 0.85)
-		h_style.border_color = Color(0.05, 0.05, 0.06, 0.95)
-		h_style.set_border_width_all(1)
-		h_style.set_corner_radius_all(3)
-		heart_frame.add_theme_stylebox_override("panel", h_style)
-
-		var heart_fill := ColorRect.new()
-		heart_fill.custom_minimum_size = Vector2(12, 12)
-		heart_fill.color = Color(0.92, 0.18, 0.22, 0.96)
-		heart_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		heart_frame.add_child(heart_fill)
-
-		hearts_hbox.add_child(heart_frame)
-		_heart_rects.append(heart_fill)
+		var h_icon := TextureRect.new()
+		h_icon.custom_minimum_size = Vector2(20, 20)
+		h_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		h_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		h_icon.texture = _tex_heart_full
+		h_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hearts_hbox.add_child(h_icon)
+		_heart_icons.append(h_icon)
 
 	var hunger_hbox := HBoxContainer.new()
 	hunger_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hunger_hbox.add_theme_constant_override("separation", 4)
+	hunger_hbox.add_theme_constant_override("separation", 2)
 	hunger_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vitals_row.add_child(hunger_hbox)
 
 	for i in range(HEART_COUNT):
-		var food_frame := PanelContainer.new()
-		food_frame.custom_minimum_size = Vector2(16, 16)
-		food_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var f_style := StyleBoxFlat.new()
-		f_style.bg_color = Color(0.10, 0.08, 0.06, 0.85)
-		f_style.border_color = Color(0.24, 0.16, 0.08, 0.95)
-		f_style.set_border_width_all(1)
-		f_style.set_corner_radius_all(3)
-		food_frame.add_theme_stylebox_override("panel", f_style)
-
-		var food_fill := ColorRect.new()
-		food_fill.custom_minimum_size = Vector2(12, 12)
-		food_fill.color = Color(0.84, 0.52, 0.22, 0.96)
-		food_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		food_frame.add_child(food_fill)
-
-		hunger_hbox.add_child(food_frame)
-		_hunger_rects.append(food_fill)
+		var f_icon := TextureRect.new()
+		f_icon.custom_minimum_size = Vector2(20, 20)
+		f_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		f_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		f_icon.texture = _tex_hunger_full
+		f_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hunger_hbox.add_child(f_icon)
+		_hunger_icons.append(f_icon)
 
 	var hbox := HBoxContainer.new()
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_theme_constant_override("separation", 5)
+	hbox.add_theme_constant_override("separation", 4)
 	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root_vbox.add_child(hbox)
 
 	for i in range(InventoryManager.HOTBAR_SIZE):
 		var panel := PanelContainer.new()
-		panel.custom_minimum_size = Vector2(60, 60)
+		panel.custom_minimum_size = Vector2(58, 58)
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 		var vbox := VBoxContainer.new()
 		vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+		vbox.add_theme_constant_override("separation", 1)
 		vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		panel.add_child(vbox)
 
+		var icon_rect := TextureRect.new()
+		icon_rect.custom_minimum_size = Vector2(34, 34)
+		icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon_rect.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		icon_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vbox.add_child(icon_rect)
+
 		var swatch := ColorRect.new()
-		swatch.custom_minimum_size = Vector2(24, 24)
+		swatch.custom_minimum_size = Vector2(22, 22)
 		swatch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		swatch.color = InventoryManager.get_item_color(0)
+		swatch.visible = false
 		swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vbox.add_child(swatch)
 
 		var label := Label.new()
-		label.text = "%d:Empty" % [i + 1]
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		label.add_theme_font_size_override("font_size", 10)
+		label.text = ""
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		label.add_theme_font_size_override("font_size", 11)
+		label.add_theme_color_override("font_color", Color(1, 1, 1, 0.98))
+		label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+		label.add_theme_constant_override("shadow_offset_x", 1)
+		label.add_theme_constant_override("shadow_offset_y", 1)
 		vbox.add_child(label)
 
 		var dur_bar := ColorRect.new()
@@ -532,6 +583,7 @@ func _build_bottom_hud() -> void:
 
 		hbox.add_child(panel)
 		_hotbar_panels.append(panel)
+		_hotbar_icons.append(icon_rect)
 		_hotbar_swatches.append(swatch)
 		_hotbar_labels.append(label)
 		_hotbar_dur_bars.append(dur_bar)
@@ -558,14 +610,10 @@ func _build_minecraft_modal() -> void:
 	outer_hbox.add_theme_constant_override("separation", 12)
 	center.add_child(outer_hbox)
 
-	# 1. Left Sidebar: Minecraft Recipe Book Helper (Auto-places patterns into the grid)
+	# 1. Left Sidebar: Minecraft Recipe Book Helper (Blender 3D Beveled Panel)
 	var book_panel := PanelContainer.new()
-	book_panel.custom_minimum_size = Vector2(230, 470)
-	var book_style := StyleBoxFlat.new()
-	book_style.bg_color = Color(0.14, 0.17, 0.15, 0.97)
-	book_style.border_color = Color(0.36, 0.74, 0.38, 1.0)
-	book_style.set_border_width_all(2)
-	book_style.set_corner_radius_all(6)
+	book_panel.custom_minimum_size = Vector2(235, 480)
+	var book_style := _make_blender_stylebox(_tex_panel_bg, 10.0)
 	book_style.set_content_margin_all(12)
 	book_panel.add_theme_stylebox_override("panel", book_style)
 	outer_hbox.add_child(book_panel)
@@ -591,14 +639,10 @@ func _build_minecraft_modal() -> void:
 	_recipe_book_vbox.add_theme_constant_override("separation", 5)
 	book_scroll.add_child(_recipe_book_vbox)
 
-	# 2. Main Minecraft Inventory & Station Window
+	# 2. Main Minecraft Inventory & Station Window (Blender 3D Beveled Stone Panel)
 	var main_card := PanelContainer.new()
-	main_card.custom_minimum_size = Vector2(560, 470)
-	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = Color(0.20, 0.21, 0.24, 0.98)
-	card_style.border_color = Color(0.68, 0.70, 0.74, 1.0)
-	card_style.set_border_width_all(3)
-	card_style.set_corner_radius_all(6)
+	main_card.custom_minimum_size = Vector2(560, 480)
+	var card_style := _make_blender_stylebox(_tex_panel_bg, 12.0)
 	card_style.set_content_margin_all(16)
 	main_card.add_theme_stylebox_override("panel", card_style)
 	outer_hbox.add_child(main_card)
@@ -614,15 +658,15 @@ func _build_minecraft_modal() -> void:
 	main_vbox.add_child(_modal_title_label)
 
 	_modal_feedback_label = Label.new()
-	_modal_feedback_label.text = "Left-Click: Pick/Place Stack | Right-Click: Place 1 Item"
+	_modal_feedback_label.text = "Left-Click: Stack | Right-Click: 1 Item | Shift+Click: Quick Transfer"
 	_modal_feedback_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_modal_feedback_label.add_theme_font_size_override("font_size", 12)
 	_modal_feedback_label.add_theme_color_override("font_color", Color(0.96, 0.86, 0.36))
 	main_vbox.add_child(_modal_feedback_label)
 
-	# Top Station Area (Holds 2x2 Crafting, 3x3 Crafting Table, or Furnace Oven)
+	# Top Station Area (Holds 2x2 Crafting + Armor/Avatar, 3x3 Crafting Table, Furnace, or Chest)
 	var station_holder := CenterContainer.new()
-	station_holder.custom_minimum_size = Vector2(0, 165)
+	station_holder.custom_minimum_size = Vector2(0, 168)
 	main_vbox.add_child(station_holder)
 
 	_craft_2x2_container = _build_2x2_crafting_view()
@@ -639,9 +683,9 @@ func _build_minecraft_modal() -> void:
 
 	# Middle Area: 27-Slot Main Backpack (3 rows of 9 slots: indices 9..35)
 	var bp_label := Label.new()
-	bp_label.text = "Inventory Backpack (27 Slots)"
+	bp_label.text = "Inventory Backpack (27 Slots) — [Shift+Click] to Quick Move"
 	bp_label.add_theme_font_size_override("font_size", 12)
-	bp_label.add_theme_color_override("font_color", Color(0.80, 0.82, 0.86))
+	bp_label.add_theme_color_override("font_color", Color(0.86, 0.88, 0.92))
 	main_vbox.add_child(bp_label)
 
 	_inv_modal_slots.resize(InventoryManager.TOTAL_SLOTS)
@@ -686,8 +730,56 @@ func _build_minecraft_modal() -> void:
 func _build_2x2_crafting_view() -> Control:
 	var hbox := HBoxContainer.new()
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_theme_constant_override("separation", 20)
+	hbox.add_theme_constant_override("separation", 18)
 
+	# Left: 4 Armor Slots (Helmet, Chestplate, Leggings, Boots) + Player Character Preview Box
+	var armor_vbox := GridContainer.new()
+	armor_vbox.columns = 2
+	armor_vbox.add_theme_constant_override("h_separation", 4)
+	armor_vbox.add_theme_constant_override("v_separation", 4)
+	for armor_lbl in ["HELM", "CHEST", "LEGS", "BOOTS"]:
+		var a_panel := PanelContainer.new()
+		a_panel.custom_minimum_size = Vector2(44, 44)
+		a_panel.add_theme_stylebox_override("panel", _make_blender_stylebox(_tex_slot_normal, 5.0))
+		var lbl := Label.new()
+		lbl.text = armor_lbl
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		lbl.add_theme_font_size_override("font_size", 9)
+		lbl.add_theme_color_override("font_color", Color(0.65, 0.68, 0.74, 0.7))
+		a_panel.add_child(lbl)
+		armor_vbox.add_child(a_panel)
+	hbox.add_child(armor_vbox)
+
+	# Player Avatar Preview Box
+	var avatar_box := PanelContainer.new()
+	avatar_box.custom_minimum_size = Vector2(74, 96)
+	avatar_box.add_theme_stylebox_override("panel", _make_blender_stylebox(_tex_slot_normal, 6.0))
+	var av_vbox := VBoxContainer.new()
+	av_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	av_vbox.add_theme_constant_override("separation", 2)
+	avatar_box.add_child(av_vbox)
+
+	var av_head := ColorRect.new()
+	av_head.custom_minimum_size = Vector2(22, 22)
+	av_head.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	av_head.color = Color(0.88, 0.68, 0.52)
+	av_vbox.add_child(av_head)
+
+	var av_torso := ColorRect.new()
+	av_torso.custom_minimum_size = Vector2(26, 28)
+	av_torso.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	av_torso.color = Color(0.18, 0.62, 0.74)
+	av_vbox.add_child(av_torso)
+
+	var av_legs := ColorRect.new()
+	av_legs.custom_minimum_size = Vector2(20, 24)
+	av_legs.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	av_legs.color = Color(0.24, 0.28, 0.58)
+	av_vbox.add_child(av_legs)
+	hbox.add_child(avatar_box)
+
+	# Right: 2x2 Crafting Grid -> Output Slot
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 6)
@@ -704,8 +796,8 @@ func _build_2x2_crafting_view() -> Control:
 		_grid_2x2_slots.append(slot_ui)
 
 	var arrow := Label.new()
-	arrow.text = "  ===>  "
-	arrow.add_theme_font_size_override("font_size", 20)
+	arrow.text = " ===> "
+	arrow.add_theme_font_size_override("font_size", 18)
 	hbox.add_child(arrow)
 
 	_out_2x2_slot = _create_interactive_slot_widget(62, 62, func(_btn: int) -> void:
@@ -839,28 +931,40 @@ func _create_interactive_slot_widget(w: float, h: float, on_click: Callable, is_
 	panel.custom_minimum_size = Vector2(w, h)
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.13, 0.14, 0.16, 0.96)
-	style.border_color = Color(0.95, 0.78, 0.25, 0.95) if is_output else Color(0.38, 0.40, 0.44, 0.95)
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(4)
+	var slot_tex: Texture2D = _tex_slot_output if is_output else _tex_slot_normal
+	var style := _make_blender_stylebox(slot_tex, 6.0)
 	panel.add_theme_stylebox_override("panel", style)
 
 	var vbox := VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 0)
 	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(vbox)
 
+	var icon_rect := TextureRect.new()
+	var icon_sz: float = clampf(w - 14.0, 26.0, 42.0)
+	icon_rect.custom_minimum_size = Vector2(icon_sz, icon_sz)
+	icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon_rect.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	icon_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(icon_rect)
+
 	var swatch := ColorRect.new()
-	swatch.custom_minimum_size = Vector2(20, 20)
+	swatch.custom_minimum_size = Vector2(18, 18)
 	swatch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	swatch.color = InventoryManager.get_item_color(0)
+	swatch.visible = false
 	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(swatch)
 
 	var label := Label.new()
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_color_override("font_color", Color(1, 1, 1, 0.98))
+	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+	label.add_theme_constant_override("shadow_offset_x", 1)
+	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(label)
 
@@ -880,6 +984,7 @@ func _create_interactive_slot_widget(w: float, h: float, on_click: Callable, is_
 
 	return {
 		"panel": panel,
+		"icon": icon_rect,
 		"swatch": swatch,
 		"label": label,
 		"dur_bar": dur_bar,
@@ -938,28 +1043,38 @@ func _build_floating_cursor_item() -> void:
 	_cursor_float.visible = false
 	_cursor_float.z_index = 100
 
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.18, 0.20, 0.26, 0.92)
-	style.border_color = Color(1.0, 0.90, 0.30, 1.0)
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(4)
+	var style := StyleBoxEmpty.new()
 	_cursor_float.add_theme_stylebox_override("panel", style)
 	add_child(_cursor_float)
 
 	var vbox := VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 0)
 	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_cursor_float.add_child(vbox)
+
+	_cursor_icon = TextureRect.new()
+	_cursor_icon.custom_minimum_size = Vector2(36, 36)
+	_cursor_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_cursor_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_cursor_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_cursor_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(_cursor_icon)
 
 	_cursor_swatch = ColorRect.new()
 	_cursor_swatch.custom_minimum_size = Vector2(18, 18)
 	_cursor_swatch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_cursor_swatch.visible = false
 	_cursor_swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(_cursor_swatch)
 
 	_cursor_label = Label.new()
-	_cursor_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_cursor_label.add_theme_font_size_override("font_size", 10)
+	_cursor_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_cursor_label.add_theme_font_size_override("font_size", 11)
+	_cursor_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.98))
+	_cursor_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+	_cursor_label.add_theme_constant_override("shadow_offset_x", 1)
+	_cursor_label.add_theme_constant_override("shadow_offset_y", 1)
 	_cursor_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(_cursor_label)
 
@@ -968,21 +1083,34 @@ func _refresh_all_slot_visuals() -> void:
 	if _inventory == null:
 		return
 
-	# 1. Refresh bottom HUD 9-slot hotbar
+	# 1. Refresh bottom HUD 9-slot hotbar with Blender 3D Isometric Item Icons
 	for i in range(InventoryManager.HOTBAR_SIZE):
 		var slot_data: Dictionary = _inventory.slots[i]
 		var id: int = int(slot_data.get("id", 0))
 		var cnt: int = int(slot_data.get("count", 0))
-		_hotbar_swatches[i].color = InventoryManager.get_item_color(id)
+		var icon_tex: Texture2D = InventoryManager.get_item_icon_texture(id)
 		if id == 0 or cnt <= 0:
-			_hotbar_labels[i].text = "%d:---" % [i + 1]
+			_hotbar_icons[i].texture = null
+			_hotbar_icons[i].visible = false
+			_hotbar_swatches[i].visible = false
+			_hotbar_labels[i].text = ""
 			_hotbar_dur_bars[i].visible = false
-		elif InventoryManager.is_tool_item(id):
-			_hotbar_labels[i].text = "%d:%s" % [i + 1, InventoryManager.get_item_short_label(id)]
-			_update_durability_bar(_hotbar_dur_bars[i], id, int(slot_data.get("durability", -1)), 44.0)
 		else:
-			_hotbar_labels[i].text = "%d:%s\nx%d" % [i + 1, InventoryManager.get_item_short_label(id), cnt]
-			_hotbar_dur_bars[i].visible = false
+			if icon_tex != null:
+				_hotbar_icons[i].texture = icon_tex
+				_hotbar_icons[i].visible = true
+				_hotbar_swatches[i].visible = false
+			else:
+				_hotbar_icons[i].visible = false
+				_hotbar_swatches[i].visible = true
+				_hotbar_swatches[i].color = InventoryManager.get_item_color(id)
+
+			if InventoryManager.is_tool_item(id):
+				_hotbar_labels[i].text = ""
+				_update_durability_bar(_hotbar_dur_bars[i], id, int(slot_data.get("durability", -1)), 44.0)
+			else:
+				_hotbar_labels[i].text = str(cnt) if cnt > 1 else ""
+				_hotbar_dur_bars[i].visible = false
 
 	# 2. Refresh all 36 modal inventory slots
 	for i in range(mini(_inv_modal_slots.size(), _inventory.slots.size())):
@@ -1023,20 +1151,44 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 		return
 	var id: int = int(slot_data.get("id", 0))
 	var cnt: int = int(slot_data.get("count", 0))
+	var panel: PanelContainer = widget.get("panel", null) as PanelContainer
+	var icon_rect: TextureRect = widget.get("icon", null) as TextureRect
 	var swatch: ColorRect = widget["swatch"]
 	var label: Label = widget["label"]
 	var dur_bar: ColorRect = widget.get("dur_bar", null) as ColorRect
-	swatch.color = InventoryManager.get_item_color(id)
+
 	if id == 0 or cnt <= 0:
+		if panel != null:
+			panel.tooltip_text = ""
+		if icon_rect != null:
+			icon_rect.texture = null
+			icon_rect.visible = false
+		swatch.visible = false
 		label.text = ""
 		if dur_bar != null:
 			dur_bar.visible = false
-	elif InventoryManager.is_tool_item(id):
-		label.text = InventoryManager.get_item_short_label(id)
+		return
+
+	if panel != null:
+		panel.tooltip_text = InventoryManager.get_item_name(id)
+
+	var icon_tex: Texture2D = InventoryManager.get_item_icon_texture(id)
+	if icon_rect != null and icon_tex != null:
+		icon_rect.texture = icon_tex
+		icon_rect.visible = true
+		swatch.visible = false
+	else:
+		if icon_rect != null:
+			icon_rect.visible = false
+		swatch.visible = true
+		swatch.color = InventoryManager.get_item_color(id)
+
+	if InventoryManager.is_tool_item(id):
+		label.text = ""
 		if dur_bar != null:
 			_update_durability_bar(dur_bar, id, int(slot_data.get("durability", -1)), 38.0)
 	else:
-		label.text = "%s\nx%d" % [InventoryManager.get_item_short_label(id), cnt]
+		label.text = str(cnt) if cnt > 1 else ""
 		if dur_bar != null:
 			dur_bar.visible = false
 
@@ -1076,11 +1228,7 @@ func _build_pause_menu() -> void:
 
 	var card := PanelContainer.new()
 	card.custom_minimum_size = Vector2(360, 340)
-	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = Color(0.12, 0.14, 0.18, 0.96)
-	card_style.border_color = Color(0.42, 0.72, 0.36, 1.0)
-	card_style.set_border_width_all(3)
-	card_style.set_corner_radius_all(8)
+	var card_style := _make_blender_stylebox(_tex_panel_bg, 12.0)
 	card_style.set_content_margin_all(20)
 	card.add_theme_stylebox_override("panel", card_style)
 	center.add_child(card)
@@ -1177,14 +1325,6 @@ func _on_hotbar_slot_changed(slot_index: int, _item_id: int) -> void:
 
 func _update_hotbar_visuals(active_slot: int) -> void:
 	for i in range(_hotbar_panels.size()):
-		var style := StyleBoxFlat.new()
-		if i == active_slot:
-			style.bg_color = Color(0.18, 0.22, 0.28, 0.92)
-			style.border_color = Color(0.98, 0.84, 0.24, 1.0)
-			style.set_border_width_all(3)
-		else:
-			style.bg_color = Color(0.10, 0.12, 0.15, 0.78)
-			style.border_color = Color(0.45, 0.48, 0.52, 0.85)
-			style.set_border_width_all(2)
-		style.set_corner_radius_all(6)
+		var tex: Texture2D = _tex_slot_selected if i == active_slot else _tex_slot_normal
+		var style := _make_blender_stylebox(tex, 6.0)
 		_hotbar_panels[i].add_theme_stylebox_override("panel", style)

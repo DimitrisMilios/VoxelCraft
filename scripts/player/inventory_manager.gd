@@ -89,6 +89,42 @@ const CHEST_SIZE: int = 27
 ## World-coordinate persistent 27-slot Chest storage (`Vector3i -> Array[Dictionary]`).
 var world_chests: Dictionary = {}
 var active_chest_pos: Vector3i = Vector3i.ZERO
+static var _icon_cache: Dictionary = {}
+static var _ui_tex_cache: Dictionary = {}
+
+
+static func load_ui_texture(res_path: String) -> Texture2D:
+	if _ui_tex_cache.has(res_path):
+		return _ui_tex_cache[res_path]
+	var abs_path: String = ProjectSettings.globalize_path(res_path)
+	if FileAccess.file_exists(abs_path):
+		var img := Image.load_from_file(abs_path)
+		if img != null and not img.is_empty():
+			var tex := ImageTexture.create_from_image(img)
+			_ui_tex_cache[res_path] = tex
+			return tex
+	if ResourceLoader.exists(res_path):
+		var r_tex := load(res_path) as Texture2D
+		_ui_tex_cache[res_path] = r_tex
+		return r_tex
+	_ui_tex_cache[res_path] = null
+	return null
+
+
+static func get_item_icon_texture(item_id: int) -> Texture2D:
+	if item_id <= 0:
+		return null
+	var lookup_id: int = item_id
+	if lookup_id == BlockRegistry.BlockId.DOOR_OPEN:
+		lookup_id = BlockRegistry.BlockId.DOOR_CLOSED
+	elif BlockRegistry.is_liquid(lookup_id):
+		lookup_id = BlockRegistry.BlockId.WATER
+	if _icon_cache.has(lookup_id):
+		return _icon_cache[lookup_id]
+	var path: String = "res://assets/ui/item_icons/item_%d.png" % lookup_id
+	var tex: Texture2D = load_ui_texture(path)
+	_icon_cache[lookup_id] = tex
+	return tex
 
 
 func _ready() -> void:
@@ -661,11 +697,51 @@ func award_block_drop(broken_block_id: int, equipped_item_id: int) -> String:
 # ============================================================================
 
 ## Handles clicking on one of the 36 player inventory slots (`0..35`).
+## Supports Shift + Left-Click instant stack transfer between Hotbar (`0..8`) and Backpack (`9..35`).
 func click_inventory_slot(slot_idx: int, mouse_button: int) -> void:
 	if slot_idx < 0 or slot_idx >= TOTAL_SLOTS:
 		return
+	if mouse_button == MOUSE_BUTTON_LEFT and Input.is_key_pressed(KEY_SHIFT):
+		var s: Dictionary = slots[slot_idx]
+		var id: int = int(s.get("id", 0))
+		var cnt: int = int(s.get("count", 0))
+		if id > 0 and cnt > 0:
+			var rem: int = 0
+			if slot_idx < HOTBAR_SIZE:
+				rem = _insert_into_range(id, cnt, int(s.get("durability", -1)), HOTBAR_SIZE, TOTAL_SLOTS)
+			else:
+				rem = _insert_into_range(id, cnt, int(s.get("durability", -1)), 0, HOTBAR_SIZE)
+			if rem <= 0:
+				slots[slot_idx] = {"id": 0, "count": 0}
+			else:
+				slots[slot_idx]["count"] = rem
+			inventory_updated.emit()
+		return
 	slots[slot_idx] = _interact_slot_with_cursor(slots[slot_idx], mouse_button)
 	inventory_updated.emit()
+
+
+func _insert_into_range(item_id: int, count: int, durability: int, start_idx: int, end_idx: int) -> int:
+	var rem: int = count
+	var stackable: bool = not is_tool_item(item_id)
+	if stackable:
+		for i in range(start_idx, end_idx):
+			if int(slots[i]["id"]) == item_id and int(slots[i]["count"]) < MAX_STACK:
+				var space: int = MAX_STACK - int(slots[i]["count"])
+				var add_n: int = mini(rem, space)
+				slots[i]["count"] = int(slots[i]["count"]) + add_n
+				rem -= add_n
+				if rem <= 0:
+					return 0
+	for i in range(start_idx, end_idx):
+		if int(slots[i]["id"]) == 0 or int(slots[i]["count"]) <= 0:
+			var add_n: int = 1 if not stackable else mini(rem, MAX_STACK)
+			var d_val: int = durability if durability >= 0 else get_max_durability(item_id)
+			slots[i] = {"id": item_id, "count": add_n, "durability": d_val}
+			rem -= add_n
+			if rem <= 0:
+				return 0
+	return rem
 
 
 ## Handles clicking on a cell (`0..3` or `0..8`) of the active Crafting Grid.
@@ -682,6 +758,18 @@ func click_craft_output_slot() -> void:
 	var out_id: int = int(craft_output.get("id", 0))
 	var out_count: int = int(craft_output.get("count", 0))
 	if out_id == 0 or out_count <= 0:
+		return
+
+	if Input.is_key_pressed(KEY_SHIFT):
+		var rem: int = add_item(out_id, out_count, get_max_durability(out_id))
+		if rem < out_count:
+			for i in range(craft_grid.size()):
+				if int(craft_grid[i]["id"]) != 0:
+					craft_grid[i]["count"] = int(craft_grid[i]["count"]) - 1
+					if int(craft_grid[i]["count"]) <= 0:
+						craft_grid[i] = {"id": 0, "count": 0}
+			_recalculate_crafting_output()
+			inventory_updated.emit()
 		return
 
 	var cur_id: int = int(cursor_stack.get("id", 0))
@@ -718,14 +806,21 @@ func click_furnace_slot(furnace_slot_type: int, mouse_button: int) -> void:
 			var out_id: int = int(furnace_output.get("id", 0))
 			var out_cnt: int = int(furnace_output.get("count", 0))
 			if out_id != 0 and out_cnt > 0:
-				var cur_id: int = int(cursor_stack.get("id", 0))
-				var cur_cnt: int = int(cursor_stack.get("count", 0))
-				if cur_id == 0:
-					cursor_stack = {"id": out_id, "count": out_cnt}
-					furnace_output = {"id": 0, "count": 0}
-				elif cur_id == out_id and cur_cnt + out_cnt <= MAX_STACK:
-					cursor_stack["count"] = cur_cnt + out_cnt
-					furnace_output = {"id": 0, "count": 0}
+				if Input.is_key_pressed(KEY_SHIFT):
+					var rem: int = add_item(out_id, out_cnt)
+					if rem <= 0:
+						furnace_output = {"id": 0, "count": 0}
+					else:
+						furnace_output["count"] = rem
+				else:
+					var cur_id: int = int(cursor_stack.get("id", 0))
+					var cur_cnt: int = int(cursor_stack.get("count", 0))
+					if cur_id == 0:
+						cursor_stack = {"id": out_id, "count": out_cnt}
+						furnace_output = {"id": 0, "count": 0}
+					elif cur_id == out_id and cur_cnt + out_cnt <= MAX_STACK:
+						cursor_stack["count"] = cur_cnt + out_cnt
+						furnace_output = {"id": 0, "count": 0}
 	furnace_updated.emit()
 	inventory_updated.emit()
 
@@ -751,6 +846,18 @@ func get_active_chest_slots() -> Array:
 func click_chest_slot(slot_idx: int, mouse_button: int) -> void:
 	var c_slots: Array = get_active_chest_slots()
 	if slot_idx < 0 or slot_idx >= c_slots.size():
+		return
+	if mouse_button == MOUSE_BUTTON_LEFT and Input.is_key_pressed(KEY_SHIFT):
+		var s: Dictionary = c_slots[slot_idx]
+		var id: int = int(s.get("id", 0))
+		var cnt: int = int(s.get("count", 0))
+		if id > 0 and cnt > 0:
+			var rem: int = add_item(id, cnt, int(s.get("durability", -1)))
+			if rem <= 0:
+				c_slots[slot_idx] = {"id": 0, "count": 0}
+			else:
+				c_slots[slot_idx]["count"] = rem
+			inventory_updated.emit()
 		return
 	c_slots[slot_idx] = _interact_slot_with_cursor(c_slots[slot_idx], mouse_button)
 	inventory_updated.emit()
