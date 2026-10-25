@@ -28,13 +28,14 @@ static func get_shared_water_material() -> StandardMaterial3D:
 	var water_img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
 	for y in range(16):
 		for x in range(16):
-			var wave: float = sin((float(x) + float(y) * 1.5) * 0.78) * 0.045
-			var highlight: float = 0.06 if ((x + y * 2) % 7 == 0) else 0.0
+			var wave: float = sin((float(x) * 0.9 + float(y) * 1.4) * 0.78) * 0.055
+			var streak: float = 0.08 if ((x + y * 2) % 6 == 0) else 0.0
+			var trough: float = -0.05 if ((x * 2 + y) % 5 == 0) else 0.0
 			var col := Color(
-				clampf(0.14 + wave + highlight, 0.0, 1.0),
-				clampf(0.46 + wave + highlight, 0.0, 1.0),
-				clampf(0.86 + wave + highlight, 0.0, 1.0),
-				0.72
+				clampf(0.14 + wave + streak + trough, 0.0, 1.0),
+				clampf(0.47 + wave + streak + trough, 0.0, 1.0),
+				clampf(0.88 + wave + streak * 1.1, 0.0, 1.0),
+				0.74
 			)
 			water_img.set_pixel(x, y, col)
 
@@ -44,14 +45,25 @@ static func get_shared_water_material() -> StandardMaterial3D:
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.albedo_texture = water_tex
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	material.uv1_scale = Vector3(0.25, 0.25, 0.25)
+	material.uv1_scale = Vector3(0.32, 0.32, 0.32)
 	material.uv1_triplanar = true
 	material.vertex_color_use_as_albedo = true
-	material.roughness = 0.08
-	material.metallic = 0.12
-	material.metallic_specular = 0.85
+	material.roughness = 0.07
+	material.metallic = 0.14
+	material.metallic_specular = 0.88
 	_cached_water_material = material
 	return _cached_water_material
+
+
+## Scrolls water UV coordinates continuously so rivers, corners, and waterfalls visibly animate.
+static func update_water_animation(delta: float) -> void:
+	if _cached_water_material == null:
+		return
+	var offset: Vector3 = _cached_water_material.uv1_offset
+	offset.x = fmod(offset.x + delta * 0.18, 1.0)
+	offset.y = fmod(offset.y - delta * 0.42, 1.0)
+	offset.z = fmod(offset.z + delta * 0.22, 1.0)
+	_cached_water_material.uv1_offset = offset
 
 
 static func get_atlas_texture() -> ImageTexture:

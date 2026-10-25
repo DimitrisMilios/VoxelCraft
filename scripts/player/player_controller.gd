@@ -47,6 +47,8 @@ signal player_damaged(amount: int)
 var is_flying: bool = false
 var is_in_water: bool = false
 var is_head_underwater: bool = false
+var water_submersion_depth: float = 0.0
+var water_flow_vector: Vector3 = Vector3.ZERO
 var current_health: int = 20
 
 # --- Node References ---
@@ -187,25 +189,17 @@ func _update_health_regen(delta: float) -> void:
 func _update_water_submersion() -> void:
 	if _world_manager == null:
 		return
-	var feet_pos := Vector3i(
-		floori(global_position.x),
-		floori(global_position.y + 0.12),
-		floori(global_position.z)
-	)
-	var waist_pos := Vector3i(
-		floori(global_position.x),
-		floori(global_position.y + 0.65),
-		floori(global_position.z)
-	)
+	water_submersion_depth = _world_manager.get_water_submersion_depth(global_position)
+	water_flow_vector = _world_manager.get_water_flow_vector(global_position)
+
 	var eye_pos := Vector3i(
 		floori(head.global_position.x),
 		floori(head.global_position.y + 0.12),
 		floori(head.global_position.z)
 	)
-	var now_in_water: bool = (
-		BlockRegistry.is_liquid(_world_manager.get_block_world(feet_pos))
-		or BlockRegistry.is_liquid(_world_manager.get_block_world(waist_pos))
-	)
+	var now_in_water: bool = water_submersion_depth > 0.36
+	if water_submersion_depth > 0.08:
+		_max_fall_speed = 0.0
 	is_head_underwater = BlockRegistry.is_liquid(_world_manager.get_block_world(eye_pos))
 
 	if now_in_water != is_in_water:
@@ -236,7 +230,8 @@ func _handle_horizontal_movement(delta: float) -> void:
 	var move_direction: Vector3 = (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()
 
 	var is_sprinting: bool = Input.is_action_pressed("sprint") and input_dir.y < 0.0
-	var target_speed: float = sprint_speed if is_sprinting else walk_speed
+	var wade_mult: float = 0.80 if water_submersion_depth > 0.02 else 1.0
+	var target_speed: float = (sprint_speed if is_sprinting else walk_speed) * wade_mult
 	var current_accel: float = acceleration if is_on_floor() else air_acceleration
 
 	if move_direction != Vector3.ZERO:
@@ -246,6 +241,11 @@ func _handle_horizontal_movement(delta: float) -> void:
 		var decel: float = friction if is_on_floor() else air_acceleration
 		velocity.x = move_toward(velocity.x, 0.0, decel * delta * target_speed)
 		velocity.z = move_toward(velocity.z, 0.0, decel * delta * target_speed)
+
+	# Apply gentle current drift when wading in shallow flowing water
+	if water_submersion_depth > 0.02 and water_flow_vector != Vector3.ZERO:
+		velocity.x += water_flow_vector.x * 2.15 * delta
+		velocity.z += water_flow_vector.z * 2.15 * delta
 
 
 func _handle_swim_movement(delta: float) -> void:
@@ -265,19 +265,28 @@ func _handle_swim_movement(delta: float) -> void:
 		velocity.x = move_toward(velocity.x, 0.0, 5.0 * delta * target_speed)
 		velocity.z = move_toward(velocity.z, 0.0, 5.0 * delta * target_speed)
 
+	# Apply water current push in deep/flowing water
+	if water_flow_vector != Vector3.ZERO:
+		velocity.x += water_flow_vector.x * 2.4 * delta
+		velocity.z += water_flow_vector.z * 2.4 * delta
+
+	var buoyancy_factor: float = clampf((water_submersion_depth - 0.36) / 0.85, 0.0, 1.35)
+
 	if Input.is_action_pressed("jump"):
 		# If near the water surface or pressing against a shoreline ledge, give a strong hop out of water
-		if is_on_wall() or not is_head_underwater:
+		if is_on_wall() or (not is_head_underwater and water_submersion_depth < 0.92):
 			velocity.y = move_toward(velocity.y, jump_velocity * 0.96, 26.0 * delta)
 		else:
-			velocity.y = move_toward(velocity.y, swim_up_speed, 16.0 * delta)
+			velocity.y = move_toward(velocity.y, swim_up_speed * maxf(0.85, buoyancy_factor), 16.0 * delta)
 	elif is_on_wall() and move_direction != Vector3.ZERO and not is_head_underwater:
 		# Auto-climb shoreline ledge when swimming into a same-level bank
 		velocity.y = move_toward(velocity.y, jump_velocity * 0.92, 24.0 * delta)
 	elif Input.is_action_pressed("fly_down"):
 		velocity.y = move_toward(velocity.y, -swim_up_speed, 14.0 * delta)
 	else:
-		velocity.y = move_toward(velocity.y, -1.8, 5.5 * delta)
+		# Proportional Archimedes buoyancy: gently sink to neutral equilibrium or get pulled down in waterfalls
+		var sink_target: float = lerpf(-2.1, -0.85, clampf(buoyancy_factor, 0.0, 1.0)) + (water_flow_vector.y * 1.4)
+		velocity.y = move_toward(velocity.y, sink_target, 6.0 * delta)
 
 
 func _handle_fly_movement(delta: float) -> void:

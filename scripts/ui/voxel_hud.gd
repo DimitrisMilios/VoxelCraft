@@ -758,6 +758,7 @@ func _rebuild_recipe_book_buttons() -> void:
 		["stone_pickaxe", "[3x3] Stone Pick (3 Cobble+2 Stick)"],
 		["stone_axe", "[3x3] Stone Axe (3 Cobble+2 Stick)"],
 		["iron_pickaxe", "[3x3] Iron Pick (3 Iron+2 Stick)"],
+		["bucket", "[3x3] Iron Bucket (3 Iron V-Shape)"],
 		["diamond_pickaxe", "[3x3] Diamond Pick (3 Diam+2 Stick)"],
 	]
 

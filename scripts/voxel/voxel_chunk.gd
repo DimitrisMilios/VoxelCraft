@@ -287,24 +287,29 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 				if block_id == BlockRegistry.BlockId.AIR:
 					continue
 
-				if block_id == BlockRegistry.BlockId.WATER:
-					if _get_neighbor_id(lx, ly + 1, lz) == BlockRegistry.BlockId.AIR:
-						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP)
+				if BlockRegistry.is_liquid(block_id):
+					var h00: float = _compute_water_corner_height(lx, ly, lz, -1, -1)
+					var h10: float = _compute_water_corner_height(lx, ly, lz, 1, -1)
+					var h11: float = _compute_water_corner_height(lx, ly, lz, 1, 1)
+					var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
+
+					if not BlockRegistry.is_liquid(_get_neighbor_id(lx, ly + 1, lz)):
+						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
 						water_faces += 1
 					if _get_neighbor_id(lx, ly - 1, lz) == BlockRegistry.BlockId.AIR:
-						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM)
+						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
 						water_faces += 1
 					if _get_neighbor_id(lx + 1, ly, lz) == BlockRegistry.BlockId.AIR:
-						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST)
+						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
 						water_faces += 1
 					if _get_neighbor_id(lx - 1, ly, lz) == BlockRegistry.BlockId.AIR:
-						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST)
+						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
 						water_faces += 1
 					if _get_neighbor_id(lx, ly, lz + 1) == BlockRegistry.BlockId.AIR:
-						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH)
+						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
 						water_faces += 1
 					if _get_neighbor_id(lx, ly, lz - 1) == BlockRegistry.BlockId.AIR:
-						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH)
+						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
 						water_faces += 1
 					continue
 
@@ -392,67 +397,108 @@ func _is_neighbor_solid(lx: int, ly: int, lz: int) -> bool:
 	return BlockRegistry.is_solid(_get_neighbor_id(lx, ly, lz))
 
 
-func _emit_water_face(st: SurfaceTool, lx: int, ly: int, lz: int, face_dir: int) -> void:
+## Computes the smoothed water height at a corner shared by the 4 cells around (lx, ly, lz) in quadrant (dx, dz).
+func _compute_water_corner_height(lx: int, ly: int, lz: int, dx: int, dz: int) -> float:
+	var sum_h: float = 0.0
+	var max_h: float = 0.0
+	var count: int = 0
+	var has_air_neighbor: bool = false
+
+	for ox in [0, dx]:
+		for oz in [0, dz]:
+			var nx: int = lx + ox
+			var nz: int = lz + oz
+			# If any cell sharing this vertex has water directly above it, snap corner to 1.0 for seamless waterfalls
+			if BlockRegistry.is_liquid(_get_neighbor_id(nx, ly + 1, nz)):
+				return 1.0
+			var nid: int = _get_neighbor_id(nx, ly, nz)
+			if BlockRegistry.is_liquid(nid):
+				var h: float = BlockRegistry.get_water_height_ratio(nid)
+				sum_h += h
+				max_h = maxf(max_h, h)
+				count += 1
+			elif nid == BlockRegistry.BlockId.AIR:
+				has_air_neighbor = true
+
+	if count == 0:
+		return 0.12
+	var avg_h: float = sum_h / float(count)
+	# Taper down slightly when bordering open air so edges & corners form a visible downward lip
+	var edge_drop: float = -0.04 if (has_air_neighbor and max_h < 0.87) else 0.0
+	return clampf(avg_h * 0.72 + max_h * 0.28 + edge_drop, 0.07, 0.96)
+
+
+func _emit_sloped_water_face(
+	st: SurfaceTool,
+	lx: int,
+	ly: int,
+	lz: int,
+	face_dir: int,
+	h00: float,
+	h10: float,
+	h11: float,
+	h01: float
+) -> void:
 	var origin := Vector3(float(lx), float(ly), float(lz))
-	var top_h: float = 0.88
 	var verts: Array[Vector3]
 	var normal: Vector3
 	var shade: float = 1.0
 
 	match face_dir:
 		BlockRegistry.FaceDir.TOP:
-			normal = Vector3.UP
 			shade = 1.0
 			verts = [
-				origin + Vector3(0, top_h, 0),
-				origin + Vector3(1, top_h, 0),
-				origin + Vector3(1, top_h, 1),
-				origin + Vector3(0, top_h, 1),
+				origin + Vector3(0.0, h00, 0.0),
+				origin + Vector3(1.0, h10, 0.0),
+				origin + Vector3(1.0, h11, 1.0),
+				origin + Vector3(0.0, h01, 1.0),
 			]
+			var calc_norm: Vector3 = (verts[3] - verts[0]).cross(verts[1] - verts[0]).normalized()
+			normal = calc_norm if calc_norm.length_squared() > 0.01 else Vector3.UP
 		BlockRegistry.FaceDir.BOTTOM:
 			normal = Vector3.DOWN
 			shade = 0.65
 			verts = [
-				origin + Vector3(0, 0, 1),
-				origin + Vector3(1, 0, 1),
-				origin + Vector3(1, 0, 0),
-				origin + Vector3(0, 0, 0),
+				origin + Vector3(0.0, 0.0, 1.0),
+				origin + Vector3(1.0, 0.0, 1.0),
+				origin + Vector3(1.0, 0.0, 0.0),
+				origin + Vector3(0.0, 0.0, 0.0),
 			]
 		BlockRegistry.FaceDir.EAST:
 			normal = Vector3.RIGHT
 			shade = 0.85
 			verts = [
-				origin + Vector3(1, top_h, 1),
-				origin + Vector3(1, top_h, 0),
-				origin + Vector3(1, 0, 0),
-				origin + Vector3(1, 0, 1),
+				origin + Vector3(1.0, h11, 1.0),
+				origin + Vector3(1.0, h10, 0.0),
+				origin + Vector3(1.0, 0.0, 0.0),
+				origin + Vector3(1.0, 0.0, 1.0),
 			]
 		BlockRegistry.FaceDir.WEST:
 			normal = Vector3.LEFT
 			shade = 0.80
 			verts = [
-				origin + Vector3(0, top_h, 0),
-				origin + Vector3(0, top_h, 1),
-				origin + Vector3(0, 0, 1),
-				origin + Vector3(0, 0, 0),
+				origin + Vector3(0.0, h00, 0.0),
+				origin + Vector3(0.0, h01, 1.0),
+				origin + Vector3(0.0, 0.0, 1.0),
+				origin + Vector3(0.0, 0.0, 0.0),
 			]
 		BlockRegistry.FaceDir.SOUTH:
 			normal = Vector3.BACK
 			shade = 0.90
 			verts = [
-				origin + Vector3(0, top_h, 1),
-				origin + Vector3(1, top_h, 1),
-				origin + Vector3(1, 0, 1),
-				origin + Vector3(0, 0, 1),
+				origin + Vector3(0.0, h01, 1.0),
+				origin + Vector3(1.0, h11, 1.0),
+				origin + Vector3(1.0, 0.0, 1.0),
+				origin + Vector3(0.0, 0.0, 1.0),
 			]
 		_: # NORTH
 			normal = Vector3.FORWARD
 			shade = 0.78
 			verts = [
-				origin + Vector3(1, top_h, 0),
-				origin + Vector3(0, top_h, 0),
-				origin + Vector3(0, 0, 0),
-				origin + Vector3(1, 0, 0),
+				origin + Vector3(1.0, h10, 0.0),
+				origin + Vector3(0.0, h00, 0.0),
+				origin + Vector3(0.0, 0.0, 0.0),
+				origin + Vector3(1.0, 0.0, 0.0),
 			]
 
 	var color := Color(shade, shade, shade, 1.0)

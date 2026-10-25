@@ -196,7 +196,7 @@ func _process_continuous_mining(delta: float) -> void:
 		return
 
 	var target_id: int = _world_manager.get_block_world(target_block_pos)
-	if target_id == BlockRegistry.BlockId.AIR or target_id == BlockRegistry.BlockId.WATER:
+	if target_id == BlockRegistry.BlockId.AIR or BlockRegistry.is_liquid(target_id):
 		_reset_mining_progress()
 		return
 
@@ -260,7 +260,31 @@ func _try_interact_or_place_block() -> void:
 		mob_interacted.emit(false, int(_targeted_mob.variant))
 		return
 
-	if not has_target or _world_manager == null:
+	if _world_manager == null:
+		return
+
+	var selected_item: int = get_selected_item_id()
+	var is_creative: bool = _player_body != null and _player_body.is_flying
+
+	# Empty Bucket: Ray-step along look direction to scoop up a Water Source block
+	if selected_item == InventoryManager.ItemId.BUCKET and _raycast != null:
+		var ray_origin: Vector3 = _raycast.global_position
+		var ray_dir: Vector3 = -_raycast.global_transform.basis.z.normalized()
+		for step in range(2, 24):
+			var sample_p: Vector3 = ray_origin + ray_dir * (float(step) * 0.2)
+			var bpos := Vector3i(floori(sample_p.x), floori(sample_p.y), floori(sample_p.z))
+			var bid: int = _world_manager.get_block_world(bpos)
+			if bid == BlockRegistry.BlockId.WATER:
+				if _world_manager.set_block_world(bpos, BlockRegistry.BlockId.AIR):
+					if _inventory != null:
+						_inventory.convert_hotbar_bucket(selected_slot, InventoryManager.ItemId.WATER_BUCKET)
+					loot_notification.emit("Scooped up Water Source!")
+					block_placed.emit(bpos, BlockRegistry.BlockId.WATER)
+				return
+			elif BlockRegistry.is_solid(bid):
+				break
+
+	if not has_target:
 		return
 
 	# Right-clicking a placed Crafting Table (16) opens the 3x3 Crafting Table UI;
@@ -270,11 +294,18 @@ func _try_interact_or_place_block() -> void:
 		station_opened.emit(targeted_id)
 		return
 
-	var selected_item: int = get_selected_item_id()
-	if not InventoryManager.is_placeable_block(selected_item):
+	# Water Bucket: Pour a new Water Source block at place_block_pos
+	if selected_item == InventoryManager.ItemId.WATER_BUCKET:
+		if _world_manager.set_block_world(place_block_pos, BlockRegistry.BlockId.WATER):
+			if not is_creative and _inventory != null:
+				_inventory.convert_hotbar_bucket(selected_slot, InventoryManager.ItemId.BUCKET)
+			loot_notification.emit("Placed Water Source!")
+			block_placed.emit(place_block_pos, BlockRegistry.BlockId.WATER)
+			_update_raycast_target()
 		return
 
-	var is_creative: bool = _player_body != null and _player_body.is_flying
+	if not InventoryManager.is_placeable_block(selected_item):
+		return
 	if not is_creative and _inventory != null:
 		var slot_data: Dictionary = _inventory.get_hotbar_slot(selected_slot)
 		if int(slot_data.get("count", 0)) <= 0:

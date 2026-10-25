@@ -22,6 +22,8 @@ enum ItemId {
 	RAW_GOLD = 104,
 	GOLD_INGOT = 105,
 	DIAMOND = 106,
+	BUCKET = 107,
+	WATER_BUCKET = 108,
 
 	# Pickaxes (201..204)
 	WOOD_PICKAXE = 201,
@@ -117,11 +119,11 @@ func return_crafting_grid_to_inventory() -> void:
 # ============================================================================
 
 static func is_tool_item(item_id: int) -> bool:
-	return item_id >= ItemId.WOOD_PICKAXE and item_id <= ItemId.DIAMOND_SHOVEL
+	return (item_id >= ItemId.WOOD_PICKAXE and item_id <= ItemId.DIAMOND_SHOVEL) or item_id == ItemId.WATER_BUCKET
 
 
 static func is_placeable_block(item_id: int) -> bool:
-	return item_id > 0 and item_id < 100 and item_id != BlockRegistry.BlockId.WATER
+	return item_id > 0 and item_id < 100 and not BlockRegistry.is_liquid(item_id)
 
 
 static func get_tool_category(item_id: int) -> int:
@@ -227,6 +229,10 @@ static func get_item_name(item_id: int) -> String:
 			return "Gold Ingot"
 		ItemId.DIAMOND:
 			return "Diamond"
+		ItemId.BUCKET:
+			return "Iron Bucket"
+		ItemId.WATER_BUCKET:
+			return "Water Bucket"
 		ItemId.WOOD_PICKAXE:
 			return "Wooden Pickaxe"
 		ItemId.STONE_PICKAXE:
@@ -273,6 +279,10 @@ static func get_item_short_label(item_id: int) -> String:
 			return "Gold"
 		ItemId.DIAMOND:
 			return "Diamnd"
+		ItemId.BUCKET:
+			return "Bucket"
+		ItemId.WATER_BUCKET:
+			return "WtrBkt"
 		ItemId.WOOD_PICKAXE:
 			return "W-Pick"
 		ItemId.STONE_PICKAXE:
@@ -319,6 +329,10 @@ static func get_item_color(item_id: int) -> Color:
 			return Color(1.0, 0.86, 0.18)
 		ItemId.DIAMOND:
 			return Color(0.26, 0.94, 0.96)
+		ItemId.BUCKET:
+			return Color(0.76, 0.80, 0.86)
+		ItemId.WATER_BUCKET:
+			return Color(0.22, 0.56, 0.96)
 		ItemId.WOOD_PICKAXE, ItemId.WOOD_AXE, ItemId.WOOD_SHOVEL:
 			return Color(0.68, 0.50, 0.28)
 		ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL:
@@ -395,6 +409,20 @@ func consume_from_hotbar_slot(slot_idx: int, amount: int = 1) -> bool:
 		slots[slot_idx] = {"id": 0, "count": 0}
 	inventory_updated.emit()
 	return true
+
+
+## Converts an Empty Bucket in `slot_idx` into a Water Bucket (or vice versa).
+func convert_hotbar_bucket(slot_idx: int, new_item_id: int) -> void:
+	if slot_idx < 0 or slot_idx >= HOTBAR_SIZE:
+		return
+	var entry: Dictionary = slots[slot_idx]
+	var cur_count: int = int(entry.get("count", 0))
+	if cur_count <= 1:
+		slots[slot_idx] = {"id": new_item_id, "count": 1}
+	else:
+		entry["count"] = cur_count - 1
+		add_item(new_item_id, 1)
+	inventory_updated.emit()
 
 
 ## Consumes `amount` of `item_id` from anywhere in the 36-slot inventory.
@@ -677,6 +705,11 @@ func _match_crafting_grid() -> Dictionary:
 		if pattern == [D, D, D, S, 0, S] or pattern == [D, D, S, D, S, 0]:
 			return {"id": ItemId.DIAMOND_AXE, "count": 1}
 
+	# 7. Iron Bucket: 3x2 V-shape [FE, 0, FE, 0, FE, 0]
+	if box_w == 3 and box_h == 2:
+		if pattern == [FE, 0, FE, 0, FE, 0]:
+			return {"id": ItemId.BUCKET, "count": 1}
+
 	return {"id": 0, "count": 0}
 
 
@@ -735,6 +768,9 @@ func autofill_recipe_pattern(recipe_key: String) -> String:
 		"wood_shovel":
 			requires_3x3 = true
 			target_grid = [0, P, 0, 0, S, 0, 0, S, 0]
+		"bucket":
+			requires_3x3 = true
+			target_grid = [FE, 0, FE, 0, FE, 0, 0, 0, 0]
 
 	if requires_3x3 and craft_grid_size < 3:
 		return "Place & Right-Click a Crafting Table for 3x3 recipes!"

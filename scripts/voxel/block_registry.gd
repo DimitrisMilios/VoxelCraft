@@ -21,6 +21,14 @@ enum BlockId {
 	DIAMOND_ORE = 15,
 	CRAFTING_TABLE = 16,
 	FURNACE = 17,
+	WATER_FLOW_1 = 31,
+	WATER_FLOW_2 = 32,
+	WATER_FLOW_3 = 33,
+	WATER_FLOW_4 = 34,
+	WATER_FLOW_5 = 35,
+	WATER_FLOW_6 = 36,
+	WATER_FLOW_7 = 37,
+	WATER_FALLING = 38,
 }
 
 enum FaceDir {
@@ -58,11 +66,47 @@ const TILE_PIXEL_SIZE: int = 16
 
 
 static func is_solid(block_id: int) -> bool:
-	return block_id != BlockId.AIR and block_id != BlockId.WATER
+	return block_id != BlockId.AIR and not is_liquid(block_id)
 
 
 static func is_liquid(block_id: int) -> bool:
+	return (
+		block_id == BlockId.WATER
+		or (block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FALLING)
+	)
+
+
+static func is_water_source(block_id: int) -> bool:
 	return block_id == BlockId.WATER
+
+
+## Returns water level from 0 (not water) to 8 (full Source or Falling waterfall).
+static func get_water_level(block_id: int) -> int:
+	if block_id == BlockId.WATER or block_id == BlockId.WATER_FALLING:
+		return 8
+	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FLOW_7:
+		return block_id - BlockId.WATER_FLOW_1 + 1
+	return 0
+
+
+static func make_flowing_water_id(level: int) -> int:
+	if level <= 0:
+		return BlockId.AIR
+	if level >= 8:
+		return BlockId.WATER_FALLING
+	return BlockId.WATER_FLOW_1 + clampi(level, 1, 7) - 1
+
+
+## Returns normalized visual/physical height (0.0 to 1.0) of a water block at its center.
+static func get_water_height_ratio(block_id: int) -> float:
+	if block_id == BlockId.WATER_FALLING:
+		return 1.0
+	if block_id == BlockId.WATER:
+		return 0.875
+	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FLOW_7:
+		var lvl: int = block_id - BlockId.WATER_FLOW_1 + 1
+		return clampf(float(lvl) / 9.0, 0.11, 0.78)
+	return 0.0
 
 
 static func is_light_emitter(block_id: int) -> bool:
@@ -87,9 +131,9 @@ static func is_stone_Or_ore(block_id: int) -> bool:
 
 ## Base time in seconds to break this block by hand (reduced by equipped Pickaxe multiplier).
 static func get_block_hardness(block_id: int) -> float:
+	if is_liquid(block_id) or block_id == BlockId.AIR:
+		return 0.0
 	match block_id:
-		BlockId.AIR, BlockId.WATER:
-			return 0.0
 		BlockId.LEAVES, BlockId.SNOW:
 			return 0.22
 		BlockId.GRASS, BlockId.DIRT, BlockId.SAND:
@@ -109,6 +153,8 @@ static func get_block_hardness(block_id: int) -> float:
 
 
 static func get_block_name(block_id: int) -> String:
+	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FALLING:
+		return "Flowing Water"
 	match block_id:
 		BlockId.AIR:
 			return "Air"
@@ -168,7 +214,7 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.42, 0.44, 0.46)
 		BlockId.WOOD_PLANKS:
 			return Color(0.68, 0.53, 0.31)
-		BlockId.WATER:
+		BlockId.WATER, BlockId.WATER_FLOW_1, BlockId.WATER_FLOW_2, BlockId.WATER_FLOW_3, BlockId.WATER_FLOW_4, BlockId.WATER_FLOW_5, BlockId.WATER_FLOW_6, BlockId.WATER_FLOW_7, BlockId.WATER_FALLING:
 			return Color(0.20, 0.52, 0.92)
 		BlockId.SNOW:
 			return Color(0.93, 0.96, 0.99)

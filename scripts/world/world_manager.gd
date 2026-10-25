@@ -5,8 +5,8 @@ extends Node3D
 
 signal world_saved(saved_chunk_count: int)
 
-const WATER_TICK_INTERVAL: float = 0.16
-const MAX_WATER_SPREAD_PER_TICK: int = 16
+const WATER_TICK_INTERVAL: float = 0.12
+const MAX_WATER_SPREAD_PER_TICK: int = 48
 
 @export_group("World Generation")
 @export var world_seed: int = 2026
@@ -94,6 +94,7 @@ func _process(delta: float) -> void:
 	_dispatch_background_tasks()
 	_apply_completed_builds()
 	_process_water_flow(delta)
+	VoxelAtlasBuilder.update_water_animation(delta)
 
 
 ## Dynamically updates chunk render distance at runtime (e.g. from the Pause Menu).
@@ -340,62 +341,163 @@ func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
 
 	chunk.rebuild_at_local_y(world_block_pos.y)
 
-	# If on a chunk boundary, rebuild only the affected vertical sub-chunk on the adjacent neighbor
-	if lx == 0 and _active_chunks.has(chunk_coord + Vector2i(-1, 0)):
+	# If near a chunk boundary (within 1 block for shared water corner vertices), rebuild neighbor sub-chunk
+	if lx <= 1 and _active_chunks.has(chunk_coord + Vector2i(-1, 0)):
 		(_active_chunks[chunk_coord + Vector2i(-1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
-	elif lx == VoxelChunk.CHUNK_SIZE_X - 1 and _active_chunks.has(chunk_coord + Vector2i(1, 0)):
+	elif lx >= VoxelChunk.CHUNK_SIZE_X - 2 and _active_chunks.has(chunk_coord + Vector2i(1, 0)):
 		(_active_chunks[chunk_coord + Vector2i(1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 
-	if lz == 0 and _active_chunks.has(chunk_coord + Vector2i(0, -1)):
+	if lz <= 1 and _active_chunks.has(chunk_coord + Vector2i(0, -1)):
 		(_active_chunks[chunk_coord + Vector2i(0, -1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
-	elif lz == VoxelChunk.CHUNK_SIZE_Z - 1 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
+	elif lz >= VoxelChunk.CHUNK_SIZE_Z - 2 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
 		(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 
-	# Trigger cellular-automata water flow checks when breaking a block or placing water
-	if block_id == BlockRegistry.BlockId.AIR:
-		_enqueue_water_check(world_block_pos)
-	elif block_id == BlockRegistry.BlockId.WATER:
-		_enqueue_water_neighbors(world_block_pos)
+	# Enqueue 6-connected neighborhood for finite 8-level water flow & drainage
+	_enqueue_water_neighborhood(world_block_pos)
 
 	return true
 
 
-func _enqueue_water_check(pos: Vector3i) -> void:
-	if pos.y <= 0 or pos.y > VoxelChunk.WATER_LEVEL:
+func _enqueue_water_pos(pos: Vector3i) -> void:
+	if pos.y <= 0 or pos.y >= VoxelChunk.CHUNK_SIZE_Y - 1:
 		return
 	if _water_flow_pending.has(pos):
 		return
-	if _has_water_source_neighbor(pos):
-		_water_flow_pending[pos] = true
-		_water_flow_queue.append(pos)
+	_water_flow_pending[pos] = true
+	_water_flow_queue.append(pos)
 
 
-func _enqueue_water_neighbors(center: Vector3i) -> void:
-	var candidates: Array[Vector3i] = [
-		center + Vector3i(0, -1, 0),
-		center + Vector3i(1, 0, 0),
-		center + Vector3i(-1, 0, 0),
-		center + Vector3i(0, 0, 1),
-		center + Vector3i(0, 0, -1),
-	]
-	for next_pos in candidates:
-		if get_block_world(next_pos) == BlockRegistry.BlockId.AIR:
-			_enqueue_water_check(next_pos)
+func _enqueue_water_neighborhood(center: Vector3i) -> void:
+	_enqueue_water_pos(center)
+	_enqueue_water_pos(center + Vector3i(0, 1, 0))
+	_enqueue_water_pos(center + Vector3i(0, -1, 0))
+	_enqueue_water_pos(center + Vector3i(1, 0, 0))
+	_enqueue_water_pos(center + Vector3i(-1, 0, 0))
+	_enqueue_water_pos(center + Vector3i(0, 0, 1))
+	_enqueue_water_pos(center + Vector3i(0, 0, -1))
 
 
-func _has_water_source_neighbor(pos: Vector3i) -> bool:
-	if get_block_world(pos + Vector3i(0, 1, 0)) == BlockRegistry.BlockId.WATER:
+## Returns true if the liquid at `origin` can spread horizontally (either a Source block or resting on a solid/liquid floor).
+func _can_liquid_spread_horizontally(origin: Vector3i, origin_id: int) -> bool:
+	if origin_id == BlockRegistry.BlockId.WATER:
 		return true
-	if pos.y <= VoxelChunk.WATER_LEVEL:
-		if get_block_world(pos + Vector3i(1, 0, 0)) == BlockRegistry.BlockId.WATER:
-			return true
-		if get_block_world(pos + Vector3i(-1, 0, 0)) == BlockRegistry.BlockId.WATER:
-			return true
-		if get_block_world(pos + Vector3i(0, 0, 1)) == BlockRegistry.BlockId.WATER:
-			return true
-		if get_block_world(pos + Vector3i(0, 0, -1)) == BlockRegistry.BlockId.WATER:
-			return true
-	return false
+	var below_id: int = get_block_world(origin + Vector3i(0, -1, 0))
+	return BlockRegistry.is_solid(below_id) or BlockRegistry.is_liquid(below_id)
+
+
+## Computes shortest Manhattan distance (up to 4 steps) from `start` to a drop-off edge where water can fall down.
+func _distance_to_drop_off(start: Vector3i, visited: Dictionary, depth: int) -> int:
+	if depth > 4:
+		return 999
+	var below_id: int = get_block_world(start + Vector3i(0, -1, 0))
+	if below_id == BlockRegistry.BlockId.AIR or (
+		BlockRegistry.is_liquid(below_id)
+		and below_id != BlockRegistry.BlockId.WATER
+		and below_id != BlockRegistry.BlockId.WATER_FALLING
+	):
+		return depth
+
+	if depth == 4:
+		return 999
+
+	var best: int = 999
+	var dirs: Array[Vector3i] = [
+		Vector3i(1, 0, 0),
+		Vector3i(-1, 0, 0),
+		Vector3i(0, 0, 1),
+		Vector3i(0, 0, -1),
+	]
+	for d in dirs:
+		var np: Vector3i = start + d
+		if visited.has(np):
+			continue
+		var nid: int = get_block_world(np)
+		if BlockRegistry.is_solid(nid) or nid == BlockRegistry.BlockId.WATER:
+			continue
+		visited[np] = true
+		var dist: int = _distance_to_drop_off(np, visited, depth + 1)
+		visited.erase(np)
+		if dist < best:
+			best = dist
+	return best
+
+
+## Returns true if spreading from `origin` in horizontal direction `dir` follows the path of least resistance toward a corner/drop-off.
+func _is_allowed_spread_direction(origin: Vector3i, dir: Vector3i) -> bool:
+	var dirs: Array[Vector3i] = [
+		Vector3i(1, 0, 0),
+		Vector3i(-1, 0, 0),
+		Vector3i(0, 0, 1),
+		Vector3i(0, 0, -1),
+	]
+	var scores: Dictionary = {}
+	var min_score: int = 999
+
+	for d in dirs:
+		var neighbor: Vector3i = origin + d
+		var nid: int = get_block_world(neighbor)
+		if BlockRegistry.is_solid(nid) or nid == BlockRegistry.BlockId.WATER:
+			scores[d] = 9999
+			continue
+		var visited: Dictionary = {origin: true, neighbor: true}
+		var score: int = _distance_to_drop_off(neighbor, visited, 1)
+		scores[d] = score
+		if score < min_score:
+			min_score = score
+
+	if not scores.has(dir) or int(scores[dir]) >= 9999:
+		return false
+	if min_score <= 4:
+		return int(scores[dir]) == min_score
+	return true
+
+
+## Evaluates what liquid block ID `pos` should hold based on its current neighbors.
+func _compute_target_water_id(pos: Vector3i, cur_id: int) -> int:
+	if cur_id == BlockRegistry.BlockId.WATER:
+		return BlockRegistry.BlockId.WATER
+
+	var dirs: Array[Vector3i] = [
+		Vector3i(1, 0, 0),
+		Vector3i(-1, 0, 0),
+		Vector3i(0, 0, 1),
+		Vector3i(0, 0, -1),
+	]
+
+	# 1. Minecraft 2x2 Infinite Water Spring Rule: 2+ orthogonal WATER sources over a solid/source floor -> WATER source
+	var source_neighbors: int = 0
+	for d in dirs:
+		if get_block_world(pos + d) == BlockRegistry.BlockId.WATER:
+			source_neighbors += 1
+	var below_id: int = get_block_world(pos + Vector3i(0, -1, 0))
+	if source_neighbors >= 2 and (BlockRegistry.is_solid(below_id) or below_id == BlockRegistry.BlockId.WATER):
+		return BlockRegistry.BlockId.WATER
+
+	# 2. Direct waterfall from liquid above
+	var above_id: int = get_block_world(pos + Vector3i(0, 1, 0))
+	if BlockRegistry.is_liquid(above_id):
+		return BlockRegistry.BlockId.WATER_FALLING
+
+	# 3. Horizontal spread from highest valid neighbor (decays by 1 level per horizontal step, stopping at level 1)
+	var max_inflow_level: int = 0
+	for d in dirs:
+		var nb_pos: Vector3i = pos + d
+		var nb_id: int = get_block_world(nb_pos)
+		if not BlockRegistry.is_liquid(nb_id):
+			continue
+		if not _can_liquid_spread_horizontally(nb_pos, nb_id):
+			continue
+		var nb_lvl: int = BlockRegistry.get_water_level(nb_id)
+		if nb_lvl <= 1:
+			continue
+		# If `pos` is currently AIR, enforce corner/drop-off pathfinding from `nb_pos`
+		if cur_id == BlockRegistry.BlockId.AIR and not _is_allowed_spread_direction(nb_pos, -d):
+			continue
+		var candidate_lvl: int = nb_lvl - 1
+		if candidate_lvl > max_inflow_level:
+			max_inflow_level = candidate_lvl
+
+	return BlockRegistry.make_flowing_water_id(max_inflow_level)
 
 
 func _process_water_flow(delta: float) -> void:
@@ -406,18 +508,125 @@ func _process_water_flow(delta: float) -> void:
 		return
 	_water_tick_timer = 0.0
 
-	var spread_count: int = 0
-	while not _water_flow_queue.is_empty() and spread_count < MAX_WATER_SPREAD_PER_TICK:
+	var updates: int = 0
+	var batch_size: int = mini(_water_flow_queue.size(), MAX_WATER_SPREAD_PER_TICK)
+
+	for _i in range(batch_size):
+		if _water_flow_queue.is_empty() or updates >= MAX_WATER_SPREAD_PER_TICK:
+			break
 		var pos: Vector3i = _water_flow_queue.pop_front()
 		_water_flow_pending.erase(pos)
 
-		if get_block_world(pos) != BlockRegistry.BlockId.AIR:
-			continue
-		if not _has_water_source_neighbor(pos):
+		if pos.y <= 0 or pos.y >= VoxelChunk.CHUNK_SIZE_Y - 1:
 			continue
 
-		if set_block_world(pos, BlockRegistry.BlockId.WATER):
-			spread_count += 1
+		var cur_id: int = get_block_world(pos)
+		if BlockRegistry.is_solid(cur_id):
+			continue
+
+		if cur_id != BlockRegistry.BlockId.WATER:
+			var target_id: int = _compute_target_water_id(pos, cur_id)
+			if target_id != cur_id:
+				var next_id: int = target_id
+				# Smooth receding drainage when water loses its source
+				var cur_lvl: int = BlockRegistry.get_water_level(cur_id)
+				var tgt_lvl: int = BlockRegistry.get_water_level(target_id)
+				if cur_id != BlockRegistry.BlockId.WATER_FALLING and tgt_lvl < cur_lvl and cur_lvl > 2:
+					next_id = BlockRegistry.make_flowing_water_id(maxi(tgt_lvl, cur_lvl - 2))
+				if set_block_world(pos, next_id):
+					updates += 1
+				if next_id != target_id:
+					_enqueue_water_pos(pos)
+				continue
+
+		# If `pos` currently contains liquid, check if its neighbors need to receive flow
+		var active_id: int = get_block_world(pos)
+		if not BlockRegistry.is_liquid(active_id):
+			continue
+
+		var below: Vector3i = pos + Vector3i(0, -1, 0)
+		var below_id: int = get_block_world(below)
+		if below.y > 0 and (
+			below_id == BlockRegistry.BlockId.AIR
+			or (BlockRegistry.is_liquid(below_id) and below_id != BlockRegistry.BlockId.WATER and below_id != BlockRegistry.BlockId.WATER_FALLING)
+		):
+			_enqueue_water_pos(below)
+
+		var active_lvl: int = BlockRegistry.get_water_level(active_id)
+		if active_lvl > 1 and _can_liquid_spread_horizontally(pos, active_id):
+			var dirs: Array[Vector3i] = [
+				Vector3i(1, 0, 0),
+				Vector3i(-1, 0, 0),
+				Vector3i(0, 0, 1),
+				Vector3i(0, 0, -1),
+			]
+			for d in dirs:
+				var nb: Vector3i = pos + d
+				var nb_id: int = get_block_world(nb)
+				if nb_id == BlockRegistry.BlockId.AIR or (
+					BlockRegistry.is_liquid(nb_id)
+					and nb_id != BlockRegistry.BlockId.WATER
+					and BlockRegistry.get_water_level(nb_id) < active_lvl - 1
+				):
+					if _is_allowed_spread_direction(pos, d):
+						_enqueue_water_pos(nb)
+
+
+## Returns the 3D directional water current vector at `world_pos` (pointing downhill / toward corners & waterfalls).
+func get_water_flow_vector(world_pos: Vector3) -> Vector3:
+	var bpos := Vector3i(floori(world_pos.x), floori(world_pos.y), floori(world_pos.z))
+	var bid: int = get_block_world(bpos)
+	if not BlockRegistry.is_liquid(bid):
+		bpos.y = floori(world_pos.y + 0.35)
+		bid = get_block_world(bpos)
+		if not BlockRegistry.is_liquid(bid):
+			return Vector3.ZERO
+
+	var my_lvl: int = BlockRegistry.get_water_level(bid)
+	var flow := Vector3.ZERO
+	var dirs: Array[Vector3i] = [
+		Vector3i(1, 0, 0),
+		Vector3i(-1, 0, 0),
+		Vector3i(0, 0, 1),
+		Vector3i(0, 0, -1),
+	]
+
+	for d in dirs:
+		var nb_pos: Vector3i = bpos + d
+		var nb_id: int = get_block_world(nb_pos)
+		if BlockRegistry.is_liquid(nb_id):
+			var diff: int = my_lvl - BlockRegistry.get_water_level(nb_id)
+			if diff != 0:
+				flow += Vector3(float(d.x), 0.0, float(d.z)) * float(diff)
+		elif nb_id == BlockRegistry.BlockId.AIR:
+			# Check if neighbor drops off into a waterfall
+			var nb_below: int = get_block_world(nb_pos + Vector3i(0, -1, 0))
+			if nb_below == BlockRegistry.BlockId.AIR or BlockRegistry.is_liquid(nb_below):
+				flow += Vector3(float(d.x), 0.0, float(d.z)) * 3.0
+
+	if bid == BlockRegistry.BlockId.WATER_FALLING:
+		flow.y -= 1.25
+
+	return flow.normalized() if flow.length_squared() > 0.001 else Vector3.ZERO
+
+
+## Returns local water depth (0.0 to 1.8) above the player's feet at `world_pos`.
+func get_water_submersion_depth(world_pos: Vector3) -> float:
+	var bx: int = floori(world_pos.x)
+	var bz: int = floori(world_pos.z)
+	var feet_y: int = floori(world_pos.y + 0.05)
+	var feet_id: int = get_block_world(Vector3i(bx, feet_y, bz))
+	var upper_id: int = get_block_world(Vector3i(bx, feet_y + 1, bz))
+
+	var surface_world_y: float = -9999.0
+	if BlockRegistry.is_liquid(upper_id):
+		surface_world_y = float(feet_y + 1) + BlockRegistry.get_water_height_ratio(upper_id)
+	elif BlockRegistry.is_liquid(feet_id):
+		surface_world_y = float(feet_y) + BlockRegistry.get_water_height_ratio(feet_id)
+	else:
+		return 0.0
+
+	return clampf(surface_world_y - world_pos.y, 0.0, 1.8)
 
 
 func save_all_modified_chunks() -> int:
@@ -447,6 +656,6 @@ func get_modified_chunk_count() -> int:
 func get_surface_height_at(wx: int, wz: int) -> int:
 	for y in range(VoxelChunk.CHUNK_SIZE_Y - 1, 0, -1):
 		var id: int = get_block_world(Vector3i(wx, y, wz))
-		if id != BlockRegistry.BlockId.AIR and id != BlockRegistry.BlockId.LEAVES and id != BlockRegistry.BlockId.WATER:
+		if id != BlockRegistry.BlockId.AIR and id != BlockRegistry.BlockId.LEAVES and not BlockRegistry.is_liquid(id):
 			return y
 	return VoxelChunk.sample_surface_height(_surface_noise, wx, wz)
