@@ -243,6 +243,8 @@ func _bind_references() -> void:
 		_player.hunger_changed.connect(_on_hunger_changed)
 		_player.oxygen_changed.connect(_on_oxygen_changed)
 		_player.player_damaged.connect(_on_player_damaged)
+		if _player.has_signal("player_respawned"):
+			_player.connect("player_respawned", _on_player_respawned)
 		_on_health_changed(_player.current_health, _player.max_health)
 		_on_hunger_changed(_player.current_hunger, _player.max_hunger)
 		_on_oxygen_changed(_player.current_oxygen, _player.max_oxygen)
@@ -262,6 +264,13 @@ func _on_world_saved(saved_chunk_count: int) -> void:
 	_save_toast_timer = 2.5
 	if _pause_status_label != null:
 		_pause_status_label.text = "Saved %d modified chunk(s) to disk!" % saved_chunk_count
+
+
+func _on_player_respawned(at_bed: bool) -> void:
+	if at_bed:
+		_on_loot_notification("YOU DIED! Respawned at your bed.")
+	else:
+		_on_loot_notification("YOU DIED! Respawned at world spawn.")
 
 
 func _on_loot_notification(message: String) -> void:
@@ -1240,6 +1249,47 @@ func _build_debug_overlay() -> void:
 	add_child(_debug_label)
 
 
+func _apply_faithful_button_style(btn: Button) -> void:
+	var tex_normal: Texture2D = _load_png_texture("res://assets/ui/gui_panels/button.png")
+	var tex_hover: Texture2D = _load_png_texture("res://assets/ui/gui_panels/button_highlighted.png")
+	var tex_disabled: Texture2D = _load_png_texture("res://assets/ui/gui_panels/button_disabled.png")
+
+	var sb_normal := StyleBoxTexture.new()
+	sb_normal.texture = tex_normal
+	sb_normal.texture_margin_left = 6.0
+	sb_normal.texture_margin_right = 6.0
+	sb_normal.texture_margin_top = 6.0
+	sb_normal.texture_margin_bottom = 6.0
+	sb_normal.set_content_margin_all(8.0)
+
+	var sb_hover := StyleBoxTexture.new()
+	sb_hover.texture = tex_hover
+	sb_hover.texture_margin_left = 6.0
+	sb_hover.texture_margin_right = 6.0
+	sb_hover.texture_margin_top = 6.0
+	sb_hover.texture_margin_bottom = 6.0
+	sb_hover.set_content_margin_all(8.0)
+
+	var sb_disabled := StyleBoxTexture.new()
+	sb_disabled.texture = tex_disabled
+	sb_disabled.texture_margin_left = 6.0
+	sb_disabled.texture_margin_right = 6.0
+	sb_disabled.texture_margin_top = 6.0
+	sb_disabled.texture_margin_bottom = 6.0
+	sb_disabled.set_content_margin_all(8.0)
+
+	btn.add_theme_stylebox_override("normal", sb_normal)
+	btn.add_theme_stylebox_override("hover", sb_hover)
+	btn.add_theme_stylebox_override("pressed", sb_hover)
+	btn.add_theme_stylebox_override("focus", sb_hover)
+	btn.add_theme_stylebox_override("disabled", sb_disabled)
+	btn.add_theme_color_override("font_color", Color(1, 1, 1, 1))
+	btn.add_theme_color_override("font_hover_color", Color(1, 1, 0.65, 1))
+	btn.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+	btn.add_theme_constant_override("shadow_offset_x", 1)
+	btn.add_theme_constant_override("shadow_offset_y", 1)
+
+
 func _build_pause_menu() -> void:
 	_pause_overlay = ColorRect.new()
 	_pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1252,14 +1302,14 @@ func _build_pause_menu() -> void:
 	_pause_overlay.add_child(center)
 
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(360, 340)
+	card.custom_minimum_size = Vector2(380, 420)
 	var card_style := _make_blender_stylebox(_tex_panel_bg, 12.0)
 	card_style.set_content_margin_all(20)
 	card.add_theme_stylebox_override("panel", card_style)
 	center.add_child(card)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 12)
+	vbox.add_theme_constant_override("separation", 10)
 	card.add_child(vbox)
 
 	var title := Label.new()
@@ -1276,8 +1326,9 @@ func _build_pause_menu() -> void:
 	vbox.add_child(_pause_status_label)
 
 	var resume_btn := Button.new()
-	resume_btn.text = "Resume Game (Esc)"
+	resume_btn.text = "Back to Game (Esc)"
 	resume_btn.custom_minimum_size = Vector2(0, 36)
+	_apply_faithful_button_style(resume_btn)
 	resume_btn.pressed.connect(func() -> void:
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	)
@@ -1303,7 +1354,8 @@ func _build_pause_menu() -> void:
 
 	var fly_btn := Button.new()
 	fly_btn.text = "Toggle Creative Fly Mode (F)"
-	fly_btn.custom_minimum_size = Vector2(0, 34)
+	fly_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(fly_btn)
 	fly_btn.pressed.connect(func() -> void:
 		if _player != null:
 			_player.is_flying = not _player.is_flying
@@ -1315,7 +1367,8 @@ func _build_pause_menu() -> void:
 
 	var time_btn := Button.new()
 	time_btn.text = "Advance Time +2.5 Hours (T)"
-	time_btn.custom_minimum_size = Vector2(0, 34)
+	time_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(time_btn)
 	time_btn.pressed.connect(func() -> void:
 		if _day_night != null:
 			_day_night.advance_hours(2.5)
@@ -1325,30 +1378,34 @@ func _build_pause_menu() -> void:
 
 	var save_btn := Button.new()
 	save_btn.text = "Save World to Disk (F6)"
-	save_btn.custom_minimum_size = Vector2(0, 34)
+	save_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(save_btn)
 	save_btn.pressed.connect(func() -> void:
 		if _world_manager != null:
-			var count: int = _world_manager.save_all_modified_chunks()
+			var count: int = _world_manager.save_complete_world()
 			_on_world_saved(count)
 	)
 	vbox.add_child(save_btn)
 
-	var new_map_btn := Button.new()
-	new_map_btn.text = "Generate New World Map (New Seed)"
-	new_map_btn.custom_minimum_size = Vector2(0, 34)
-	new_map_btn.pressed.connect(func() -> void:
+	var title_btn := Button.new()
+	title_btn.text = "Save & Quit to Title"
+	title_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(title_btn)
+	title_btn.pressed.connect(func() -> void:
 		if _world_manager != null:
-			var new_seed: int = _world_manager.regenerate_world_with_new_seed()
-			_pause_status_label.text = "Generated New World Map (Seed %d)" % new_seed
+			_world_manager.save_complete_world()
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 	)
-	vbox.add_child(new_map_btn)
+	vbox.add_child(title_btn)
 
 	var quit_btn := Button.new()
 	quit_btn.text = "Save & Quit to Desktop"
-	quit_btn.custom_minimum_size = Vector2(0, 34)
+	quit_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(quit_btn)
 	quit_btn.pressed.connect(func() -> void:
 		if _world_manager != null:
-			_world_manager.save_all_modified_chunks()
+			_world_manager.save_complete_world()
 		get_tree().quit()
 	)
 	vbox.add_child(quit_btn)

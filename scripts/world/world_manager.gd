@@ -1,5 +1,6 @@
 class_name WorldManager
 extends Node3D
+const GameSession = preload("res://scripts/core/game_session.gd")
 ## Manages endless procedural chunk generation, WorkerThreadPool background streaming,
 ## cross-chunk border face culling, cellular-automata water flow, and ChunkStorage persistence.
 
@@ -48,7 +49,11 @@ var _last_player_chunk: Vector2i = Vector2i(999999, 999999)
 
 func _ready() -> void:
 	add_to_group("world_manager")
-	_storage = ChunkStorage.new(world_seed)
+	if not GameSession.active_world_id.is_empty():
+		world_seed = GameSession.active_seed
+		_storage = ChunkStorage.new(GameSession.get_active_chunk_dir())
+	else:
+		_storage = ChunkStorage.new(world_seed)
 	_configure_noise()
 
 	_player = get_node_or_null(player_path)
@@ -56,7 +61,30 @@ func _ready() -> void:
 		_player = get_tree().get_first_node_in_group("player") as Node3D
 
 	var start_chunk := Vector2i.ZERO
-	if _player != null:
+	var has_saved_pos: bool = false
+	if not GameSession.active_world_data.is_empty():
+		var p_data: Dictionary = GameSession.active_world_data.get("player", {})
+		has_saved_pos = bool(p_data.get("has_saved_pos", false))
+		if has_saved_pos and p_data.has("pos") and p_data["pos"] is Array:
+			var p_arr: Array = p_data["pos"]
+			var saved_pos := Vector3(p_arr[0], p_arr[1], p_arr[2])
+			start_chunk = world_to_chunk_coords(saved_pos)
+			if _player != null:
+				_player.global_position = saved_pos
+				_player.rotation.y = float(p_data.get("yaw", 0.0))
+				var head: Node3D = _player.get_node_or_null("Head") as Node3D
+				if head != null:
+					head.rotation.x = float(p_data.get("pitch", 0.0))
+				_player.set("current_health", int(p_data.get("health", 20)))
+				_player.set("current_hunger", int(p_data.get("hunger", 20)))
+				_player.set("current_oxygen", int(p_data.get("oxygen", 10)))
+				_player.set("is_flying", bool(p_data.get("is_flying", false)))
+				var has_bed: bool = bool(p_data.get("has_bed", false))
+				_player.set("has_custom_respawn", has_bed)
+				if has_bed and p_data.has("bed_pos") and p_data["bed_pos"] is Array:
+					var b_arr: Array = p_data["bed_pos"]
+					_player.set("custom_respawn_pos", Vector3(b_arr[0], b_arr[1], b_arr[2]))
+	elif _player != null:
 		start_chunk = world_to_chunk_coords(_player.global_position)
 
 	# Synchronously build the immediate 3x3 spawn area so the player starts on solid ground
@@ -64,7 +92,7 @@ func _ready() -> void:
 		for dz in range(-1, 2):
 			_spawn_chunk_immediate(start_chunk + Vector2i(dx, dz))
 
-	if _player != null:
+	if _player != null and not has_saved_pos:
 		var spawn_wx: int = int(floor(_player.global_position.x))
 		var spawn_wz: int = int(floor(_player.global_position.z))
 		var surface_y: int = get_surface_height_at(spawn_wx, spawn_wz)
@@ -79,20 +107,19 @@ func _exit_tree() -> void:
 	for tid in _active_task_ids:
 		WorkerThreadPool.wait_for_task_completion(tid)
 	_active_task_ids.clear()
-	save_all_modified_chunks()
+	save_complete_world()
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_is_shutting_down = true
-		save_all_modified_chunks()
+		save_complete_world()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_F6:
-			var count: int = save_all_modified_chunks()
-			world_saved.emit(count)
+			save_complete_world()
 
 
 func _process(delta: float) -> void:
@@ -719,6 +746,19 @@ func save_all_modified_chunks() -> int:
 				false
 			)
 	return _storage.flush_all_to_disk()
+
+
+func save_complete_world() -> int:
+	var count: int = save_all_modified_chunks()
+	var inv: Node = get_node_or_null("../InventoryManager")
+	if inv == null:
+		inv = get_tree().get_first_node_in_group("inventory_manager")
+	var dn: Node = get_node_or_null("../DayNightCycle")
+	if dn == null:
+		dn = get_tree().get_first_node_in_group("day_night_cycle")
+	GameSession.save_world_state(_player, inv, dn, self)
+	world_saved.emit(count)
+	return count
 
 
 func get_active_chunk_count() -> int:

@@ -1,5 +1,6 @@
 class_name DayNightCycle
 extends Node
+const GameSession = preload("res://scripts/core/game_session.gd")
 ## Controls dynamic Day/Night cycle, rotating SunLight and blending sky/ambient/fog colors.
 ## Press [T] to fast-forward time by +2.5 hours.
 
@@ -27,7 +28,16 @@ var _moon_mesh: MeshInstance3D = null
 
 func _ready() -> void:
 	add_to_group("day_night_cycle")
-	current_hour = start_hour
+	if not GameSession.active_world_data.is_empty():
+		var dn_data: Dictionary = GameSession.active_world_data.get("day_night", {})
+		if not dn_data.is_empty():
+			current_hour = float(dn_data.get("hour", start_hour))
+			day_number = int(dn_data.get("day", 1))
+		else:
+			current_hour = start_hour
+	else:
+		current_hour = start_hour
+
 	_sun_light = get_node_or_null(sun_light_path) as DirectionalLight3D
 	_world_env = get_node_or_null(world_env_path) as WorldEnvironment
 	_build_celestial_bodies()

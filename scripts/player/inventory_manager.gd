@@ -1,5 +1,6 @@
 class_name InventoryManager
 extends Node
+const GameSession = preload("res://scripts/core/game_session.gd")
 ## Authentic Minecraft-style 36-slot inventory (9 hotbar + 27 backpack),
 ## cursor item stack manipulation (Left-Click full stack, Right-Click single item),
 ## 2x2 (Player Inventory) & 3x3 (Crafting Table) shaped/shapeless pattern matching,
@@ -134,6 +135,84 @@ func _ready() -> void:
 		slots[i] = {"id": 0, "count": 0}
 
 	set_crafting_grid_dimension(2)
+
+	if not GameSession.active_world_data.is_empty():
+		var inv_data: Dictionary = GameSession.active_world_data.get("inventory", {})
+		if not inv_data.is_empty():
+			deserialize_state(inv_data)
+		var chests_data: Dictionary = GameSession.active_world_data.get("world_chests", {})
+		if not chests_data.is_empty():
+			deserialize_chests(chests_data)
+
+
+func serialize_state() -> Dictionary:
+	return {
+		"slots": slots.duplicate(true),
+		"furnace_input": furnace_input.duplicate(true),
+		"furnace_fuel": furnace_fuel.duplicate(true),
+		"furnace_output": furnace_output.duplicate(true),
+		"furnace_burn_remaining": furnace_burn_remaining,
+		"furnace_burn_max": furnace_burn_max,
+		"furnace_cook_progress": furnace_cook_progress,
+	}
+
+
+func deserialize_state(data: Dictionary) -> void:
+	if data.has("slots") and data["slots"] is Array:
+		var loaded_slots: Array = data["slots"]
+		for i in range(mini(TOTAL_SLOTS, loaded_slots.size())):
+			if loaded_slots[i] is Dictionary:
+				slots[i] = {
+					"id": int(loaded_slots[i].get("id", 0)),
+					"count": int(loaded_slots[i].get("count", 0)),
+				}
+	if data.has("furnace_input") and data["furnace_input"] is Dictionary:
+		furnace_input = {
+			"id": int(data["furnace_input"].get("id", 0)),
+			"count": int(data["furnace_input"].get("count", 0)),
+		}
+	if data.has("furnace_fuel") and data["furnace_fuel"] is Dictionary:
+		furnace_fuel = {
+			"id": int(data["furnace_fuel"].get("id", 0)),
+			"count": int(data["furnace_fuel"].get("count", 0)),
+		}
+	if data.has("furnace_output") and data["furnace_output"] is Dictionary:
+		furnace_output = {
+			"id": int(data["furnace_output"].get("id", 0)),
+			"count": int(data["furnace_output"].get("count", 0)),
+		}
+	furnace_burn_remaining = float(data.get("furnace_burn_remaining", 0.0))
+	furnace_burn_max = float(data.get("furnace_burn_max", 10.0))
+	furnace_cook_progress = float(data.get("furnace_cook_progress", 0.0))
+	inventory_updated.emit()
+	furnace_updated.emit()
+
+
+func serialize_chests() -> Dictionary:
+	var result: Dictionary = {}
+	for c_pos in world_chests.keys():
+		var key_str: String = "%d,%d,%d" % [c_pos.x, c_pos.y, c_pos.z]
+		result[key_str] = (world_chests[c_pos] as Array).duplicate(true)
+	return result
+
+
+func deserialize_chests(chests_data: Dictionary) -> void:
+	world_chests.clear()
+	for key_str in chests_data.keys():
+		var parts: PackedStringArray = str(key_str).split(",")
+		if parts.size() == 3:
+			var c_pos := Vector3i(parts[0].to_int(), parts[1].to_int(), parts[2].to_int())
+			var c_slots: Array = []
+			var raw_slots: Array = chests_data[key_str]
+			for item in raw_slots:
+				if item is Dictionary:
+					c_slots.append({
+						"id": int(item.get("id", 0)),
+						"count": int(item.get("count", 0)),
+					})
+			while c_slots.size() < CHEST_SIZE:
+				c_slots.append({"id": 0, "count": 0})
+			world_chests[c_pos] = c_slots
 
 
 func _process(delta: float) -> void:

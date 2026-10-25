@@ -494,6 +494,18 @@ func _build_hud_and_gui_assets() -> void:
 	var furn_burn: Image = _load_faithful_image("gui/sprites/container/furnace/burn_progress.png")
 	furn_burn.save_png(gui_dir + "furnace_burn_progress.png")
 
+	# 7. Authentic Buttons & Widget Sprites
+	_load_faithful_image("gui/sprites/widget/button.png").save_png(gui_dir + "button.png")
+	_load_faithful_image("gui/sprites/widget/button_highlighted.png").save_png(gui_dir + "button_highlighted.png")
+	_load_faithful_image("gui/sprites/widget/button_disabled.png").save_png(gui_dir + "button_disabled.png")
+	_load_faithful_image("gui/sprites/widget/slider.png").save_png(gui_dir + "slider.png")
+	_load_faithful_image("gui/sprites/widget/slider_handle.png").save_png(gui_dir + "slider_handle.png")
+	_load_faithful_image("gui/sprites/widget/text_field.png").save_png(gui_dir + "text_field.png")
+
+	# 8. Title Panorama Backdrop
+	var panorama: Image = _load_faithful_image("gui/title/background/panorama_0.png")
+	panorama.save_png(gui_dir + "title_panorama.png")
+
 	print("[Faithful64xBuilder] Saved Faithful 64x HUD & GUI textures.")
 
 

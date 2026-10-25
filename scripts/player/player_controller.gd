@@ -12,6 +12,7 @@ signal health_changed(current_hp: int, max_hp: int)
 signal hunger_changed(current_hunger: int, max_hunger: int)
 signal oxygen_changed(current_oxygen: int, max_oxygen: int)
 signal player_damaged(amount: int)
+signal player_respawned(at_bed: bool)
 
 # --- Exported Movement Tuning ---
 @export_group("Movement")
@@ -211,6 +212,7 @@ func _respawn_player() -> void:
 	current_oxygen = max_oxygen
 	velocity = Vector3.ZERO
 	_max_fall_speed = 0.0
+	var respawned_at_bed: bool = has_custom_respawn
 	if has_custom_respawn:
 		global_position = custom_respawn_pos + Vector3(0.5, 1.5, 0.5)
 	else:
@@ -223,6 +225,9 @@ func _respawn_player() -> void:
 	health_changed.emit(current_health, max_health)
 	hunger_changed.emit(current_hunger, max_hunger)
 	oxygen_changed.emit(current_oxygen, max_oxygen)
+	player_respawned.emit(respawned_at_bed)
+	if _world_manager != null and _world_manager.has_method("save_complete_world"):
+		_world_manager.save_complete_world()
 
 
 func _update_hunger_and_oxygen(delta: float) -> void:

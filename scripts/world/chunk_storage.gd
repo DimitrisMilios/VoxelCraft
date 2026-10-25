@@ -5,19 +5,26 @@ extends RefCounted
 
 const SAVE_ROOT_DIR: String = "user://worlds"
 const FILE_MAGIC: int = 0x56584331 # "VXC1"
+const VoxelChunk = preload("res://scripts/voxel/voxel_chunk.gd")
 
 var _world_seed: int = 2026
+var _custom_dir: String = ""
 ## In-memory cache of modified chunk buffers: `Vector2i -> Dictionary{ "voxels": PackedByteArray, "highest_y": int }`
 var _modified_chunks: Dictionary = {}
 var _mutex: Mutex = Mutex.new()
 
 
-func _init(world_seed: int = 2026) -> void:
-	_world_seed = world_seed
+func _init(seed_or_path: Variant = 2026) -> void:
+	if seed_or_path is String:
+		_custom_dir = seed_or_path
+	elif seed_or_path is int:
+		_world_seed = seed_or_path
 	_ensure_save_directory()
 
 
 func get_world_save_dir() -> String:
+	if not _custom_dir.is_empty():
+		return _custom_dir
 	return "%s/seed_%d" % [SAVE_ROOT_DIR, _world_seed]
 
 
