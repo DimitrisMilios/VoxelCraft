@@ -3,6 +3,7 @@ extends RefCounted
 ## Generates a crisp 16x16 per-tile retro pixel-art texture atlas and shared chunk material.
 
 static var _cached_material: StandardMaterial3D = null
+static var _cached_water_material: StandardMaterial3D = null
 static var _cached_texture: ImageTexture = null
 
 
@@ -18,6 +19,21 @@ static func get_shared_voxel_material() -> StandardMaterial3D:
 	material.metallic = 0.0
 	_cached_material = material
 	return _cached_material
+
+
+static func get_shared_water_material() -> StandardMaterial3D:
+	if _cached_water_material != null:
+		return _cached_water_material
+
+	var material := StandardMaterial3D.new()
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.albedo_color = Color(0.16, 0.48, 0.88, 0.64)
+	material.vertex_color_use_as_albedo = true
+	material.roughness = 0.15
+	material.metallic = 0.05
+	_cached_water_material = material
+	return _cached_water_material
 
 
 static func get_atlas_texture() -> ImageTexture:

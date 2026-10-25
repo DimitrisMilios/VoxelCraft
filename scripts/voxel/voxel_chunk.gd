@@ -2,12 +2,14 @@ class_name VoxelChunk
 extends StaticBody3D
 ## Represents a single 16 x 256 x 16 voxel chunk.
 ## Supports both synchronous and WorkerThreadPool background terrain/mesh generation,
+## dual-pass rendering (opaque solid blocks + translucent water pass),
 ## cross-chunk neighbor face culling, and dirty-state tracking for persistence.
 
 const CHUNK_SIZE_X: int = 16
 const CHUNK_SIZE_Y: int = 256
 const CHUNK_SIZE_Z: int = 16
 const SEA_LEVEL: int = 48
+const WATER_LEVEL: int = 45
 
 ## Coordinate of this chunk in chunk-grid space (e.g., Vector2i(0, 0), Vector2i(1, -2)).
 var chunk_coords: Vector2i = Vector2i.ZERO
@@ -24,6 +26,7 @@ var _voxels: PackedByteArray = PackedByteArray()
 var _highest_solid_y: int = 0
 
 var _mesh_instance: MeshInstance3D = null
+var _water_mesh_instance: MeshInstance3D = null
 var _collision_shape: CollisionShape3D = null
 
 
@@ -39,6 +42,12 @@ func _ensure_child_nodes() -> void:
 		_mesh_instance.name = "ChunkMesh"
 		_mesh_instance.material_override = VoxelAtlasBuilder.get_shared_voxel_material()
 		add_child(_mesh_instance)
+	if _water_mesh_instance == null:
+		_water_mesh_instance = MeshInstance3D.new()
+		_water_mesh_instance.name = "WaterMesh"
+		_water_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_water_mesh_instance.material_override = VoxelAtlasBuilder.get_shared_water_material()
+		add_child(_water_mesh_instance)
 	if _collision_shape == null:
 		_collision_shape = CollisionShape3D.new()
 		_collision_shape.name = "ChunkCollision"
@@ -48,7 +57,7 @@ func _ensure_child_nodes() -> void:
 ## Restores voxel data directly from a saved persistence buffer.
 func load_from_buffer(saved_voxels: PackedByteArray, highest_y: int) -> void:
 	_voxels = saved_voxels
-	_highest_solid_y = clampi(highest_y, 0, CHUNK_SIZE_Y - 1)
+	_highest_solid_y = clampi(maxi(highest_y, WATER_LEVEL), 0, CHUNK_SIZE_Y - 1)
 	is_dirty = true
 
 
@@ -60,12 +69,12 @@ func get_highest_solid_y() -> int:
 	return _highest_solid_y
 
 
-## Initializes and generates terrain for this chunk using 2D heightmap + 3D cave noise.
+## Initializes and generates terrain for this chunk using 2D heightmap + 3D cave noise + water basins.
 ## Safe to execute on a background WorkerThreadPool thread.
 func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = null) -> void:
 	_voxels.resize(CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z)
 	_voxels.fill(BlockRegistry.BlockId.AIR)
-	_highest_solid_y = 0
+	_highest_solid_y = WATER_LEVEL
 
 	var world_origin_x: int = chunk_coords.x * CHUNK_SIZE_X
 	var world_origin_z: int = chunk_coords.y * CHUNK_SIZE_Z
@@ -76,17 +85,18 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			var wz: int = world_origin_z + lz
 
 			var surface_y: int = sample_surface_height(surface_noise, wx, wz)
+			var top_y: int = maxi(surface_y, WATER_LEVEL)
 
-			for ly in range(surface_y + 1):
+			for ly in range(top_y + 1):
 				var block_id: int = sample_terrain_voxel(surface_y, wx, ly, wz, cave_noise)
 				if block_id != BlockRegistry.BlockId.AIR:
 					_set_voxel_raw(lx, ly, lz, block_id)
 
-			if surface_y > _highest_solid_y:
-				_highest_solid_y = surface_y
+			if top_y > _highest_solid_y:
+				_highest_solid_y = top_y
 
-			# Deterministic tree placement away from chunk borders so canopies don't clip
-			if lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
+			# Deterministic tree placement on Grass above water level
+			if surface_y > WATER_LEVEL + 1 and lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
 				if _should_spawn_tree(wx, wz) and get_block_local(lx, surface_y, lz) == BlockRegistry.BlockId.GRASS:
 					_place_tree(lx, surface_y + 1, lz)
 
@@ -109,16 +119,21 @@ static func sample_terrain_voxel(
 	wz: int,
 	cave_noise: FastNoiseLite
 ) -> int:
-	if ly < 0 or ly > surface_y:
+	if ly < 0:
+		return BlockRegistry.BlockId.AIR
+	if ly > surface_y:
+		if ly <= WATER_LEVEL:
+			return BlockRegistry.BlockId.WATER
 		return BlockRegistry.BlockId.AIR
 	if ly == 0:
 		return BlockRegistry.BlockId.STONE
-	if cave_noise != null and ly < surface_y - 3 and ly > 2:
+	# Do not carve open caves directly underneath water basins to avoid draining lakes
+	if cave_noise != null and surface_y > WATER_LEVEL and ly < surface_y - 3 and ly > 2:
 		var cave_val: float = cave_noise.get_noise_3d(float(wx), float(ly) * 1.4, float(wz))
 		if cave_val > 0.46:
 			return BlockRegistry.BlockId.AIR
-	# Low-lying basins and shorelines near/below sea level generate sandy beaches
-	if surface_y <= SEA_LEVEL - 2 and ly >= surface_y - 2:
+	# Low-lying basins and shorelines near/below water level generate sandy beaches
+	if surface_y <= WATER_LEVEL + 1 and ly >= surface_y - 2:
 		return BlockRegistry.BlockId.SAND
 	if ly == surface_y:
 		return BlockRegistry.BlockId.GRASS
@@ -159,14 +174,18 @@ func _place_tree(lx: int, base_y: int, lz: int) -> void:
 		_highest_solid_y = canopy_top
 
 
-## Thread-safe mesh and trimesh collision builder. Can be called from WorkerThreadPool.
-## Returns `{ "mesh": ArrayMesh, "shape": ConcavePolygonShape3D }`.
+## Thread-safe dual mesh (solid + translucent water) and trimesh collision builder.
+## Returns `{ "mesh": ArrayMesh, "water_mesh": ArrayMesh, "shape": ConcavePolygonShape3D }`.
 func build_mesh_data() -> Dictionary:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_solid := SurfaceTool.new()
+	st_solid.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var st_water := SurfaceTool.new()
+	st_water.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var max_y_to_scan: int = mini(_highest_solid_y + 1, CHUNK_SIZE_Y)
-	var face_count: int = 0
+	var solid_faces: int = 0
+	var water_faces: int = 0
 
 	for ly in range(max_y_to_scan):
 		for lx in range(CHUNK_SIZE_X):
@@ -175,41 +194,64 @@ func build_mesh_data() -> Dictionary:
 				if block_id == BlockRegistry.BlockId.AIR:
 					continue
 
-				# Check all 6 neighbor directions; emit face only if neighbor is Air
+				if block_id == BlockRegistry.BlockId.WATER:
+					# Emit water faces only when bordering AIR
+					if _get_neighbor_id(lx, ly + 1, lz) == BlockRegistry.BlockId.AIR:
+						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP)
+						water_faces += 1
+					if _get_neighbor_id(lx, ly - 1, lz) == BlockRegistry.BlockId.AIR:
+						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM)
+						water_faces += 1
+					if _get_neighbor_id(lx + 1, ly, lz) == BlockRegistry.BlockId.AIR:
+						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST)
+						water_faces += 1
+					if _get_neighbor_id(lx - 1, ly, lz) == BlockRegistry.BlockId.AIR:
+						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST)
+						water_faces += 1
+					if _get_neighbor_id(lx, ly, lz + 1) == BlockRegistry.BlockId.AIR:
+						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH)
+						water_faces += 1
+					if _get_neighbor_id(lx, ly, lz - 1) == BlockRegistry.BlockId.AIR:
+						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH)
+						water_faces += 1
+					continue
+
+				# Solid block: emit faces when neighbor is not solid (i.e. AIR or WATER)
 				if not _is_neighbor_solid(lx, ly + 1, lz):
-					_emit_face(st, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
-					face_count += 1
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
+					solid_faces += 1
 				if not _is_neighbor_solid(lx, ly - 1, lz):
-					_emit_face(st, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
-					face_count += 1
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
+					solid_faces += 1
 				if not _is_neighbor_solid(lx + 1, ly, lz):
-					_emit_face(st, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
-					face_count += 1
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
+					solid_faces += 1
 				if not _is_neighbor_solid(lx - 1, ly, lz):
-					_emit_face(st, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
-					face_count += 1
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
+					solid_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz + 1):
-					_emit_face(st, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
-					face_count += 1
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
+					solid_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz - 1):
-					_emit_face(st, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
-					face_count += 1
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
+					solid_faces += 1
 
-	if face_count == 0:
-		return {"mesh": null, "shape": null}
+	var solid_mesh: ArrayMesh = st_solid.commit() if solid_faces > 0 else null
+	var water_mesh: ArrayMesh = st_water.commit() if water_faces > 0 else null
+	var trimesh_shape: ConcavePolygonShape3D = solid_mesh.create_trimesh_shape() if solid_mesh != null else null
 
-	var array_mesh: ArrayMesh = st.commit()
-	var trimesh_shape: ConcavePolygonShape3D = array_mesh.create_trimesh_shape()
 	return {
-		"mesh": array_mesh,
+		"mesh": solid_mesh,
+		"water_mesh": water_mesh,
 		"shape": trimesh_shape,
 	}
 
 
-## Applies prebuilt mesh and collision shape resources on the main thread.
+## Applies prebuilt solid mesh, water mesh, and collision shape resources on the main thread.
 func apply_mesh_data(mesh_data: Dictionary) -> void:
 	_ensure_child_nodes()
 	_mesh_instance.mesh = mesh_data.get("mesh", null) as ArrayMesh
+	_water_mesh_instance.mesh = mesh_data.get("water_mesh", null) as ArrayMesh
 	_collision_shape.shape = mesh_data.get("shape", null) as Shape3D
 
 
@@ -219,21 +261,95 @@ func rebuild_mesh() -> void:
 	apply_mesh_data(mesh_data)
 
 
-func _is_neighbor_solid(lx: int, ly: int, lz: int) -> bool:
+func _get_neighbor_id(lx: int, ly: int, lz: int) -> int:
 	if ly < 0:
-		return true
+		return BlockRegistry.BlockId.STONE
 	if ly >= CHUNK_SIZE_Y:
-		return false
+		return BlockRegistry.BlockId.AIR
 	if lx >= 0 and lx < CHUNK_SIZE_X and lz >= 0 and lz < CHUNK_SIZE_Z:
-		return BlockRegistry.is_solid(get_block_local(lx, ly, lz))
+		return get_block_local(lx, ly, lz)
 
 	if neighbor_block_getter.is_valid():
 		var wx: int = chunk_coords.x * CHUNK_SIZE_X + lx
 		var wz: int = chunk_coords.y * CHUNK_SIZE_Z + lz
-		var neighbor_id: int = neighbor_block_getter.call(Vector3i(wx, ly, wz))
-		return BlockRegistry.is_solid(neighbor_id)
+		return neighbor_block_getter.call(Vector3i(wx, ly, wz))
 
-	return false
+	return BlockRegistry.BlockId.AIR
+
+
+func _is_neighbor_solid(lx: int, ly: int, lz: int) -> bool:
+	return BlockRegistry.is_solid(_get_neighbor_id(lx, ly, lz))
+
+
+func _emit_water_face(st: SurfaceTool, lx: int, ly: int, lz: int, face_dir: int) -> void:
+	var origin := Vector3(float(lx), float(ly), float(lz))
+	var top_h: float = 0.88 # Slightly recessed water surface for classic shoreline look
+	var verts: Array[Vector3]
+	var normal: Vector3
+	var shade: float = 1.0
+
+	match face_dir:
+		BlockRegistry.FaceDir.TOP:
+			normal = Vector3.UP
+			shade = 1.0
+			verts = [
+				origin + Vector3(0, top_h, 0),
+				origin + Vector3(1, top_h, 0),
+				origin + Vector3(1, top_h, 1),
+				origin + Vector3(0, top_h, 1),
+			]
+		BlockRegistry.FaceDir.BOTTOM:
+			normal = Vector3.DOWN
+			shade = 0.65
+			verts = [
+				origin + Vector3(0, 0, 1),
+				origin + Vector3(1, 0, 1),
+				origin + Vector3(1, 0, 0),
+				origin + Vector3(0, 0, 0),
+			]
+		BlockRegistry.FaceDir.EAST:
+			normal = Vector3.RIGHT
+			shade = 0.85
+			verts = [
+				origin + Vector3(1, top_h, 1),
+				origin + Vector3(1, top_h, 0),
+				origin + Vector3(1, 0, 0),
+				origin + Vector3(1, 0, 1),
+			]
+		BlockRegistry.FaceDir.WEST:
+			normal = Vector3.LEFT
+			shade = 0.80
+			verts = [
+				origin + Vector3(0, top_h, 0),
+				origin + Vector3(0, top_h, 1),
+				origin + Vector3(0, 0, 1),
+				origin + Vector3(0, 0, 0),
+			]
+		BlockRegistry.FaceDir.SOUTH:
+			normal = Vector3.BACK
+			shade = 0.90
+			verts = [
+				origin + Vector3(0, top_h, 1),
+				origin + Vector3(1, top_h, 1),
+				origin + Vector3(1, 0, 1),
+				origin + Vector3(0, 0, 1),
+			]
+		_: # NORTH
+			normal = Vector3.FORWARD
+			shade = 0.78
+			verts = [
+				origin + Vector3(1, top_h, 0),
+				origin + Vector3(0, top_h, 0),
+				origin + Vector3(0, 0, 0),
+				origin + Vector3(1, 0, 0),
+			]
+
+	var color := Color(shade, shade, shade, 1.0)
+	var indices: Array[int] = [0, 1, 2, 0, 2, 3]
+	for idx in indices:
+		st.set_normal(normal)
+		st.set_color(color)
+		st.add_vertex(verts[idx])
 
 
 func _emit_face(

@@ -8,10 +8,12 @@ var _day_night: DayNightCycle = null
 var _interactor: BlockInteractor = null
 var _slot_panels: Array[PanelContainer] = []
 var _debug_label: Label = null
+var _underwater_tint: ColorRect = null
 var _save_toast_timer: float = 0.0
 
 
 func _ready() -> void:
+	_build_underwater_overlay()
 	_build_crosshair()
 	_build_hotbar()
 	_build_debug_overlay()
@@ -21,6 +23,9 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _save_toast_timer > 0.0:
 		_save_toast_timer = maxf(0.0, _save_toast_timer - delta)
+
+	if _underwater_tint != null and _player != null:
+		_underwater_tint.visible = _player.is_head_underwater
 
 	if _debug_label != null and _player != null:
 		var pos: Vector3 = _player.global_position
@@ -33,11 +38,11 @@ func _process(delta: float) -> void:
 		var active_chunks: int = _world_manager.get_active_chunk_count() if _world_manager != null else 0
 		var modified_chunks: int = _world_manager.get_modified_chunk_count() if _world_manager != null else 0
 		var time_str: String = _day_night.get_formatted_time() if _day_night != null else "Day 1 09:30"
-		var mode_str: String = "FLY" if _player.is_flying else "WALK"
+		var mode_str: String = "FLY" if _player.is_flying else ("SWIM" if _player.is_in_water else "WALK")
 		var save_status: String = " | [SAVED TO DISK!]" if _save_toast_timer > 0.0 else ""
 
 		_debug_label.text = (
-			"VoxelCraft 0.3 | %d FPS | %s | Mode: %s | Chunks: %d (Saved: %d)%s\n"
+			"VoxelCraft 0.4 | %d FPS | %s | Mode: %s | Chunks: %d (Saved: %d)%s\n"
 			% [fps, time_str, mode_str, active_chunks, modified_chunks, save_status]
 			+ "XYZ: %.1f, %.1f, %.1f | Chunk: (%d, %d) | Block: %s\n"
 			% [pos.x, pos.y, pos.z, chunk_coord.x, chunk_coord.y, block_name]
@@ -62,6 +67,15 @@ func _bind_references() -> void:
 
 func _on_world_saved(_saved_chunk_count: int) -> void:
 	_save_toast_timer = 2.5
+
+
+func _build_underwater_overlay() -> void:
+	_underwater_tint = ColorRect.new()
+	_underwater_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_underwater_tint.color = Color(0.06, 0.28, 0.68, 0.42)
+	_underwater_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_underwater_tint.visible = false
+	add_child(_underwater_tint)
 
 
 func _build_crosshair() -> void:

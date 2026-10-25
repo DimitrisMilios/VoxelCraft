@@ -12,6 +12,7 @@ enum BlockId {
 	SAND = 6,
 	COBBLESTONE = 7,
 	WOOD_PLANKS = 8,
+	WATER = 9,
 }
 
 enum FaceDir {
@@ -39,8 +40,14 @@ const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 16
 
 
+## Returns true if the block has solid collision and occludes adjacent solid block faces.
 static func is_solid(block_id: int) -> bool:
-	return block_id != BlockId.AIR
+	return block_id != BlockId.AIR and block_id != BlockId.WATER
+
+
+## Returns true if the block is a swimmable liquid (e.g. Water).
+static func is_liquid(block_id: int) -> bool:
+	return block_id == BlockId.WATER
 
 
 static func get_block_name(block_id: int) -> String:
@@ -63,6 +70,8 @@ static func get_block_name(block_id: int) -> String:
 			return "Cobble"
 		BlockId.WOOD_PLANKS:
 			return "Planks"
+		BlockId.WATER:
+			return "Water"
 		_:
 			return "Unknown"
 
@@ -85,6 +94,8 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.42, 0.44, 0.46)
 		BlockId.WOOD_PLANKS:
 			return Color(0.68, 0.53, 0.31)
+		BlockId.WATER:
+			return Color(0.20, 0.52, 0.92)
 		_:
 			return Color.GRAY
 
