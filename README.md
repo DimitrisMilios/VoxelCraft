@@ -11,7 +11,7 @@
 
 *Classic low-poly, pixel-art voxel exploration, procedural worlds, and block building.*
 
-[Overview](#-overview) • [Core Architecture](#-core-systems-architecture) • [Roadmap](#-development-roadmap) • [Getting Started](#-getting-started) • [Contributing](#-contributing)
+[Overview](#-overview) • [Core Architecture](#-core-systems-architecture) • [Roadmap](#-development-roadmap) • [Credits](#-credits--attributions) • [Getting Started](#-getting-started) • [Contributing](#-contributing)
 
 </div>
 
@@ -143,6 +143,17 @@ Contributions, issues, and feature requests are welcome! As an open-source proje
 5. Open a Pull Request
 
 Please make sure your code follows the [Engineering & Performance Rules](#️-engineering--performance-rules) and GDScript style conventions.
+
+---
+
+## 🎨 Credits & Attributions
+
+VoxelCraft incorporates high-resolution textures and UI elements from the **Faithful 64x Resource Pack**:
+- **Project:** [Faithful 64x](https://faithfulpack.net) (Release 15)
+- **Authors:** The Faithful Resource Pack Team & Contributors
+- **Website:** [https://faithfulpack.net](https://faithfulpack.net)
+- **License:** [Faithful License Version 4](https://faithfulpack.net/license) (full license text included in [`FAITHFUL_LICENSE.txt`](FAITHFUL_LICENSE.txt))
+- Used for high-resolution 64×64 block surfaces, animated water, mining destruction cracks, HUD vitals, UI slot panels, and item icons. See [`CREDITS.md`](CREDITS.md) for detailed asset mapping.
 
 ---
 

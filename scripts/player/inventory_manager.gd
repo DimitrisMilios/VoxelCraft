@@ -96,7 +96,7 @@ static var _ui_tex_cache: Dictionary = {}
 static func load_ui_texture(res_path: String) -> Texture2D:
 	if _ui_tex_cache.has(res_path):
 		return _ui_tex_cache[res_path]
-	var abs_path: String = ProjectSettings.globalize_path(res_path)
+	var abs_path: String = TexturePack.resolve_abs_path(res_path)
 	if FileAccess.file_exists(abs_path):
 		var img := Image.load_from_file(abs_path)
 		if img != null and not img.is_empty():

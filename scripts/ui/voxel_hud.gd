@@ -126,6 +126,11 @@ func _load_blender_ui_textures() -> void:
 	_tex_bubble_empty = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/bubble_empty.png")
 
 
+## Loads a PNG UI texture (Faithful 64x HUD/GUI assets) via the shared InventoryManager cache.
+func _load_png_texture(res_path: String) -> Texture2D:
+	return InventoryManager.load_ui_texture(res_path)
+
+
 func _make_blender_stylebox(tex: Texture2D, margin: float = 6.0, fallback_bg := Color(0.16, 0.17, 0.20, 0.96)) -> StyleBox:
 	if tex != null:
 		var sb := StyleBoxTexture.new()
@@ -407,19 +412,31 @@ func _build_crosshair_and_mining_bar() -> void:
 	crosshair_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(crosshair_holder)
 
-	var h_bar := ColorRect.new()
-	h_bar.color = Color(1, 1, 1, 0.88)
-	h_bar.size = Vector2(14, 2)
-	h_bar.position = Vector2(3, 9)
-	h_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	crosshair_holder.add_child(h_bar)
+	var crosshair_tex: Texture2D = _load_png_texture("res://assets/ui/hud_icons/crosshair.png")
+	if crosshair_tex != null:
+		var ch_rect := TextureRect.new()
+		ch_rect.position = Vector2(-1, -1)
+		ch_rect.size = Vector2(22, 22)
+		ch_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		ch_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		ch_rect.texture = crosshair_tex
+		ch_rect.modulate = Color(1, 1, 1, 0.90)
+		ch_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		crosshair_holder.add_child(ch_rect)
+	else:
+		var h_bar := ColorRect.new()
+		h_bar.color = Color(1, 1, 1, 0.88)
+		h_bar.size = Vector2(14, 2)
+		h_bar.position = Vector2(3, 9)
+		h_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		crosshair_holder.add_child(h_bar)
 
-	var v_bar := ColorRect.new()
-	v_bar.color = Color(1, 1, 1, 0.88)
-	v_bar.size = Vector2(2, 14)
-	v_bar.position = Vector2(9, 3)
-	v_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	crosshair_holder.add_child(v_bar)
+		var v_bar := ColorRect.new()
+		v_bar.color = Color(1, 1, 1, 0.88)
+		v_bar.size = Vector2(2, 14)
+		v_bar.position = Vector2(9, 3)
+		v_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		crosshair_holder.add_child(v_bar)
 
 	_mining_bar_holder = Control.new()
 	_mining_bar_holder.position = Vector2(-55, 28)
@@ -737,17 +754,25 @@ func _build_2x2_crafting_view() -> Control:
 	armor_vbox.columns = 2
 	armor_vbox.add_theme_constant_override("h_separation", 4)
 	armor_vbox.add_theme_constant_override("v_separation", 4)
-	for armor_lbl in ["HELM", "CHEST", "LEGS", "BOOTS"]:
+	var armor_icons: Array[String] = [
+		"res://assets/ui/hud_icons/armor_helmet.png",
+		"res://assets/ui/hud_icons/armor_chestplate.png",
+		"res://assets/ui/hud_icons/armor_leggings.png",
+		"res://assets/ui/hud_icons/armor_boots.png",
+	]
+	for armor_path in armor_icons:
 		var a_panel := PanelContainer.new()
-		a_panel.custom_minimum_size = Vector2(44, 44)
+		a_panel.custom_minimum_size = Vector2(46, 46)
 		a_panel.add_theme_stylebox_override("panel", _make_blender_stylebox(_tex_slot_normal, 5.0))
-		var lbl := Label.new()
-		lbl.text = armor_lbl
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		lbl.add_theme_font_size_override("font_size", 9)
-		lbl.add_theme_color_override("font_color", Color(0.65, 0.68, 0.74, 0.7))
-		a_panel.add_child(lbl)
+		var a_icon := TextureRect.new()
+		a_icon.custom_minimum_size = Vector2(30, 30)
+		a_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		a_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		a_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		a_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		a_icon.texture = _load_png_texture(armor_path)
+		a_icon.modulate = Color(1, 1, 1, 0.78)
+		a_panel.add_child(a_icon)
 		armor_vbox.add_child(a_panel)
 	hbox.add_child(armor_vbox)
 

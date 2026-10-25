@@ -489,6 +489,12 @@ func _create_selection_wireframe() -> void:
 func _create_crack_overlay_mesh() -> void:
 	_crack_textures.clear()
 	for stage in range(10):
+		var stage_res_path: String = "res://assets/textures/destroy_stages/destroy_stage_%d.png" % stage
+		var loaded_img: Image = TexturePack.load_image(stage_res_path)
+		if loaded_img != null:
+			_crack_textures.append(ImageTexture.create_from_image(loaded_img))
+			continue
+
 		var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
 		img.fill(Color(0.0, 0.0, 0.0, 0.0))
 		var reach: int = 1 + int(ceil(float(stage + 1) * 0.72))

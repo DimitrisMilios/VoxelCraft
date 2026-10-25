@@ -1,0 +1,6 @@
+Faithful 64x - Release 15
+Textures by the Faithful Resource Pack team - https://faithfulpack.net
+License: see LICENSE.txt in this folder or https://faithfulpack.net/license
+Used in VoxelCraft for blocks, water, mining cracks, HUD, GUI and item icons.
+Some textures were rearranged/composited (atlas, chest/bed/door/torch tiles, isometric icons)
+by tools/build_faithful_64x_assets.gd.

@@ -70,9 +70,25 @@ enum FaceDir {
 ## Tile 16: Crafting Table Top (Grid)
 ## Tile 17: Crafting Table Side (Workbench Tools)
 ## Tile 18: Furnace Front (Stone Oven Opening & Embers)
+## Default (repo) atlas layout: 29 tiles of 32x32 px. A local texture pack may supply a wider
+## atlas (e.g. Faithful 64x: 36 tiles of 64x64 px with extra per-face tiles 29..35).
 const ATLAS_COLUMNS: int = 29
 const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 32
+
+## Actual column count of the loaded atlas (set by VoxelAtlasBuilder when the atlas loads).
+static var atlas_columns: int = 0
+
+## Extended per-face tiles (29..35) fall back to these tiles when the atlas is the 29-tile default.
+const EXTENDED_TILE_FALLBACK: Dictionary = {
+	29: 17, # Crafting Table Side -> Crafting Table Front
+	30: 8,  # Furnace Side -> Cobblestone
+	31: 3,  # Furnace Top -> Stone
+	32: 25, # TNT Top -> TNT Side
+	33: 25, # TNT Bottom -> TNT Side
+	34: 26, # Sandstone Top -> Sandstone Side
+	35: 28, # Cactus Top -> Cactus Side
+}
 
 
 static func is_solid(block_id: int) -> bool:
@@ -355,15 +371,17 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 				return 16
 			elif face_dir == FaceDir.BOTTOM:
 				return 9
+			elif face_dir == FaceDir.EAST or face_dir == FaceDir.WEST:
+				return 29
 			else:
 				return 17
 		BlockId.FURNACE:
 			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
-				return 3
+				return 31
 			elif face_dir == FaceDir.SOUTH or face_dir == FaceDir.NORTH:
 				return 18
 			else:
-				return 8
+				return 30
 		BlockId.CHEST:
 			if face_dir == FaceDir.SOUTH or face_dir == FaceDir.NORTH:
 				return 19
@@ -378,11 +396,22 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 		BlockId.LADDER:
 			return 24
 		BlockId.TNT:
-			return 25
+			if face_dir == FaceDir.TOP:
+				return 32
+			elif face_dir == FaceDir.BOTTOM:
+				return 33
+			else:
+				return 25
 		BlockId.SANDSTONE:
-			return 26
+			if face_dir == FaceDir.TOP:
+				return 34
+			else:
+				return 26
 		BlockId.CACTUS:
-			return 28
+			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
+				return 35
+			else:
+				return 28
 		BlockId.MOSSY_COBBLE:
 			return 27
 		_:
@@ -390,9 +419,14 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 
 
 static func get_tile_uv_rect(block_id: int, face_dir: int) -> Rect2:
+	if atlas_columns <= 0:
+		VoxelAtlasBuilder.get_atlas_texture()
+	var cols: int = maxi(atlas_columns, 1)
 	var tile_idx: int = get_tile_index(block_id, face_dir)
-	var u_step: float = 1.0 / float(ATLAS_COLUMNS)
-	var uv_margin: float = 0.0012
+	if tile_idx >= cols:
+		tile_idx = int(EXTENDED_TILE_FALLBACK.get(tile_idx, 3))
+	var u_step: float = 1.0 / float(cols)
+	var uv_margin: float = u_step * 0.015
 	var u0: float = float(tile_idx) * u_step + uv_margin
 	var v0: float = uv_margin
 	var u_width: float = u_step - (uv_margin * 2.0)

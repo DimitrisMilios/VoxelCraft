@@ -25,27 +25,36 @@ static func get_shared_water_material() -> StandardMaterial3D:
 	if _cached_water_material != null:
 		return _cached_water_material
 
-	var water_img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
-	for y in range(16):
-		for x in range(16):
-			var wave: float = sin((float(x) * 0.9 + float(y) * 1.4) * 0.78) * 0.055
-			var streak: float = 0.08 if ((x + y * 2) % 6 == 0) else 0.0
-			var trough: float = -0.05 if ((x * 2 + y) % 5 == 0) else 0.0
-			var col := Color(
-				clampf(0.14 + wave + streak + trough, 0.0, 1.0),
-				clampf(0.47 + wave + streak + trough, 0.0, 1.0),
-				clampf(0.88 + wave + streak * 1.1, 0.0, 1.0),
-				0.74
-			)
-			water_img.set_pixel(x, y, col)
+	var water_tex: ImageTexture = null
+	var water_uv_scale: float = 0.32
+	# Optional local texture pack water (e.g. Faithful 64x); see TexturePack.
+	var loaded_water: Image = TexturePack.load_image("res://assets/textures/water_still_64.png")
+	if loaded_water != null:
+		water_tex = ImageTexture.create_from_image(loaded_water)
+		water_uv_scale = 1.0
 
-	var water_tex := ImageTexture.create_from_image(water_img)
+	if water_tex == null:
+		var water_img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+		for y in range(16):
+			for x in range(16):
+				var wave: float = sin((float(x) * 0.9 + float(y) * 1.4) * 0.78) * 0.055
+				var streak: float = 0.08 if ((x + y * 2) % 6 == 0) else 0.0
+				var trough: float = -0.05 if ((x * 2 + y) % 5 == 0) else 0.0
+				var col := Color(
+					clampf(0.14 + wave + streak + trough, 0.0, 1.0),
+					clampf(0.47 + wave + streak + trough, 0.0, 1.0),
+					clampf(0.88 + wave + streak * 1.1, 0.0, 1.0),
+					0.74
+				)
+				water_img.set_pixel(x, y, col)
+		water_tex = ImageTexture.create_from_image(water_img)
+
 	var material := StandardMaterial3D.new()
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.albedo_texture = water_tex
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	material.uv1_scale = Vector3(0.32, 0.32, 0.32)
+	material.uv1_scale = Vector3(water_uv_scale, water_uv_scale, water_uv_scale)
 	material.uv1_triplanar = true
 	material.vertex_color_use_as_albedo = true
 	material.roughness = 0.07
@@ -70,16 +79,16 @@ static func get_atlas_texture() -> ImageTexture:
 	if _cached_texture != null:
 		return _cached_texture
 
-	# 1. Load Blender 5.2 baked 3D micro-relief Block Atlas (`res://assets/textures/block_atlas.png`)
-	var atlas_res_path: String = "res://assets/textures/block_atlas.png"
-	var abs_atlas_path: String = ProjectSettings.globalize_path(atlas_res_path)
-	if FileAccess.file_exists(abs_atlas_path):
-		var baked_img := Image.load_from_file(abs_atlas_path)
-		if baked_img != null and not baked_img.is_empty():
-			_cached_texture = ImageTexture.create_from_image(baked_img)
-			return _cached_texture
+	# 1. Load the block atlas: a local texture pack override (e.g. Faithful 64x, 36 tiles)
+	#    if installed, otherwise the repo's Blender-baked atlas (29 tiles).
+	var baked_img: Image = TexturePack.load_image("res://assets/textures/block_atlas.png")
+	if baked_img != null:
+		BlockRegistry.atlas_columns = maxi(1, baked_img.get_width() / maxi(1, baked_img.get_height()))
+		_cached_texture = ImageTexture.create_from_image(baked_img)
+		return _cached_texture
 
 	# 2. Fallback procedural pixel-art atlas if `block_atlas.png` is missing
+	BlockRegistry.atlas_columns = BlockRegistry.ATLAS_COLUMNS
 	var tile_size: int = BlockRegistry.TILE_PIXEL_SIZE
 	var width: int = BlockRegistry.ATLAS_COLUMNS * tile_size
 	var height: int = BlockRegistry.ATLAS_ROWS * tile_size
