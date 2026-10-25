@@ -69,32 +69,34 @@
 | Input | Action |
 | :--- | :--- |
 | `W` `A` `S` `D` | Move Forward / Left / Backward / Right |
+| `Shift` | Sprint (with dynamic FOV) |
 | `Space` | Jump |
 | `Mouse Movement` | First-Person Camera Look |
 | `Left Mouse Button` | Break Targeted Block |
 | `Right Mouse Button` | Place Selected Block |
-| `1` / `2` / `3` | Select Hotbar Slot (Grass, Dirt, Stone) |
+| `1` – `5` / `Mouse Wheel` | Select Hotbar Slot (Grass, Dirt, Stone, Wood Log, Leaves) |
+| `F6` | Quick-Save Modified Chunks to Disk (`user://worlds/`) |
 | `Esc` | Toggle Mouse Cursor Capture |
 
 ---
 
 ## 🗺️ Development Roadmap
 
-- [ ] **Phase 1: Project Initialization & Player Controller**
+- [x] **Phase 1: Project Initialization & Player Controller**
   - Initialize Godot 4 3D project structure
-  - Implement first-person `CharacterBody3D` with smooth mouse look, WASD movement, jumping, and gravity
-  - Create sandbox test scene with reference geometry
-- [ ] **Phase 2: Voxel Data & Single Chunk Generator**
-  - Build `16 × 256 × 16` chunk data container and `ArrayMesh` generator
-  - Implement neighbor face culling and `FastNoiseLite` heightmap hills
-- [ ] **Phase 3: Endless World Manager**
-  - Track player chunk coordinates and dynamically load/unload chunks within render distance
-  - Offload heavy chunk generation to Godot's `WorkerThreadPool` as needed
-- [ ] **Phase 4: Block Interaction & UI Hotbar**
-  - Add camera raycasting for breaking and placing blocks with immediate chunk remeshing
-  - Build HUD crosshair and 3-slot block selection hotbar (Grass, Dirt, Stone)
-- [ ] **Phase 5: Passive Mobile Entities (Mobs)**
-  - Implement wandering passive mob AI with gravity and ledge detection
+  - Implement first-person `CharacterBody3D` with smooth mouse look, WASD movement, sprinting, jumping, and gravity
+- [x] **Phase 2: Voxel Data & Single Chunk Generator**
+  - Build `16 × 256 × 16` chunk data container (`PackedByteArray`) and `ArrayMesh` generator
+  - Implement neighbor face culling, procedural `16×16` pixel-art atlas, and `FastNoiseLite` hills, caves, and trees
+- [x] **Phase 3: Endless World Manager & Multithreading**
+  - Track player chunk coordinates and dynamically stream chunks within render distance
+  - Offload chunk terrain + mesh generation to Godot's `WorkerThreadPool`
+  - Persist player-modified chunks in memory and Zstd-compressed disk storage (`ChunkStorage`)
+- [x] **Phase 4: Block Interaction & UI Hotbar**
+  - Add camera raycasting for breaking and placing blocks with 3D wireframe outline and immediate chunk remeshing
+  - Build HUD crosshair, debug stats overlay, and 5-slot block selection hotbar
+- [x] **Phase 5: Passive Mobile Entities (Mobs)**
+  - Implement wandering passive mob AI (Pig & Cow variants) with gravity, 1-block step hopping, and ledge avoidance
 
 ---
 

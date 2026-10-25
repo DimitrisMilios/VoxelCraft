@@ -11,19 +11,24 @@ const SLOT_COLORS: Dictionary = {
 }
 
 var _player: Node3D = null
+var _world_manager: WorldManager = null
 var _interactor: BlockInteractor = null
 var _slot_panels: Array[PanelContainer] = []
 var _debug_label: Label = null
+var _save_toast_timer: float = 0.0
 
 
 func _ready() -> void:
 	_build_crosshair()
 	_build_hotbar()
 	_build_debug_overlay()
-	call_deferred("_bind_player")
+	call_deferred("_bind_references")
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _save_toast_timer > 0.0:
+		_save_toast_timer = maxf(0.0, _save_toast_timer - delta)
+
 	if _debug_label != null and _player != null:
 		var pos: Vector3 = _player.global_position
 		var chunk_coord: Vector2i = WorldManager.world_to_chunk_coords(pos)
@@ -31,20 +36,33 @@ func _process(_delta: float) -> void:
 		var block_name: String = "Grass"
 		if _interactor != null:
 			block_name = BlockRegistry.get_block_name(_interactor.get_selected_block_id())
+
+		var active_chunks: int = _world_manager.get_active_chunk_count() if _world_manager != null else 0
+		var modified_chunks: int = _world_manager.get_modified_chunk_count() if _world_manager != null else 0
+		var save_status: String = " | [SAVED TO DISK!]" if _save_toast_timer > 0.0 else ""
+
 		_debug_label.text = (
-			"VoxelCraft 0.1 | %d FPS\n" % fps
+			"VoxelCraft 0.2 | %d FPS | Chunks: %d (Edited: %d)%s\n" % [fps, active_chunks, modified_chunks, save_status]
 			+ "XYZ: %.1f, %.1f, %.1f | Chunk: (%d, %d)\n" % [pos.x, pos.y, pos.z, chunk_coord.x, chunk_coord.y]
-			+ "Selected: %s | [LMB] Break  [RMB] Place  [1-5/Scroll] Block  [Esc] Cursor" % block_name
+			+ "Selected: %s | [LMB] Break  [RMB] Place  [1-5/Scroll] Block  [F6] Save  [Esc] Cursor" % block_name
 		)
 
 
-func _bind_player() -> void:
+func _bind_references() -> void:
 	_player = get_tree().get_first_node_in_group("player") as Node3D
+	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
+	if _world_manager != null:
+		_world_manager.world_saved.connect(_on_world_saved)
+
 	if _player != null:
 		_interactor = _player.get_node_or_null("BlockInteractor") as BlockInteractor
 		if _interactor != null:
 			_interactor.hotbar_slot_changed.connect(_on_hotbar_slot_changed)
 			_on_hotbar_slot_changed(_interactor.selected_slot, _interactor.get_selected_block_id())
+
+
+func _on_world_saved(_saved_chunk_count: int) -> void:
+	_save_toast_timer = 2.5
 
 
 func _build_crosshair() -> void:

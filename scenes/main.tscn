@@ -37,7 +37,7 @@ directional_shadow_max_distance = 120.0
 
 [node name="WorldManager" type="Node3D" parent="."]
 script = ExtResource("2_world_manager")
-render_distance = 3
+render_distance = 5
 player_path = NodePath("../Player")
 
 [node name="MobSpawner" type="Node3D" parent="."]
