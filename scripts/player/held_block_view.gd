@@ -1,7 +1,10 @@
 class_name HeldBlockView
 extends Node3D
-## Renders a 3D miniature block or a 3D Voxel Pickaxe in the player's right hand (first-person viewmodel)
-## with walk bobbing, slot-switch equip dip, and block break/place swing animations.
+## Renders the player's first-person right-hand viewmodel:
+## - Empty Right Arm/Hand when slot is empty (punching trees!)
+## - 3D Voxel Pickaxe, 3D Axe, or 3D Shovel when a tool is equipped
+## - 3D Textured Block Cube when holding a placeable block
+## - 3D Ingot/Stick/Resource item when holding crafting materials.
 
 const CUBE_SIZE: float = 0.26
 const BASE_POS := Vector3(0.44, -0.34, -0.56)
@@ -10,14 +13,19 @@ const BASE_ROT := Vector3(deg_to_rad(12.0), deg_to_rad(-38.0), deg_to_rad(4.0))
 var _player: PlayerController = null
 var _interactor: BlockInteractor = null
 var _mesh_instance: MeshInstance3D = null
+var _hand_root: Node3D = null
 var _pickaxe_root: Node3D = null
-var _pickaxe_head_mat: StandardMaterial3D = null
+var _axe_root: Node3D = null
+var _shovel_root: Node3D = null
+var _item_bar_mesh: MeshInstance3D = null
+var _tool_head_mat: StandardMaterial3D = null
+var _item_bar_mat: StandardMaterial3D = null
 var _viewmodel_material: StandardMaterial3D = null
 
 var _bob_time: float = 0.0
 var _swing_progress: float = 0.0
 var _equip_dip: float = 0.0
-var _current_item_id: int = InventoryManager.ItemId.WOOD_PICKAXE
+var _current_item_id: int = -1
 
 
 func _ready() -> void:
@@ -34,8 +42,8 @@ func _ready() -> void:
 	_mesh_instance.material_override = _viewmodel_material
 	add_child(_mesh_instance)
 
-	_build_pickaxe_model()
-	_update_held_visual(_current_item_id)
+	_build_all_viewmodels()
+	_update_held_visual(0)
 	call_deferred("_bind_player")
 
 
@@ -49,8 +57,7 @@ func _bind_player() -> void:
 		_interactor.block_broken.connect(_on_action_swing)
 		_interactor.block_placed.connect(_on_action_swing)
 		_interactor.mob_interacted.connect(func(_is_hit: bool, _variant: int) -> void: _swing_progress = 1.0)
-		_current_item_id = _interactor.get_selected_item_id()
-		_update_held_visual(_current_item_id)
+		_update_held_visual(_interactor.get_selected_item_id())
 
 
 func _process(delta: float) -> void:
@@ -96,62 +103,115 @@ func _on_action_swing(_world_pos: Vector3i, _block_id: int) -> void:
 
 
 func _update_held_visual(item_id: int) -> void:
-	if InventoryManager.is_pickaxe(item_id):
-		_mesh_instance.visible = false
-		_pickaxe_root.visible = true
-		if _pickaxe_head_mat != null:
-			_pickaxe_head_mat.albedo_color = InventoryManager.get_item_color(item_id)
-	else:
-		_pickaxe_root.visible = false
+	_mesh_instance.visible = false
+	_hand_root.visible = false
+	_pickaxe_root.visible = false
+	_axe_root.visible = false
+	_shovel_root.visible = false
+	_item_bar_mesh.visible = false
+
+	if item_id <= 0:
+		_hand_root.visible = true
+		return
+
+	var tool_cat: int = InventoryManager.get_tool_category(item_id)
+	if tool_cat != InventoryManager.ToolCategory.NONE:
+		_tool_head_mat.albedo_color = InventoryManager.get_item_color(item_id)
+		match tool_cat:
+			InventoryManager.ToolCategory.PICKAXE:
+				_pickaxe_root.visible = true
+			InventoryManager.ToolCategory.AXE:
+				_axe_root.visible = true
+			InventoryManager.ToolCategory.SHOVEL:
+				_shovel_root.visible = true
+		return
+
+	if InventoryManager.is_placeable_block(item_id):
 		_mesh_instance.visible = true
 		_rebuild_held_cube_mesh(item_id)
+		return
+
+	# Non-block resource item (Stick, Coal, Raw Iron, Ingot, Diamond)
+	_item_bar_mat.albedo_color = InventoryManager.get_item_color(item_id)
+	_item_bar_mesh.visible = true
 
 
-func _build_pickaxe_model() -> void:
-	_pickaxe_root = Node3D.new()
-	_pickaxe_root.name = "PickaxeModel"
-	_pickaxe_root.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), deg_to_rad(-10.0))
-	add_child(_pickaxe_root)
-
+func _build_all_viewmodels() -> void:
 	var handle_mat := StandardMaterial3D.new()
 	handle_mat.albedo_color = Color(0.55, 0.38, 0.20)
 	handle_mat.no_depth_test = true
 	handle_mat.render_priority = 10
 
-	_pickaxe_head_mat = StandardMaterial3D.new()
-	_pickaxe_head_mat.albedo_color = Color(0.68, 0.50, 0.28)
-	_pickaxe_head_mat.no_depth_test = true
-	_pickaxe_head_mat.render_priority = 10
+	_tool_head_mat = StandardMaterial3D.new()
+	_tool_head_mat.albedo_color = Color(0.68, 0.50, 0.28)
+	_tool_head_mat.no_depth_test = true
+	_tool_head_mat.render_priority = 10
 
-	# Wooden Shaft
-	var shaft := MeshInstance3D.new()
-	var shaft_box := BoxMesh.new()
-	shaft_box.size = Vector3(0.045, 0.36, 0.045)
-	shaft_box.material = handle_mat
-	shaft.mesh = shaft_box
-	shaft.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_pickaxe_root.add_child(shaft)
+	# 1. Empty Right Arm/Hand (Classic Minecraft blocky arm)
+	_hand_root = Node3D.new()
+	_hand_root.name = "RightArmModel"
+	_hand_root.rotation = Vector3(deg_to_rad(52.0), deg_to_rad(18.0), deg_to_rad(-12.0))
+	add_child(_hand_root)
 
-	# Curved Pickaxe Head Crossbar
-	var head_bar := MeshInstance3D.new()
-	var head_box := BoxMesh.new()
-	head_box.size = Vector3(0.28, 0.065, 0.06)
-	head_box.material = _pickaxe_head_mat
-	head_bar.mesh = head_box
-	head_bar.position = Vector3(0.0, 0.14, 0.0)
-	head_bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_pickaxe_root.add_child(head_bar)
+	var skin_mat := StandardMaterial3D.new()
+	skin_mat.albedo_color = Color(0.88, 0.68, 0.54)
+	skin_mat.no_depth_test = true
+	skin_mat.render_priority = 10
 
-	# Left & Right Pick Tips
+	var sleeve_mat := StandardMaterial3D.new()
+	sleeve_mat.albedo_color = Color(0.22, 0.56, 0.78)
+	sleeve_mat.no_depth_test = true
+	sleeve_mat.render_priority = 10
+
+	var forearm := _make_part(Vector3(0.13, 0.26, 0.13), skin_mat, Vector3(0.0, 0.04, 0.0))
+	var sleeve := _make_part(Vector3(0.14, 0.16, 0.14), sleeve_mat, Vector3(0.0, -0.14, 0.0))
+	_hand_root.add_child(forearm)
+	_hand_root.add_child(sleeve)
+
+	# 2. Pickaxe Viewmodel
+	_pickaxe_root = Node3D.new()
+	_pickaxe_root.name = "PickaxeModel"
+	_pickaxe_root.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), deg_to_rad(-10.0))
+	add_child(_pickaxe_root)
+	_pickaxe_root.add_child(_make_part(Vector3(0.045, 0.36, 0.045), handle_mat, Vector3.ZERO))
+	_pickaxe_root.add_child(_make_part(Vector3(0.28, 0.065, 0.06), _tool_head_mat, Vector3(0.0, 0.14, 0.0)))
 	for side in [-1.0, 1.0]:
-		var tip := MeshInstance3D.new()
-		var tip_box := BoxMesh.new()
-		tip_box.size = Vector3(0.055, 0.075, 0.055)
-		tip_box.material = _pickaxe_head_mat
-		tip.mesh = tip_box
-		tip.position = Vector3(side * 0.12, 0.10, 0.0)
-		tip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_pickaxe_root.add_child(tip)
+		_pickaxe_root.add_child(_make_part(Vector3(0.055, 0.075, 0.055), _tool_head_mat, Vector3(side * 0.12, 0.10, 0.0)))
+
+	# 3. Axe Viewmodel
+	_axe_root = Node3D.new()
+	_axe_root.name = "AxeModel"
+	_axe_root.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), deg_to_rad(-10.0))
+	add_child(_axe_root)
+	_axe_root.add_child(_make_part(Vector3(0.045, 0.36, 0.045), handle_mat, Vector3.ZERO))
+	_axe_root.add_child(_make_part(Vector3(0.16, 0.14, 0.055), _tool_head_mat, Vector3(-0.06, 0.11, 0.0)))
+	_axe_root.add_child(_make_part(Vector3(0.06, 0.18, 0.045), _tool_head_mat, Vector3(-0.13, 0.09, 0.0)))
+
+	# 4. Shovel Viewmodel
+	_shovel_root = Node3D.new()
+	_shovel_root.name = "ShovelModel"
+	_shovel_root.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), deg_to_rad(-10.0))
+	add_child(_shovel_root)
+	_shovel_root.add_child(_make_part(Vector3(0.045, 0.34, 0.045), handle_mat, Vector3.ZERO))
+	_shovel_root.add_child(_make_part(Vector3(0.13, 0.15, 0.04), _tool_head_mat, Vector3(0.0, 0.18, 0.0)))
+
+	# 5. Held Resource Item (Ingot / Coal / Stick / Diamond)
+	_item_bar_mat = StandardMaterial3D.new()
+	_item_bar_mat.no_depth_test = true
+	_item_bar_mat.render_priority = 10
+	_item_bar_mesh = _make_part(Vector3(0.16, 0.16, 0.08), _item_bar_mat, Vector3.ZERO)
+	add_child(_item_bar_mesh)
+
+
+func _make_part(size: Vector3, mat: Material, pos: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = size
+	box.material = mat
+	mi.mesh = box
+	mi.position = pos
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
 
 
 func _rebuild_held_cube_mesh(block_id: int) -> void:

@@ -1,28 +1,16 @@
 class_name BlockInteractor
 extends Node3D
-## Handles raycast block targeting, progressive mining with Pickaxe speed multipliers,
-## block placement, interactive Crafting Table / Furnace stations, and hotbar slots.
+## Handles raycast block targeting, authentic Minecraft tool-tier mining mechanics,
+## 9-slot hotbar selection (keys 1-9), block placement from inventory stacks,
+## and opening the Player 2x2 Inventory (E), 3x3 Crafting Table, or Furnace Oven.
 
 signal hotbar_slot_changed(slot_index: int, item_id: int)
 signal block_broken(world_pos: Vector3i, broken_block_id: int)
 signal block_placed(world_pos: Vector3i, placed_block_id: int)
 signal mob_interacted(is_hit: bool, mob_variant: int)
-signal mining_progress_changed(progress: float, target_name: String)
-signal station_opened(station_block_id: int)
+signal mining_progress_changed(progress: float, target_name: String, can_harvest: bool)
+signal station_opened(station_block_id: int) # 0 = Player 2x2 Inventory, 16 = 3x3 Crafting Table, 17 = Furnace Oven
 signal loot_notification(message: String)
-
-var hotbar_items: Array[int] = [
-	InventoryManager.ItemId.WOOD_PICKAXE,
-	BlockRegistry.BlockId.CRAFTING_TABLE,
-	BlockRegistry.BlockId.FURNACE,
-	BlockRegistry.BlockId.COBBLESTONE,
-	BlockRegistry.BlockId.WOOD_LOG,
-	BlockRegistry.BlockId.WOOD_PLANKS,
-	BlockRegistry.BlockId.GRASS,
-	BlockRegistry.BlockId.SAND,
-	BlockRegistry.BlockId.SNOW,
-	BlockRegistry.BlockId.GLOWSTONE,
-]
 
 @export var raycast_path: NodePath = NodePath("../Head/Camera3D/InteractionRay")
 @export var player_body_path: NodePath = NodePath("..")
@@ -55,12 +43,11 @@ func _resolve_dependencies() -> void:
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
 	_inventory = get_tree().get_first_node_in_group("inventory_manager") as InventoryManager
 	if _inventory != null:
-		_inventory.tool_upgraded.connect(_on_tool_upgraded)
+		_inventory.inventory_updated.connect(_on_inventory_updated)
 	hotbar_slot_changed.emit(selected_slot, get_selected_item_id())
 
 
-func _on_tool_upgraded(new_tool_id: int) -> void:
-	hotbar_items[0] = new_tool_id
+func _on_inventory_updated() -> void:
 	hotbar_slot_changed.emit(selected_slot, get_selected_item_id())
 
 
@@ -70,16 +57,16 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Open Crafting / Inventory screen with E
+	# Press E to open Player Inventory (with 2x2 Crafting Grid)
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_E:
-			station_opened.emit(BlockRegistry.BlockId.CRAFTING_TABLE)
+			station_opened.emit(0)
 			return
 
 	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		return
 
-	# Hotbar number keys 1..9, 0
+	# Hotbar number keys 1..9 (Slots 0..8)
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_1:
@@ -100,8 +87,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				select_slot(7)
 			KEY_9:
 				select_slot(8)
-			KEY_0:
-				select_slot(9)
 
 	# Mouse buttons & scroll wheel
 	if event is InputEventMouseButton and event.pressed:
@@ -111,20 +96,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			MOUSE_BUTTON_RIGHT:
 				_try_interact_or_place_block()
 			MOUSE_BUTTON_WHEEL_UP:
-				select_slot(posmod(selected_slot - 1, hotbar_items.size()))
+				select_slot(posmod(selected_slot - 1, InventoryManager.HOTBAR_SIZE))
 			MOUSE_BUTTON_WHEEL_DOWN:
-				select_slot(posmod(selected_slot + 1, hotbar_items.size()))
+				select_slot(posmod(selected_slot + 1, InventoryManager.HOTBAR_SIZE))
 
 
 func select_slot(slot_index: int) -> void:
-	if slot_index < 0 or slot_index >= hotbar_items.size():
+	if slot_index < 0 or slot_index >= InventoryManager.HOTBAR_SIZE:
 		return
 	selected_slot = slot_index
 	hotbar_slot_changed.emit(selected_slot, get_selected_item_id())
 
 
 func get_selected_item_id() -> int:
-	return hotbar_items[selected_slot]
+	if _inventory == null:
+		return 0
+	var slot_data: Dictionary = _inventory.get_hotbar_slot(selected_slot)
+	return int(slot_data.get("id", 0))
 
 
 func get_selected_block_id() -> int:
@@ -189,6 +177,9 @@ func _on_left_click_pressed() -> void:
 		mob_interacted.emit(true, int(_targeted_mob.variant))
 		return
 
+	# Swing hand immediately on click
+	mob_interacted.emit(false, 0)
+
 	# In Creative Fly mode, left click breaks immediately
 	if _player_body != null and _player_body.is_flying:
 		_complete_break_block()
@@ -209,9 +200,11 @@ func _process_continuous_mining(delta: float) -> void:
 		_reset_mining_progress()
 		return
 
+	var equipped_id: int = get_selected_item_id()
+	var can_harvest: bool = InventoryManager.can_harvest_block(equipped_id, target_id)
 	var hardness: float = BlockRegistry.get_block_hardness(target_id)
-	var speed_mult: float = InventoryManager.get_pickaxe_speed_multiplier(get_selected_item_id(), target_id)
-	var break_duration: float = maxf(0.12, hardness / speed_mult)
+	var speed_mult: float = InventoryManager.get_mining_speed_multiplier(equipped_id, target_id)
+	var break_duration: float = maxf(0.10, hardness / speed_mult)
 
 	mining_progress += delta / break_duration
 	_swing_repeat_timer -= delta
@@ -220,9 +213,14 @@ func _process_continuous_mining(delta: float) -> void:
 		mob_interacted.emit(false, 0)
 
 	if _selection_mat != null:
-		_selection_mat.albedo_color = Color(0.08, 0.08, 0.08).lerp(Color(1.0, 0.78, 0.15), clampf(mining_progress, 0.0, 1.0))
+		var pulse_col: Color = Color(1.0, 0.78, 0.15) if can_harvest else Color(0.95, 0.22, 0.20)
+		_selection_mat.albedo_color = Color(0.08, 0.08, 0.08).lerp(pulse_col, clampf(mining_progress, 0.0, 1.0))
 
-	mining_progress_changed.emit(clampf(mining_progress, 0.0, 1.0), BlockRegistry.get_block_name(target_id))
+	mining_progress_changed.emit(
+		clampf(mining_progress, 0.0, 1.0),
+		BlockRegistry.get_block_name(target_id),
+		can_harvest
+	)
 
 	if mining_progress >= 1.0:
 		_complete_break_block()
@@ -234,7 +232,7 @@ func _reset_mining_progress() -> void:
 		mining_progress = 0.0
 		if _selection_mat != null:
 			_selection_mat.albedo_color = Color(0.08, 0.08, 0.08, 1.0)
-		mining_progress_changed.emit(0.0, "")
+		mining_progress_changed.emit(0.0, "", true)
 
 
 func _complete_break_block() -> void:
@@ -244,9 +242,12 @@ func _complete_break_block() -> void:
 	if previous_id == BlockRegistry.BlockId.AIR:
 		return
 	var broken_pos: Vector3i = target_block_pos
+	var equipped_id: int = get_selected_item_id()
 	if _world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.AIR):
 		if _inventory != null:
-			var drop_msg: String = _inventory.award_block_drop(previous_id)
+			# In Creative Fly mode, always award drop regardless of tool
+			var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if (_player_body != null and _player_body.is_flying) else equipped_id
+			var drop_msg: String = _inventory.award_block_drop(previous_id, effective_tool)
 			loot_notification.emit(drop_msg)
 		block_broken.emit(broken_pos, previous_id)
 		_update_raycast_target()
@@ -262,22 +263,21 @@ func _try_interact_or_place_block() -> void:
 	if not has_target or _world_manager == null:
 		return
 
-	# Check if right-clicking a Crafting Table or Furnace (Oven) in the world
+	# Right-clicking a placed Crafting Table (16) opens the 3x3 Crafting Table UI;
+	# Right-clicking a placed Furnace (17) opens the Furnace Oven UI!
 	var targeted_id: int = _world_manager.get_block_world(target_block_pos)
 	if BlockRegistry.is_interactive_station(targeted_id):
 		station_opened.emit(targeted_id)
 		return
 
 	var selected_item: int = get_selected_item_id()
-	# Pickaxe tools cannot be placed as blocks
-	if InventoryManager.is_pickaxe(selected_item):
+	if not InventoryManager.is_placeable_block(selected_item):
 		return
 
-	# In survival mode, check if the player has at least 1 of this block in inventory
 	var is_creative: bool = _player_body != null and _player_body.is_flying
 	if not is_creative and _inventory != null:
-		if _inventory.get_count(selected_item) <= 0:
-			loot_notification.emit("Out of %s!" % BlockRegistry.get_block_name(selected_item))
+		var slot_data: Dictionary = _inventory.get_hotbar_slot(selected_slot)
+		if int(slot_data.get("count", 0)) <= 0:
 			return
 
 	# Prevent placing a solid block directly intersecting the player's body capsule
@@ -294,7 +294,7 @@ func _try_interact_or_place_block() -> void:
 	var placed_pos: Vector3i = place_block_pos
 	if _world_manager.set_block_world(placed_pos, selected_item):
 		if not is_creative and _inventory != null:
-			_inventory.consume_item(selected_item, 1)
+			_inventory.consume_from_hotbar_slot(selected_slot, 1)
 		block_placed.emit(placed_pos, selected_item)
 		_update_raycast_target()
 
