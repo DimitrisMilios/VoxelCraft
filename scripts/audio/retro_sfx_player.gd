@@ -114,6 +114,18 @@ func _ready() -> void:
 	call_deferred("_bind_signals")
 
 
+func _exit_tree() -> void:
+	for p in _players_2d:
+		if is_instance_valid(p):
+			p.stop()
+			p.stream = null
+	for p in _players_3d:
+		if is_instance_valid(p):
+			p.stop()
+			p.stream = null
+	_stream_cache.clear()
+
+
 func _bind_signals() -> void:
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
 	if _world_manager != null:
@@ -138,12 +150,17 @@ func _bind_signals() -> void:
 
 ## Plays a non-positional stereo sound effect.
 func play_sfx(group_name: String, volume_db: float = 0.0, pitch_scale: float = 1.0) -> void:
+	if not is_inside_tree():
+		return
 	var stream: AudioStream = _get_random_stream(group_name)
 	if stream == null or _players_2d.is_empty():
 		return
 
 	var player: AudioStreamPlayer = _players_2d[_next_2d_idx]
 	_next_2d_idx = (_next_2d_idx + 1) % _players_2d.size()
+
+	if not player.is_inside_tree():
+		return
 
 	player.stream = stream
 	player.volume_db = volume_db
@@ -153,12 +170,17 @@ func play_sfx(group_name: String, volume_db: float = 0.0, pitch_scale: float = 1
 
 ## Plays a 3D positioned sound effect in the world.
 func play_sfx_at_pos(group_name: String, world_pos: Vector3, volume_db: float = 0.0, pitch_scale: float = 1.0, max_dist: float = 42.0) -> void:
+	if not is_inside_tree():
+		return
 	var stream: AudioStream = _get_random_stream(group_name)
 	if stream == null or _players_3d.is_empty():
 		return
 
 	var player: AudioStreamPlayer3D = _players_3d[_next_3d_idx]
 	_next_3d_idx = (_next_3d_idx + 1) % _players_3d.size()
+
+	if not player.is_inside_tree():
+		return
 
 	player.stream = stream
 	player.global_position = world_pos
@@ -319,7 +341,7 @@ func _on_mining_progress_changed(progress: float, _target_name: String, _can_har
 	if stage != _last_mining_stage and stage > 0:
 		_last_mining_stage = stage
 		if _interactor != null and _world_manager != null:
-			var target_pos: Vector3i = _interactor.get_targeted_block_pos()
+			var target_pos: Vector3i = _interactor.get_targeted_block_pos() if _interactor.has_method("get_targeted_block_pos") else _interactor.target_block_pos
 			var target_id: int = _world_manager.get_block_world(target_pos)
 			var dig_sfx: String = get_dig_sfx_for_block(target_id)
 			play_sfx_at_pos(dig_sfx, Vector3(target_pos) + Vector3(0.5, 0.5, 0.5), -5.0)

@@ -125,6 +125,10 @@ func get_selected_block_id() -> int:
 	return get_selected_item_id()
 
 
+func get_targeted_block_pos() -> Vector3i:
+	return target_block_pos
+
+
 func _update_raycast_target() -> void:
 	if _raycast == null:
 		return

@@ -751,10 +751,10 @@ func save_all_modified_chunks() -> int:
 func save_complete_world() -> int:
 	var count: int = save_all_modified_chunks()
 	var inv: Node = get_node_or_null("../InventoryManager")
-	if inv == null:
+	if inv == null and get_tree() != null:
 		inv = get_tree().get_first_node_in_group("inventory_manager")
 	var dn: Node = get_node_or_null("../DayNightCycle")
-	if dn == null:
+	if dn == null and get_tree() != null:
 		dn = get_tree().get_first_node_in_group("day_night_cycle")
 	GameSession.save_world_state(_player, inv, dn, self)
 	world_saved.emit(count)

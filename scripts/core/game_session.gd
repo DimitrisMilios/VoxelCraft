@@ -176,11 +176,11 @@ static func save_world_state(
 	# 1. Player State & Bed Respawn Position
 	var player_dict: Dictionary = {}
 	if player != null and is_instance_valid(player):
-		var p_pos: Vector3 = player.global_position
+		var p_pos: Vector3 = player.global_position if (player is Node3D and player.is_inside_tree()) else (player.position if player is Node3D else Vector3.ZERO)
 		player_dict["has_saved_pos"] = true
 		player_dict["pos"] = [p_pos.x, p_pos.y, p_pos.z]
 		var head: Node3D = player.get_node_or_null("Head") as Node3D
-		player_dict["yaw"] = player.rotation.y
+		player_dict["yaw"] = player.rotation.y if player is Node3D else 0.0
 		player_dict["pitch"] = head.rotation.x if head != null else 0.0
 		player_dict["health"] = int(player.get("current_health"))
 		player_dict["hunger"] = int(player.get("current_hunger"))
