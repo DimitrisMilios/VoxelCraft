@@ -1,9 +1,12 @@
 class_name WorldManager
 extends Node3D
 ## Manages endless procedural chunk generation, WorkerThreadPool background streaming,
-## cross-chunk border face culling, and ChunkStorage persistence.
+## cross-chunk border face culling, cellular-automata water flow, and ChunkStorage persistence.
 
 signal world_saved(saved_chunk_count: int)
+
+const WATER_TICK_INTERVAL: float = 0.16
+const MAX_WATER_SPREAD_PER_TICK: int = 16
 
 @export_group("World Generation")
 @export var world_seed: int = 2026
@@ -28,6 +31,11 @@ var _in_flight_coords: Dictionary = {}
 ## Completed background chunk builds waiting to be attached on the main thread.
 var _completed_builds: Array[Dictionary] = []
 var _completed_mutex: Mutex = Mutex.new()
+
+## Cellular-automata water flow queue (`Vector3i` world block coordinates).
+var _water_flow_queue: Array[Vector3i] = []
+var _water_flow_pending: Dictionary = {}
+var _water_tick_timer: float = 0.0
 
 var _storage: ChunkStorage = null
 var _surface_noise: FastNoiseLite = FastNoiseLite.new()
@@ -76,7 +84,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			world_saved.emit(count)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _player != null:
 		var current_chunk: Vector2i = world_to_chunk_coords(_player.global_position)
 		if current_chunk != _last_player_chunk:
@@ -85,6 +93,18 @@ func _process(_delta: float) -> void:
 
 	_dispatch_background_tasks()
 	_apply_completed_builds()
+	_process_water_flow(delta)
+
+
+## Dynamically updates chunk render distance at runtime (e.g. from the Pause Menu).
+func set_render_distance(new_distance: int) -> void:
+	var clamped: int = clampi(new_distance, 2, 8)
+	if clamped == render_distance:
+		return
+	render_distance = clamped
+	if _player != null:
+		_last_player_chunk = world_to_chunk_coords(_player.global_position)
+		_update_chunk_targets(_last_player_chunk)
 
 
 func _configure_noise() -> void:
@@ -102,7 +122,6 @@ func _configure_noise() -> void:
 
 
 func _update_chunk_targets(center_chunk: Vector2i) -> void:
-	# 1. Unload distant chunks beyond render_distance + 1, saving dirty chunks first
 	var unload_radius: int = render_distance + 1
 	var chunks_to_remove: Array[Vector2i] = []
 	for coord_variant in _active_chunks.keys():
@@ -127,7 +146,6 @@ func _update_chunk_targets(center_chunk: Vector2i) -> void:
 				)
 			chunk.queue_free()
 
-	# 2. Enqueue missing chunks within render_distance sorted by distance to player
 	_load_queue.clear()
 	for dx in range(-render_distance, render_distance + 1):
 		for dz in range(-render_distance, render_distance + 1):
@@ -193,7 +211,6 @@ func _apply_completed_builds() -> void:
 		var mesh_data: Dictionary = item["mesh_data"]
 		_in_flight_coords.erase(coord)
 
-		# Discard if already loaded or out of unload range
 		if _active_chunks.has(coord):
 			chunk.free()
 			continue
@@ -240,7 +257,6 @@ func _spawn_chunk_immediate(coord: Vector2i) -> VoxelChunk:
 
 
 ## Thread-safe neighbor query used during mesh generation for cross-chunk face culling.
-## Checks loaded chunk buffers first; falls back to deterministic terrain noise if neighbor isn't loaded yet.
 func get_block_or_procedural_world(world_block_pos: Vector3i) -> int:
 	if world_block_pos.y < 0:
 		return BlockRegistry.BlockId.STONE
@@ -273,7 +289,6 @@ func get_block_or_procedural_world(world_block_pos: Vector3i) -> int:
 	)
 
 
-## Converts a 3D world position into 2D chunk grid coordinates.
 static func world_to_chunk_coords(world_pos: Vector3) -> Vector2i:
 	return Vector2i(
 		floori(world_pos.x / float(VoxelChunk.CHUNK_SIZE_X)),
@@ -281,7 +296,6 @@ static func world_to_chunk_coords(world_pos: Vector3) -> Vector2i:
 	)
 
 
-## Returns the block ID at integer world coordinates `world_block_pos`.
 func get_block_world(world_block_pos: Vector3i) -> int:
 	if world_block_pos.y < 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
 		return BlockRegistry.BlockId.AIR
@@ -298,7 +312,6 @@ func get_block_world(world_block_pos: Vector3i) -> int:
 	return chunk.get_block_local(lx, world_block_pos.y, lz)
 
 
-## Updates a block at integer world coordinates `world_block_pos`, records persistence, and remeshes neighbors.
 func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
 	if world_block_pos.y <= 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
 		return false
@@ -338,10 +351,75 @@ func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
 	elif lz == VoxelChunk.CHUNK_SIZE_Z - 1 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
 		(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 
+	# Trigger cellular-automata water flow checks when breaking a block or placing water
+	if block_id == BlockRegistry.BlockId.AIR:
+		_enqueue_water_check(world_block_pos)
+	elif block_id == BlockRegistry.BlockId.WATER:
+		_enqueue_water_neighbors(world_block_pos)
+
 	return true
 
 
-## Flushes all modified chunks in memory and active dirty chunks to disk.
+func _enqueue_water_check(pos: Vector3i) -> void:
+	if pos.y <= 0 or pos.y > VoxelChunk.WATER_LEVEL:
+		return
+	if _water_flow_pending.has(pos):
+		return
+	if _has_water_source_neighbor(pos):
+		_water_flow_pending[pos] = true
+		_water_flow_queue.append(pos)
+
+
+func _enqueue_water_neighbors(center: Vector3i) -> void:
+	var candidates: Array[Vector3i] = [
+		center + Vector3i(0, -1, 0),
+		center + Vector3i(1, 0, 0),
+		center + Vector3i(-1, 0, 0),
+		center + Vector3i(0, 0, 1),
+		center + Vector3i(0, 0, -1),
+	]
+	for next_pos in candidates:
+		if get_block_world(next_pos) == BlockRegistry.BlockId.AIR:
+			_enqueue_water_check(next_pos)
+
+
+func _has_water_source_neighbor(pos: Vector3i) -> bool:
+	if get_block_world(pos + Vector3i(0, 1, 0)) == BlockRegistry.BlockId.WATER:
+		return true
+	if pos.y <= VoxelChunk.WATER_LEVEL:
+		if get_block_world(pos + Vector3i(1, 0, 0)) == BlockRegistry.BlockId.WATER:
+			return true
+		if get_block_world(pos + Vector3i(-1, 0, 0)) == BlockRegistry.BlockId.WATER:
+			return true
+		if get_block_world(pos + Vector3i(0, 0, 1)) == BlockRegistry.BlockId.WATER:
+			return true
+		if get_block_world(pos + Vector3i(0, 0, -1)) == BlockRegistry.BlockId.WATER:
+			return true
+	return false
+
+
+func _process_water_flow(delta: float) -> void:
+	if _water_flow_queue.is_empty():
+		return
+	_water_tick_timer += delta
+	if _water_tick_timer < WATER_TICK_INTERVAL:
+		return
+	_water_tick_timer = 0.0
+
+	var spread_count: int = 0
+	while not _water_flow_queue.is_empty() and spread_count < MAX_WATER_SPREAD_PER_TICK:
+		var pos: Vector3i = _water_flow_queue.pop_front()
+		_water_flow_pending.erase(pos)
+
+		if get_block_world(pos) != BlockRegistry.BlockId.AIR:
+			continue
+		if not _has_water_source_neighbor(pos):
+			continue
+
+		if set_block_world(pos, BlockRegistry.BlockId.WATER):
+			spread_count += 1
+
+
 func save_all_modified_chunks() -> int:
 	if _storage == null:
 		return 0
@@ -366,10 +444,9 @@ func get_modified_chunk_count() -> int:
 	return _storage.get_modified_chunk_count() if _storage != null else 0
 
 
-## Returns the highest non-air voxel Y coordinate at `(wx, wz)`.
 func get_surface_height_at(wx: int, wz: int) -> int:
 	for y in range(VoxelChunk.CHUNK_SIZE_Y - 1, 0, -1):
 		var id: int = get_block_world(Vector3i(wx, y, wz))
-		if id != BlockRegistry.BlockId.AIR and id != BlockRegistry.BlockId.LEAVES:
+		if id != BlockRegistry.BlockId.AIR and id != BlockRegistry.BlockId.LEAVES and id != BlockRegistry.BlockId.WATER:
 			return y
 	return VoxelChunk.sample_surface_height(_surface_noise, wx, wz)
