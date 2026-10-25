@@ -49,7 +49,7 @@ static func get_shared_water_material() -> StandardMaterial3D:
 	material.vertex_color_use_as_albedo = true
 	material.roughness = 0.08
 	material.metallic = 0.12
-	material.specular = 0.85
+	material.metallic_specular = 0.85
 	_cached_water_material = material
 	return _cached_water_material
 

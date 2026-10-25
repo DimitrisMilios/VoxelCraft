@@ -820,7 +820,7 @@ func _refresh_all_slot_visuals() -> void:
 		_hotbar_swatches[i].color = InventoryManager.get_item_color(id)
 		if id == 0 or cnt <= 0:
 			_hotbar_labels[i].text = "%d:---" % [i + 1]
-		elif InventoryManager.is_tool(id):
+		elif InventoryManager.is_tool_item(id):
 			_hotbar_labels[i].text = "%d:%s" % [i + 1, InventoryManager.get_item_short_label(id)]
 		else:
 			_hotbar_labels[i].text = "%d:%s\nx%d" % [i + 1, InventoryManager.get_item_short_label(id), cnt]
@@ -864,7 +864,7 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 	swatch.color = InventoryManager.get_item_color(id)
 	if id == 0 or cnt <= 0:
 		label.text = ""
-	elif InventoryManager.is_tool(id):
+	elif InventoryManager.is_tool_item(id):
 		label.text = InventoryManager.get_item_short_label(id)
 	else:
 		label.text = "%s\nx%d" % [InventoryManager.get_item_short_label(id), cnt]

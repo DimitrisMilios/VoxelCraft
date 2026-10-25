@@ -116,7 +116,7 @@ func return_crafting_grid_to_inventory() -> void:
 # TOOL & ITEM CLASSIFICATION HELPERS
 # ============================================================================
 
-static func is_tool(item_id: int) -> bool:
+static func is_tool_item(item_id: int) -> bool:
 	return item_id >= ItemId.WOOD_PICKAXE and item_id <= ItemId.DIAMOND_SHOVEL
 
 
@@ -354,7 +354,7 @@ func add_item(item_id: int, amount: int = 1) -> bool:
 	if item_id <= 0 or amount <= 0:
 		return false
 
-	var max_stack_for_item: int = 1 if is_tool(item_id) else MAX_STACK
+	var max_stack_for_item: int = 1 if is_tool_item(item_id) else MAX_STACK
 	var remaining: int = amount
 
 	# 1. Try merging into existing non-full stacks
@@ -474,7 +474,7 @@ func click_craft_output_slot() -> void:
 
 	var cur_id: int = int(cursor_stack.get("id", 0))
 	var cur_count: int = int(cursor_stack.get("count", 0))
-	var max_stk: int = 1 if is_tool(out_id) else MAX_STACK
+	var max_stk: int = 1 if is_tool_item(out_id) else MAX_STACK
 
 	if cur_id != 0 and (cur_id != out_id or cur_count + out_count > max_stk):
 		return
@@ -534,7 +534,7 @@ func _interact_slot_with_cursor(target_slot: Dictionary, mouse_button: int) -> D
 			var placed := {"id": cur_id, "count": cur_cnt}
 			cursor_stack = {"id": 0, "count": 0}
 			return placed
-		elif slot_id == cur_id and not is_tool(slot_id):
+		elif slot_id == cur_id and not is_tool_item(slot_id):
 			# Merge stacks up to MAX_STACK
 			var space: int = MAX_STACK - slot_cnt
 			var move_cnt: int = mini(cur_cnt, space)
@@ -566,7 +566,7 @@ func _interact_slot_with_cursor(target_slot: Dictionary, mouse_button: int) -> D
 				if int(cursor_stack["count"]) <= 0:
 					cursor_stack = {"id": 0, "count": 0}
 				return {"id": cur_id, "count": 1}
-			elif slot_id == cur_id and not is_tool(slot_id) and slot_cnt < MAX_STACK:
+			elif slot_id == cur_id and not is_tool_item(slot_id) and slot_cnt < MAX_STACK:
 				cursor_stack["count"] = cur_cnt - 1
 				if int(cursor_stack["count"]) <= 0:
 					cursor_stack = {"id": 0, "count": 0}
