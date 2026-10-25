@@ -1,8 +1,9 @@
-[gd_scene load_steps=7 format=3 uid="uid://c8v0x3lmain01"]
+[gd_scene load_steps=8 format=3 uid="uid://c8v0x3lmain01"]
 
 [ext_resource type="PackedScene" uid="uid://b6v0x3lplayer" path="res://scenes/player/player.tscn" id="1_player_scene"]
 [ext_resource type="Script" path="res://scripts/world/world_manager.gd" id="2_world_manager"]
 [ext_resource type="Script" path="res://scripts/ui/voxel_hud.gd" id="3_voxel_hud"]
+[ext_resource type="Script" path="res://scripts/entities/mob_spawner.gd" id="4_mob_spawner"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_retro"]
 sky_top_color = Color(0.32, 0.58, 0.92, 1)
@@ -38,6 +39,9 @@ directional_shadow_max_distance = 120.0
 script = ExtResource("2_world_manager")
 render_distance = 3
 player_path = NodePath("../Player")
+
+[node name="MobSpawner" type="Node3D" parent="."]
+script = ExtResource("4_mob_spawner")
 
 [node name="Player" parent="." instance=ExtResource("1_player_scene")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 65, 8)
