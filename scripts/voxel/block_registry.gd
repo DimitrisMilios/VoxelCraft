@@ -1,0 +1,91 @@
+class_name BlockRegistry
+extends RefCounted
+## Central registry for VoxelCraft block IDs, properties, and texture atlas coordinates.
+
+enum BlockId {
+	AIR = 0,
+	GRASS = 1,
+	DIRT = 2,
+	STONE = 3,
+	WOOD_LOG = 4,
+	LEAVES = 5,
+}
+
+enum FaceDir {
+	TOP = 0,
+	BOTTOM = 1,
+	EAST = 2,   # +X
+	WEST = 3,   # -X
+	SOUTH = 4,  # +Z
+	NORTH = 5,  # -Z
+}
+
+## Atlas grid layout (8 tiles wide x 1 tile tall, each tile 16x16 pixels):
+## Tile 0: Grass Top
+## Tile 1: Grass Side (Dirt with grass top fringe)
+## Tile 2: Dirt
+## Tile 3: Stone
+## Tile 4: Wood Log Side (Bark)
+## Tile 5: Wood Log Top/Bottom (Rings)
+## Tile 6: Leaves
+const ATLAS_COLUMNS: int = 8
+const ATLAS_ROWS: int = 1
+const TILE_PIXEL_SIZE: int = 16
+
+
+static func is_solid(block_id: int) -> bool:
+	return block_id != BlockId.AIR
+
+
+static func get_block_name(block_id: int) -> String:
+	match block_id:
+		BlockId.AIR:
+			return "Air"
+		BlockId.GRASS:
+			return "Grass"
+		BlockId.DIRT:
+			return "Dirt"
+		BlockId.STONE:
+			return "Stone"
+		BlockId.WOOD_LOG:
+			return "Wood Log"
+		BlockId.LEAVES:
+			return "Leaves"
+		_:
+			return "Unknown"
+
+
+static func get_tile_index(block_id: int, face_dir: int) -> int:
+	match block_id:
+		BlockId.GRASS:
+			if face_dir == FaceDir.TOP:
+				return 0
+			elif face_dir == FaceDir.BOTTOM:
+				return 2
+			else:
+				return 1
+		BlockId.DIRT:
+			return 2
+		BlockId.STONE:
+			return 3
+		BlockId.WOOD_LOG:
+			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
+				return 5
+			else:
+				return 4
+		BlockId.LEAVES:
+			return 6
+		_:
+			return 3
+
+
+static func get_tile_uv_rect(block_id: int, face_dir: int) -> Rect2:
+	var tile_idx: int = get_tile_index(block_id, face_dir)
+	var u_step: float = 1.0 / float(ATLAS_COLUMNS)
+	# Small UV inset prevents texture bleeding across adjacent atlas tiles
+	var uv_margin: float = 0.0015
+	var u0: float = float(tile_idx) * u_step + uv_margin
+	var v0: float = uv_margin
+	var u_width: float = u_step - (uv_margin * 2.0)
+	var v_height: float = 1.0 - (uv_margin * 2.0)
+	return Rect2(u0, v0, u_width, v_height)
