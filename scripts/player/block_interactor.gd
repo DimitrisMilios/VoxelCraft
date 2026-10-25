@@ -15,6 +15,7 @@ const HOTBAR_BLOCKS: Array[int] = [
 	BlockRegistry.BlockId.WOOD_PLANKS,
 	BlockRegistry.BlockId.LEAVES,
 	BlockRegistry.BlockId.SAND,
+	BlockRegistry.BlockId.SNOW,
 ]
 
 @export var raycast_path: NodePath = NodePath("../Head/Camera3D/InteractionRay")
@@ -70,6 +71,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				select_slot(6)
 			KEY_8:
 				select_slot(7)
+			KEY_9:
+				select_slot(8)
 
 	# Mouse buttons & scroll wheel
 	if event is InputEventMouseButton and event.pressed:

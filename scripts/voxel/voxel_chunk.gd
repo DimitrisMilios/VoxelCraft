@@ -104,10 +104,14 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			if top_y > _highest_solid_y:
 				_highest_solid_y = top_y
 
-			# Deterministic tree placement on Grass above water level
+			# Deterministic tree placement on Grass or Alpine Snow above water level
 			if surface_y > WATER_LEVEL + 1 and lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
-				if _should_spawn_tree(wx, wz) and get_block_local(lx, surface_y, lz) == BlockRegistry.BlockId.GRASS:
-					_place_tree(lx, surface_y + 1, lz)
+				var surface_id: int = get_block_local(lx, surface_y, lz)
+				if _should_spawn_tree(wx, wz) and (surface_id == BlockRegistry.BlockId.GRASS or surface_id == BlockRegistry.BlockId.SNOW):
+					if surface_y >= SEA_LEVEL + 4:
+						_place_pine_tree(lx, surface_y + 1, lz)
+					else:
+						_place_tree(lx, surface_y + 1, lz)
 
 
 ## Deterministic heightmap helper shared with WorldManager for cross-chunk border culling.
@@ -144,6 +148,12 @@ static func sample_terrain_voxel(
 	# Low-lying basins and shorelines near/below water level generate sandy beaches
 	if surface_y <= WATER_LEVEL + 1 and ly >= surface_y - 2:
 		return BlockRegistry.BlockId.SAND
+	# High alpine mountain peaks generate snow caps over rocky stone
+	if surface_y >= SEA_LEVEL + 8:
+		if ly == surface_y:
+			return BlockRegistry.BlockId.SNOW
+		if ly >= surface_y - 2:
+			return BlockRegistry.BlockId.STONE
 	if ly == surface_y:
 		return BlockRegistry.BlockId.GRASS
 	if ly >= surface_y - 3:
@@ -179,6 +189,42 @@ func _place_tree(lx: int, base_y: int, lz: int) -> void:
 
 	if canopy_top > _highest_solid_y:
 		_highest_solid_y = canopy_top
+
+
+func _place_pine_tree(lx: int, base_y: int, lz: int) -> void:
+	var trunk_height: int = 6
+	if base_y + trunk_height + 2 >= CHUNK_SIZE_Y:
+		return
+
+	for ty in range(base_y, base_y + trunk_height):
+		_set_voxel_raw(lx, ty, lz, BlockRegistry.BlockId.WOOD_LOG)
+
+	# Conical tiered pine needles
+	var tiers: Array[Vector2i] = [
+		Vector2i(base_y + 2, 2),
+		Vector2i(base_y + 3, 1),
+		Vector2i(base_y + 4, 2),
+		Vector2i(base_y + 5, 1),
+		Vector2i(base_y + 6, 0),
+	]
+	for tier in tiers:
+		var cy: int = tier.x
+		var rad: int = tier.y
+		for cx in range(lx - rad, lx + rad + 1):
+			for cz in range(lz - rad, lz + rad + 1):
+				if cx == lx and cz == lz and cy < base_y + trunk_height:
+					continue
+				if rad == 2 and absi(cx - lx) == 2 and absi(cz - lz) == 2:
+					continue
+				if is_in_bounds(cx, cy, cz):
+					_set_voxel_raw(cx, cy, cz, BlockRegistry.BlockId.LEAVES)
+
+	# Snow cap on top of the pine tree spire
+	var spire_y: int = base_y + 7
+	if is_in_bounds(lx, spire_y, lz):
+		_set_voxel_raw(lx, spire_y, lz, BlockRegistry.BlockId.SNOW)
+	if spire_y > _highest_solid_y:
+		_highest_solid_y = spire_y
 
 
 ## Thread-safe builder for all 16 vertical sub-chunks. Can be called from WorkerThreadPool.

@@ -13,6 +13,7 @@ enum BlockId {
 	COBBLESTONE = 7,
 	WOOD_PLANKS = 8,
 	WATER = 9,
+	SNOW = 10,
 }
 
 enum FaceDir {
@@ -24,7 +25,7 @@ enum FaceDir {
 	NORTH = 5,  # -Z
 }
 
-## Atlas grid layout (10 tiles wide x 1 tile tall, each tile 16x16 pixels):
+## Atlas grid layout (11 tiles wide x 1 tile tall, each tile 16x16 pixels):
 ## Tile 0: Grass Top
 ## Tile 1: Grass Side (Dirt with grass top fringe)
 ## Tile 2: Dirt
@@ -35,7 +36,8 @@ enum FaceDir {
 ## Tile 7: Sand
 ## Tile 8: Cobblestone
 ## Tile 9: Wood Planks
-const ATLAS_COLUMNS: int = 10
+## Tile 10: Snow
+const ATLAS_COLUMNS: int = 11
 const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 16
 
@@ -72,6 +74,8 @@ static func get_block_name(block_id: int) -> String:
 			return "Planks"
 		BlockId.WATER:
 			return "Water"
+		BlockId.SNOW:
+			return "Snow"
 		_:
 			return "Unknown"
 
@@ -96,6 +100,8 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.68, 0.53, 0.31)
 		BlockId.WATER:
 			return Color(0.20, 0.52, 0.92)
+		BlockId.SNOW:
+			return Color(0.93, 0.96, 0.99)
 		_:
 			return Color.GRAY
 
@@ -126,6 +132,8 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 			return 8
 		BlockId.WOOD_PLANKS:
 			return 9
+		BlockId.SNOW:
+			return 10
 		_:
 			return 3
 

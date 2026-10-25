@@ -148,6 +148,11 @@ static func _sample_tile_pixel(
 			var seam_shade: float = -0.10 if (board_seam or vertical_joint) else 0.02
 			return _tint(plank_base, jitter * 0.6 + seam_shade)
 
+		10: # Snow (Crisp alpine snow with cool icy sparkles)
+			var snow_base := Color(0.93, 0.96, 0.99)
+			var sparkle: float = 0.04 if ((x * 3 + y * 5) % 7 == 0) else -0.02
+			return _tint(snow_base, jitter * 0.45 + sparkle)
+
 		_:
 			return _tint(stone_base, jitter)
 
