@@ -1,8 +1,9 @@
-[gd_scene load_steps=5 format=3 uid="uid://b6v0x3lplayer"]
+[gd_scene load_steps=6 format=3 uid="uid://b6v0x3lplayer"]
 
 [ext_resource type="Script" path="res://scripts/player/player_controller.gd" id="1_player_script"]
 [ext_resource type="Script" path="res://scripts/player/block_interactor.gd" id="2_interactor_script"]
 [ext_resource type="Script" path="res://scripts/player/held_block_view.gd" id="3_held_block_script"]
+[ext_resource type="Script" path="res://scripts/player/inventory_manager.gd" id="4_inventory_script"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.35
@@ -37,3 +38,6 @@ script = ExtResource("3_held_block_script")
 
 [node name="BlockInteractor" type="Node3D" parent="."]
 script = ExtResource("2_interactor_script")
+
+[node name="InventoryManager" type="Node" parent="."]
+script = ExtResource("4_inventory_script")
