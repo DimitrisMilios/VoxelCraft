@@ -272,12 +272,16 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 	var st_solid := SurfaceTool.new()
 	st_solid.begin(Mesh.PRIMITIVE_TRIANGLES)
 
+	var st_col := SurfaceTool.new()
+	st_col.begin(Mesh.PRIMITIVE_TRIANGLES)
+
 	var st_water := SurfaceTool.new()
 	st_water.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var y_start: int = sub_idx * SUB_CHUNK_HEIGHT
 	var y_end: int = mini(y_start + SUB_CHUNK_HEIGHT, CHUNK_SIZE_Y)
 	var solid_faces: int = 0
+	var col_faces: int = 0
 	var water_faces: int = 0
 
 	for ly in range(y_start, y_end):
@@ -313,28 +317,68 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						water_faces += 1
 					continue
 
+				# Custom non-cube functional blocks (Torches, Beds, Doors, Ladders)
+				if not BlockRegistry.is_opaque_full_cube(block_id):
+					var min_b := Vector3(0.0, 0.0, 0.0)
+					var max_b := Vector3(1.0, 1.0, 1.0)
+					match block_id:
+						BlockRegistry.BlockId.TORCH:
+							min_b = Vector3(0.40, 0.0, 0.40)
+							max_b = Vector3(0.60, 0.68, 0.60)
+						BlockRegistry.BlockId.BED:
+							min_b = Vector3(0.0, 0.0, 0.0)
+							max_b = Vector3(1.0, 0.56, 1.0)
+						BlockRegistry.BlockId.DOOR_CLOSED:
+							min_b = Vector3(0.0, 0.0, 0.40)
+							max_b = Vector3(1.0, 1.0, 0.60)
+						BlockRegistry.BlockId.DOOR_OPEN:
+							min_b = Vector3(0.0, 0.0, 0.0)
+							max_b = Vector3(0.20, 1.0, 1.0)
+						BlockRegistry.BlockId.LADDER:
+							min_b = Vector3(0.0, 0.0, 0.42)
+							max_b = Vector3(1.0, 1.0, 0.58)
+					_emit_custom_box(st_solid, lx, ly, lz, min_b, max_b, block_id)
+					solid_faces += 6
+					if not BlockRegistry.is_passable_block(block_id):
+						_emit_custom_box(st_col, lx, ly, lz, min_b, max_b, block_id)
+						col_faces += 6
+					continue
+
 				if not _is_neighbor_solid(lx, ly + 1, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
+					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
 					solid_faces += 1
+					col_faces += 1
 				if not _is_neighbor_solid(lx, ly - 1, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
+					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
 					solid_faces += 1
+					col_faces += 1
 				if not _is_neighbor_solid(lx + 1, ly, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
+					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
 					solid_faces += 1
+					col_faces += 1
 				if not _is_neighbor_solid(lx - 1, ly, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
+					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
 					solid_faces += 1
+					col_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz + 1):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
+					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
 					solid_faces += 1
+					col_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz - 1):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
+					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
 					solid_faces += 1
+					col_faces += 1
 
 	var solid_mesh: ArrayMesh = st_solid.commit() if solid_faces > 0 else null
+	var col_mesh: ArrayMesh = st_col.commit() if col_faces > 0 else null
 	var water_mesh: ArrayMesh = st_water.commit() if water_faces > 0 else null
-	var trimesh_shape: ConcavePolygonShape3D = solid_mesh.create_trimesh_shape() if solid_mesh != null else null
+	var trimesh_shape: ConcavePolygonShape3D = col_mesh.create_trimesh_shape() if col_mesh != null else null
 
 	return {
 		"mesh": solid_mesh,
@@ -394,7 +438,74 @@ func _get_neighbor_id(lx: int, ly: int, lz: int) -> int:
 
 
 func _is_neighbor_solid(lx: int, ly: int, lz: int) -> bool:
-	return BlockRegistry.is_solid(_get_neighbor_id(lx, ly, lz))
+	return BlockRegistry.is_opaque_full_cube(_get_neighbor_id(lx, ly, lz))
+
+
+func _emit_custom_box(
+	st: SurfaceTool,
+	lx: int,
+	ly: int,
+	lz: int,
+	min_b: Vector3,
+	max_b: Vector3,
+	block_id: int
+) -> void:
+	var origin := Vector3(float(lx), float(ly), float(lz))
+	var p0: Vector3 = origin + min_b
+	var p1: Vector3 = origin + max_b
+	var faces: Array[int] = [
+		BlockRegistry.FaceDir.TOP,
+		BlockRegistry.FaceDir.BOTTOM,
+		BlockRegistry.FaceDir.EAST,
+		BlockRegistry.FaceDir.WEST,
+		BlockRegistry.FaceDir.SOUTH,
+		BlockRegistry.FaceDir.NORTH,
+	]
+	for face_dir in faces:
+		var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir)
+		var u0: float = uv_rect.position.x
+		var v0: float = uv_rect.position.y
+		var u1: float = uv_rect.position.x + uv_rect.size.x
+		var v1: float = uv_rect.position.y + uv_rect.size.y
+		var verts: Array[Vector3]
+		var normal: Vector3
+		var shade: float = 1.0
+		match face_dir:
+			BlockRegistry.FaceDir.TOP:
+				normal = Vector3.UP
+				shade = 1.0
+				verts = [Vector3(p0.x, p1.y, p0.z), Vector3(p1.x, p1.y, p0.z), Vector3(p1.x, p1.y, p1.z), Vector3(p0.x, p1.y, p1.z)]
+			BlockRegistry.FaceDir.BOTTOM:
+				normal = Vector3.DOWN
+				shade = 0.55
+				verts = [Vector3(p0.x, p0.y, p1.z), Vector3(p1.x, p0.y, p1.z), Vector3(p1.x, p0.y, p0.z), Vector3(p0.x, p0.y, p0.z)]
+			BlockRegistry.FaceDir.EAST:
+				normal = Vector3.RIGHT
+				shade = 0.82
+				verts = [Vector3(p1.x, p1.y, p1.z), Vector3(p1.x, p1.y, p0.z), Vector3(p1.x, p0.y, p0.z), Vector3(p1.x, p0.y, p1.z)]
+			BlockRegistry.FaceDir.WEST:
+				normal = Vector3.LEFT
+				shade = 0.76
+				verts = [Vector3(p0.x, p1.y, p0.z), Vector3(p0.x, p1.y, p1.z), Vector3(p0.x, p0.y, p1.z), Vector3(p0.x, p0.y, p0.z)]
+			BlockRegistry.FaceDir.SOUTH:
+				normal = Vector3.BACK
+				shade = 0.90
+				verts = [Vector3(p0.x, p1.y, p1.z), Vector3(p1.x, p1.y, p1.z), Vector3(p1.x, p0.y, p1.z), Vector3(p0.x, p0.y, p1.z)]
+			_:
+				normal = Vector3.FORWARD
+				shade = 0.72
+				verts = [Vector3(p1.x, p1.y, p0.z), Vector3(p0.x, p1.y, p0.z), Vector3(p0.x, p0.y, p0.z), Vector3(p1.x, p0.y, p0.z)]
+
+		if BlockRegistry.is_light_emitter(block_id):
+			shade = 1.0
+		var col := Color(shade, shade, shade, 1.0)
+		var uvs: Array[Vector2] = [Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1), Vector2(u0, v1)]
+		var indices: Array[int] = [0, 1, 2, 0, 2, 3]
+		for idx in indices:
+			st.set_normal(normal)
+			st.set_color(col)
+			st.set_uv(uvs[idx])
+			st.add_vertex(verts[idx])
 
 
 ## Computes the smoothed water height at a corner shared by the 4 cells around (lx, ly, lz) in quadrant (dx, dz).

@@ -15,6 +15,7 @@ enum ModalMode {
 	PLAYER_INV_2X2 = 1,
 	CRAFTING_TABLE_3X3 = 2,
 	FURNACE_OVEN = 3,
+	CHEST_27 = 4,
 }
 
 var _player: PlayerController = null
@@ -51,6 +52,7 @@ var _modal_feedback_label: Label = null
 var _craft_2x2_container: Control = null
 var _craft_3x3_container: Control = null
 var _furnace_container: Control = null
+var _chest_container: Control = null
 var _recipe_book_vbox: VBoxContainer = null
 
 # Interactive Slot UI dictionaries `{ "panel": PanelContainer, "swatch": ColorRect, "label": Label }`
@@ -63,6 +65,7 @@ var _furnace_fuel_slot: Dictionary = {}
 var _furnace_out_slot: Dictionary = {}
 var _furnace_flame_bar: ColorRect = null
 var _furnace_progress_bar: ColorRect = null
+var _chest_modal_slots: Array[Dictionary] = [] # 27 slots for world Chests
 var _inv_modal_slots: Array[Dictionary] = [] # 36 slots (9..35 backpack, 0..8 hotbar)
 
 # Floating mouse cursor item stack
@@ -235,7 +238,11 @@ func _on_station_opened(station_block_id: int) -> void:
 	elif station_block_id == BlockRegistry.BlockId.FURNACE:
 		_modal_mode = ModalMode.FURNACE_OVEN
 		_modal_title_label.text = "FURNACE (OVEN SMELTING)"
-		_modal_feedback_label.text = "Place Ore in Top Slot + Coal/Wood in Bottom Fuel Slot to smelt ingots!"
+		_modal_feedback_label.text = "Place Ore/Meat in Top Slot + Coal/Wood in Bottom Fuel Slot to smelt/cook!"
+	elif station_block_id == BlockRegistry.BlockId.CHEST:
+		_modal_mode = ModalMode.CHEST_27
+		_modal_title_label.text = "WOODEN CHEST (27-SLOT WORLD STORAGE)"
+		_modal_feedback_label.text = "Store items in this Chest! Contents stay at this block position."
 	else:
 		_modal_mode = ModalMode.PLAYER_INV_2X2
 		if _inventory != null:
@@ -246,6 +253,8 @@ func _on_station_opened(station_block_id: int) -> void:
 	_craft_2x2_container.visible = (_modal_mode == ModalMode.PLAYER_INV_2X2)
 	_craft_3x3_container.visible = (_modal_mode == ModalMode.CRAFTING_TABLE_3X3)
 	_furnace_container.visible = (_modal_mode == ModalMode.FURNACE_OVEN)
+	if _chest_container != null:
+		_chest_container.visible = (_modal_mode == ModalMode.CHEST_27)
 	_rebuild_recipe_book_buttons()
 	_refresh_all_slot_visuals()
 	_refresh_furnace_visuals()
@@ -572,9 +581,15 @@ func _build_minecraft_modal() -> void:
 	book_title.add_theme_color_override("font_color", Color(0.55, 0.95, 0.58))
 	book_outer_vbox.add_child(book_title)
 
+	var book_scroll := ScrollContainer.new()
+	book_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	book_scroll.custom_minimum_size = Vector2(205, 410)
+	book_outer_vbox.add_child(book_scroll)
+
 	_recipe_book_vbox = VBoxContainer.new()
+	_recipe_book_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_recipe_book_vbox.add_theme_constant_override("separation", 5)
-	book_outer_vbox.add_child(_recipe_book_vbox)
+	book_scroll.add_child(_recipe_book_vbox)
 
 	# 2. Main Minecraft Inventory & Station Window
 	var main_card := PanelContainer.new()
@@ -618,6 +633,9 @@ func _build_minecraft_modal() -> void:
 
 	_furnace_container = _build_furnace_oven_view()
 	station_holder.add_child(_furnace_container)
+
+	_chest_container = _build_chest_storage_view()
+	station_holder.add_child(_chest_container)
 
 	# Middle Area: 27-Slot Main Backpack (3 rows of 9 slots: indices 9..35)
 	var bp_label := Label.new()
@@ -799,6 +817,23 @@ func _build_furnace_oven_view() -> Control:
 	return hbox
 
 
+func _build_chest_storage_view() -> Control:
+	var grid := GridContainer.new()
+	grid.columns = 9
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	grid.visible = false
+	_chest_modal_slots.resize(InventoryManager.CHEST_SIZE)
+	for i in range(InventoryManager.CHEST_SIZE):
+		var slot_ui: Dictionary = _create_interactive_slot_widget(46, 46, func(btn: int) -> void:
+			if _inventory != null:
+				_inventory.click_chest_slot(i, btn)
+		)
+		grid.add_child(slot_ui["panel"])
+		_chest_modal_slots[i] = slot_ui
+	return grid
+
+
 func _create_interactive_slot_widget(w: float, h: float, on_click: Callable, is_output: bool = false) -> Dictionary:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(w, h)
@@ -862,6 +897,11 @@ func _rebuild_recipe_book_buttons() -> void:
 		["sticks", "4x Sticks (2 Planks)"],
 		["crafting_table", "Crafting Table (4 Planks)"],
 		["glowstone", "4x Torches (1 Coal + 1 Stick)"],
+		["chest", "[3x3] Chest (8 Planks Ring)"],
+		["bed", "[3x3] Bed (3 Leaves/Snow+3 Plank)"],
+		["door", "[3x3] 2x Wood Door (6 Planks)"],
+		["ladder", "[3x3] 3x Ladder (7 Sticks H)"],
+		["tnt", "TNT (2 Gunpowder/Coal+2 Sand)"],
 		["wood_pickaxe", "[3x3] Wood Pick (3 Plank+2 Stick)"],
 		["wood_sword", "[3x3] Wood Sword (2 Plank+1 Stick)"],
 		["wood_axe", "[3x3] Wood Axe (3 Plank+2 Stick)"],
@@ -957,6 +997,11 @@ func _refresh_all_slot_visuals() -> void:
 		for i in range(mini(9, _inventory.craft_grid.size())):
 			_paint_slot_widget(_grid_3x3_slots[i], _inventory.craft_grid[i])
 		_paint_slot_widget(_out_3x3_slot, _inventory.craft_output)
+
+	# 4. Refresh active 27-slot Chest Storage
+	var c_slots: Array = _inventory.get_active_chest_slots()
+	for i in range(mini(_chest_modal_slots.size(), c_slots.size())):
+		_paint_slot_widget(_chest_modal_slots[i], c_slots[i])
 
 
 func _refresh_furnace_visuals() -> void:

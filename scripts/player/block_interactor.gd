@@ -266,8 +266,12 @@ func _complete_break_block() -> void:
 	var is_creative: bool = _player_body != null and _player_body.is_flying
 
 	if _world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.AIR):
+		if previous_id == BlockRegistry.BlockId.CHEST and _inventory != null:
+			_inventory.drop_chest_contents_at(_world_manager, broken_pos)
 		var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if is_creative else equipped_id
 		var drop_id: int = InventoryManager.get_dropped_item_for_block(previous_id, effective_tool)
+		if drop_id == BlockRegistry.BlockId.DOOR_OPEN:
+			drop_id = BlockRegistry.BlockId.DOOR_CLOSED
 		if drop_id > 0:
 			DroppedItem.spawn_drop(
 				_world_manager,
@@ -369,7 +373,41 @@ func _try_interact_or_place_block() -> void:
 	# Right-clicking a placed Furnace (17) opens the Furnace Oven UI!
 	var targeted_id: int = _world_manager.get_block_world(target_block_pos)
 	if BlockRegistry.is_interactive_station(targeted_id):
+		if targeted_id == BlockRegistry.BlockId.CHEST and _inventory != null:
+			_inventory.open_chest_at(target_block_pos)
 		station_opened.emit(targeted_id)
+		return
+
+	# Right-clicking a Bed sets respawn point and sleeps through the night to Sunrise!
+	if targeted_id == BlockRegistry.BlockId.BED:
+		if _player_body != null:
+			_player_body.set_respawn_bed_position(Vector3(target_block_pos))
+			_player_body.eat_food(4)
+		var dn := get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle
+		if dn != null and (dn.time_of_day < 0.25 or dn.time_of_day > 0.72):
+			dn.time_of_day = 0.28
+			loot_notification.emit("Slept through the night! Good morning & Respawn set.")
+		else:
+			loot_notification.emit("Respawn point set at Bed! (Sleep at night)")
+		return
+
+	# Right-clicking a Wooden Door swings it open/closed
+	if targeted_id == BlockRegistry.BlockId.DOOR_CLOSED or targeted_id == BlockRegistry.BlockId.DOOR_OPEN:
+		var next_door: int = BlockRegistry.BlockId.DOOR_OPEN if targeted_id == BlockRegistry.BlockId.DOOR_CLOSED else BlockRegistry.BlockId.DOOR_CLOSED
+		_world_manager.set_block_world(target_block_pos, next_door)
+		for dy in [-1, 1]:
+			var adj: Vector3i = target_block_pos + Vector3i(0, dy, 0)
+			var adj_id: int = _world_manager.get_block_world(adj)
+			if adj_id == BlockRegistry.BlockId.DOOR_CLOSED or adj_id == BlockRegistry.BlockId.DOOR_OPEN:
+				_world_manager.set_block_world(adj, next_door)
+		mob_interacted.emit(false, 0)
+		return
+
+	# Right-clicking TNT ignites a 3-second flashing fuse & crater explosion!
+	if targeted_id == BlockRegistry.BlockId.TNT:
+		_world_manager.ignite_tnt_at(target_block_pos)
+		loot_notification.emit("TNT Ignited! Stand back!")
+		mob_interacted.emit(false, 0)
 		return
 
 	# Water Bucket: Pour a new Water Source block at place_block_pos

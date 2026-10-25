@@ -50,6 +50,7 @@ signal player_damaged(amount: int)
 # --- State ---
 var is_flying: bool = false
 var is_in_water: bool = false
+var is_on_ladder: bool = false
 var is_head_underwater: bool = false
 var water_submersion_depth: float = 0.0
 var water_flow_vector: Vector3 = Vector3.ZERO
@@ -135,6 +136,15 @@ func _physics_process(delta: float) -> void:
 	elif is_in_water:
 		_max_fall_speed = 0.0
 		_handle_swim_movement(delta)
+	elif is_on_ladder:
+		_max_fall_speed = 0.0
+		_handle_horizontal_movement(delta)
+		if Input.is_action_pressed("jump") or Input.is_action_pressed("move_forward"):
+			velocity.y = move_toward(velocity.y, 4.6, 22.0 * delta)
+		elif Input.is_action_pressed("fly_down"):
+			velocity.y = move_toward(velocity.y, 0.0, 22.0 * delta)
+		else:
+			velocity.y = move_toward(velocity.y, -2.4, 18.0 * delta)
 	else:
 		if not is_on_floor() and velocity.y < 0.0:
 			_max_fall_speed = maxf(_max_fall_speed, -velocity.y)
@@ -282,6 +292,13 @@ func _update_water_submersion() -> void:
 		return
 	water_submersion_depth = _world_manager.get_water_submersion_depth(global_position)
 	water_flow_vector = _world_manager.get_water_flow_vector(global_position)
+
+	var feet_b := Vector3i(floori(global_position.x), floori(global_position.y + 0.15), floori(global_position.z))
+	var waist_b := Vector3i(floori(global_position.x), floori(global_position.y + 0.95), floori(global_position.z))
+	is_on_ladder = (
+		_world_manager.get_block_world(feet_b) == BlockRegistry.BlockId.LADDER
+		or _world_manager.get_block_world(waist_b) == BlockRegistry.BlockId.LADDER
+	)
 
 	var eye_pos := Vector3i(
 		floori(head.global_position.x),

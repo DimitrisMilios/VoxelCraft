@@ -84,6 +84,11 @@ var furnace_burn_remaining: float = 0.0
 var furnace_burn_max: float = 10.0
 var furnace_cook_progress: float = 0.0
 const FURNACE_COOK_TIME: float = 3.0
+const CHEST_SIZE: int = 27
+
+## World-coordinate persistent 27-slot Chest storage (`Vector3i -> Array[Dictionary]`).
+var world_chests: Dictionary = {}
+var active_chest_pos: Vector3i = Vector3i.ZERO
 
 
 func _ready() -> void:
@@ -725,6 +730,79 @@ func click_furnace_slot(furnace_slot_type: int, mouse_button: int) -> void:
 	inventory_updated.emit()
 
 
+## Ensures a 27-slot storage array exists for `chest_pos` and sets it as the active open Chest.
+func open_chest_at(chest_pos: Vector3i) -> void:
+	active_chest_pos = chest_pos
+	if not world_chests.has(chest_pos):
+		var c_slots: Array[Dictionary] = []
+		c_slots.resize(CHEST_SIZE)
+		for i in range(CHEST_SIZE):
+			c_slots[i] = {"id": 0, "count": 0}
+		world_chests[chest_pos] = c_slots
+	inventory_updated.emit()
+
+
+func get_active_chest_slots() -> Array:
+	if not world_chests.has(active_chest_pos):
+		open_chest_at(active_chest_pos)
+	return world_chests[active_chest_pos]
+
+
+func click_chest_slot(slot_idx: int, mouse_button: int) -> void:
+	var c_slots: Array = get_active_chest_slots()
+	if slot_idx < 0 or slot_idx >= c_slots.size():
+		return
+	c_slots[slot_idx] = _interact_slot_with_cursor(c_slots[slot_idx], mouse_button)
+	inventory_updated.emit()
+
+
+func drop_chest_contents_at(world_manager: Node, chest_pos: Vector3i) -> void:
+	if not world_chests.has(chest_pos):
+		return
+	var c_slots: Array = world_chests[chest_pos]
+	for entry in c_slots:
+		var id: int = int(entry.get("id", 0))
+		var cnt: int = int(entry.get("count", 0))
+		if id > 0 and cnt > 0:
+			DroppedItem.spawn_drop(
+				world_manager,
+				Vector3(chest_pos) + Vector3(0.5, 0.45, 0.5),
+				id,
+				cnt,
+				Vector3.ZERO,
+				0.35,
+				int(entry.get("durability", -1))
+			)
+	world_chests.erase(chest_pos)
+
+
+func populate_loot_chest_at(chest_pos: Vector3i, rng_seed: int) -> void:
+	if world_chests.has(chest_pos):
+		return
+	var c_slots: Array[Dictionary] = []
+	c_slots.resize(CHEST_SIZE)
+	for i in range(CHEST_SIZE):
+		c_slots[i] = {"id": 0, "count": 0}
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = rng_seed
+	var loot_pool: Array[Array] = [
+		[ItemId.IRON_INGOT, 3],
+		[ItemId.GOLD_INGOT, 2],
+		[ItemId.APPLE, 4],
+		[ItemId.COAL, 6],
+		[ItemId.DIAMOND, 1],
+		[ItemId.BUCKET, 1],
+		[BlockRegistry.BlockId.TORCH, 8],
+		[BlockRegistry.BlockId.TNT, 2],
+	]
+	for n in range(5):
+		var pick: Array = loot_pool[rng.randi_range(0, loot_pool.size() - 1)]
+		var slot_i: int = rng.randi_range(0, CHEST_SIZE - 1)
+		c_slots[slot_i] = {"id": int(pick[0]), "count": int(pick[1])}
+	world_chests[chest_pos] = c_slots
+
+
 func _interact_slot_with_cursor(target_slot: Dictionary, mouse_button: int) -> Dictionary:
 	var slot_id: int = int(target_slot.get("id", 0))
 	var slot_cnt: int = int(target_slot.get("count", 0))
@@ -838,21 +916,31 @@ func _match_crafting_grid() -> Dictionary:
 		# 2 Planks vertically -> 4 Sticks
 		if pattern == [P, P]:
 			return {"id": ItemId.STICK, "count": 4}
-		# 1 Coal over 1 Stick -> 4 Glowstone Torches/Lanterns
+		# 1 Coal over 1 Stick -> 4 Torches
 		if pattern == [COAL_ID, S]:
-			return {"id": BlockRegistry.BlockId.GLOWSTONE, "count": 4}
+			return {"id": BlockRegistry.BlockId.TORCH, "count": 4}
 
 	# 3. 2x2 Patterns (Works in both 2x2 and 3x3!)
 	if box_w == 2 and box_h == 2:
 		# 4 Wood Planks in 2x2 -> 1 Crafting Table
 		if pattern == [P, P, P, P]:
 			return {"id": BlockRegistry.BlockId.CRAFTING_TABLE, "count": 1}
+		# 2 Sand + 2 Gunpowder/Coal -> 1 TNT
+		var SAND_ID: int = BlockRegistry.BlockId.SAND
+		if pattern == [ItemId.GUNPOWDER, SAND_ID, SAND_ID, ItemId.GUNPOWDER] or pattern == [COAL_ID, SAND_ID, SAND_ID, COAL_ID]:
+			return {"id": BlockRegistry.BlockId.TNT, "count": 1}
 
 	# 4. 3x3 Patterns (Requires 3x3 Crafting Table!)
 	if box_w == 3 and box_h == 3:
 		# Furnace (8 Cobblestone ring)
 		if pattern == [C, C, C, C, 0, C, C, C, C]:
 			return {"id": BlockRegistry.BlockId.FURNACE, "count": 1}
+		# Chest (8 Wood Planks ring)
+		if pattern == [P, P, P, P, 0, P, P, P, P]:
+			return {"id": BlockRegistry.BlockId.CHEST, "count": 1}
+		# Ladder (7 Sticks in H-shape)
+		if pattern == [S, 0, S, S, S, S, S, 0, S]:
+			return {"id": BlockRegistry.BlockId.LADDER, "count": 3}
 
 		# Pickaxes: [M, M, M, 0, S, 0, 0, S, 0]
 		if pattern == [P, P, P, 0, S, 0, 0, S, 0]:
@@ -883,8 +971,10 @@ func _match_crafting_grid() -> Dictionary:
 		if pattern == [D, D, S]:
 			return {"id": ItemId.DIAMOND_SWORD, "count": 1}
 
-	# 6. Axes: 2x3 [M, M, M, S, 0, S] or mirrored [M, M, S, M, S, 0]
+	# 6. Axes & Wooden Door: 2x3
 	if box_w == 2 and box_h == 3:
+		if pattern == [P, P, P, P, P, P]:
+			return {"id": BlockRegistry.BlockId.DOOR_CLOSED, "count": 2}
 		if pattern == [P, P, P, S, 0, S] or pattern == [P, P, S, P, S, 0]:
 			return {"id": ItemId.WOOD_AXE, "count": 1}
 		if pattern == [C, C, C, S, 0, S] or pattern == [C, C, S, C, S, 0]:
@@ -894,10 +984,14 @@ func _match_crafting_grid() -> Dictionary:
 		if pattern == [D, D, D, S, 0, S] or pattern == [D, D, S, D, S, 0]:
 			return {"id": ItemId.DIAMOND_AXE, "count": 1}
 
-	# 7. Iron Bucket: 3x2 V-shape [FE, 0, FE, 0, FE, 0]
+	# 7. Iron Bucket & Bed: 3x2
 	if box_w == 3 and box_h == 2:
 		if pattern == [FE, 0, FE, 0, FE, 0]:
 			return {"id": ItemId.BUCKET, "count": 1}
+		var L: int = BlockRegistry.BlockId.LEAVES
+		var SN: int = BlockRegistry.BlockId.SNOW
+		if pattern == [L, L, L, P, P, P] or pattern == [SN, SN, SN, P, P, P]:
+			return {"id": BlockRegistry.BlockId.BED, "count": 1}
 
 	return {"id": 0, "count": 0}
 
@@ -972,6 +1066,26 @@ func autofill_recipe_pattern(recipe_key: String) -> String:
 		"diamond_sword":
 			requires_3x3 = true
 			target_grid = [0, D, 0, 0, D, 0, 0, S, 0]
+		"chest":
+			requires_3x3 = true
+			target_grid = [P, P, P, P, 0, P, P, P, P]
+		"bed":
+			requires_3x3 = true
+			var wool_id: int = BlockRegistry.BlockId.LEAVES if get_total_count(BlockRegistry.BlockId.LEAVES) >= 3 else BlockRegistry.BlockId.SNOW
+			target_grid = [wool_id, wool_id, wool_id, P, P, P, 0, 0, 0]
+		"door":
+			requires_3x3 = true
+			target_grid = [P, P, 0, P, P, 0, P, P, 0]
+		"ladder":
+			requires_3x3 = true
+			target_grid = [S, 0, S, S, S, S, S, 0, S]
+		"tnt":
+			var pwd: int = ItemId.GUNPOWDER if get_total_count(ItemId.GUNPOWDER) >= 2 else ItemId.COAL
+			var snd: int = BlockRegistry.BlockId.SAND
+			if craft_grid_size == 2:
+				target_grid = [pwd, snd, snd, pwd]
+			else:
+				target_grid = [pwd, snd, 0, snd, pwd, 0, 0, 0, 0]
 
 	if requires_3x3 and craft_grid_size < 3:
 		return "Place & Right-Click a Crafting Table for 3x3 recipes!"

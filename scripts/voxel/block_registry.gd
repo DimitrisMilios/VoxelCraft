@@ -21,6 +21,16 @@ enum BlockId {
 	DIAMOND_ORE = 15,
 	CRAFTING_TABLE = 16,
 	FURNACE = 17,
+	CHEST = 18,
+	TORCH = 19,
+	BED = 20,
+	DOOR_CLOSED = 21,
+	DOOR_OPEN = 22,
+	LADDER = 23,
+	TNT = 24,
+	SANDSTONE = 25,
+	CACTUS = 26,
+	MOSSY_COBBLE = 27,
 	WATER_FLOW_1 = 31,
 	WATER_FLOW_2 = 32,
 	WATER_FLOW_3 = 33,
@@ -60,13 +70,35 @@ enum FaceDir {
 ## Tile 16: Crafting Table Top (Grid)
 ## Tile 17: Crafting Table Side (Workbench Tools)
 ## Tile 18: Furnace Front (Stone Oven Opening & Embers)
-const ATLAS_COLUMNS: int = 19
+const ATLAS_COLUMNS: int = 28
 const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 16
 
 
 static func is_solid(block_id: int) -> bool:
 	return block_id != BlockId.AIR and not is_liquid(block_id)
+
+
+static func is_passable_block(block_id: int) -> bool:
+	return (
+		block_id == BlockId.TORCH
+		or block_id == BlockId.DOOR_OPEN
+		or block_id == BlockId.LADDER
+	)
+
+
+static func is_opaque_full_cube(block_id: int) -> bool:
+	if not is_solid(block_id):
+		return false
+	if (
+		block_id == BlockId.TORCH
+		or block_id == BlockId.BED
+		or block_id == BlockId.DOOR_CLOSED
+		or block_id == BlockId.DOOR_OPEN
+		or block_id == BlockId.LADDER
+	):
+		return false
+	return true
 
 
 static func is_liquid(block_id: int) -> bool:
@@ -110,17 +142,23 @@ static func get_water_height_ratio(block_id: int) -> float:
 
 
 static func is_light_emitter(block_id: int) -> bool:
-	return block_id == BlockId.GLOWSTONE or block_id == BlockId.FURNACE
+	return block_id == BlockId.GLOWSTONE or block_id == BlockId.FURNACE or block_id == BlockId.TORCH
 
 
 static func is_interactive_station(block_id: int) -> bool:
-	return block_id == BlockId.CRAFTING_TABLE or block_id == BlockId.FURNACE
+	return (
+		block_id == BlockId.CRAFTING_TABLE
+		or block_id == BlockId.FURNACE
+		or block_id == BlockId.CHEST
+	)
 
 
 static func is_stone_Or_ore(block_id: int) -> bool:
 	return (
 		block_id == BlockId.STONE
 		or block_id == BlockId.COBBLESTONE
+		or block_id == BlockId.MOSSY_COBBLE
+		or block_id == BlockId.SANDSTONE
 		or block_id == BlockId.COAL_ORE
 		or block_id == BlockId.IRON_ORE
 		or block_id == BlockId.GOLD_ORE
@@ -134,13 +172,15 @@ static func get_block_hardness(block_id: int) -> float:
 	if is_liquid(block_id) or block_id == BlockId.AIR:
 		return 0.0
 	match block_id:
-		BlockId.LEAVES, BlockId.SNOW:
-			return 0.22
-		BlockId.GRASS, BlockId.DIRT, BlockId.SAND:
+		BlockId.TORCH, BlockId.TNT:
+			return 0.12
+		BlockId.LEAVES, BlockId.SNOW, BlockId.CACTUS, BlockId.BED:
+			return 0.24
+		BlockId.GRASS, BlockId.DIRT, BlockId.SAND, BlockId.LADDER:
 			return 0.38
-		BlockId.WOOD_LOG, BlockId.WOOD_PLANKS, BlockId.CRAFTING_TABLE, BlockId.GLOWSTONE:
+		BlockId.WOOD_LOG, BlockId.WOOD_PLANKS, BlockId.CRAFTING_TABLE, BlockId.CHEST, BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.GLOWSTONE:
 			return 0.65
-		BlockId.STONE, BlockId.COBBLESTONE, BlockId.COAL_ORE, BlockId.FURNACE:
+		BlockId.STONE, BlockId.COBBLESTONE, BlockId.MOSSY_COBBLE, BlockId.SANDSTONE, BlockId.COAL_ORE, BlockId.FURNACE:
 			return 1.15
 		BlockId.IRON_ORE:
 			return 1.45
@@ -192,6 +232,24 @@ static func get_block_name(block_id: int) -> String:
 			return "Craft Table"
 		BlockId.FURNACE:
 			return "Furnace"
+		BlockId.CHEST:
+			return "Chest"
+		BlockId.TORCH:
+			return "Torch"
+		BlockId.BED:
+			return "Bed"
+		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
+			return "Wood Door"
+		BlockId.LADDER:
+			return "Ladder"
+		BlockId.TNT:
+			return "TNT"
+		BlockId.SANDSTONE:
+			return "Sandstone"
+		BlockId.CACTUS:
+			return "Cactus"
+		BlockId.MOSSY_COBBLE:
+			return "Mossy Stone"
 		_:
 			return "Unknown"
 
@@ -232,6 +290,24 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.62, 0.42, 0.22)
 		BlockId.FURNACE:
 			return Color(0.38, 0.40, 0.43)
+		BlockId.CHEST:
+			return Color(0.72, 0.48, 0.20)
+		BlockId.TORCH:
+			return Color(1.0, 0.78, 0.24)
+		BlockId.BED:
+			return Color(0.86, 0.18, 0.22)
+		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
+			return Color(0.64, 0.46, 0.26)
+		BlockId.LADDER:
+			return Color(0.60, 0.44, 0.24)
+		BlockId.TNT:
+			return Color(0.90, 0.20, 0.18)
+		BlockId.SANDSTONE:
+			return Color(0.84, 0.76, 0.50)
+		BlockId.CACTUS:
+			return Color(0.18, 0.58, 0.22)
+		BlockId.MOSSY_COBBLE:
+			return Color(0.34, 0.52, 0.32)
 		_:
 			return Color.GRAY
 
@@ -288,6 +364,27 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 				return 18
 			else:
 				return 8
+		BlockId.CHEST:
+			if face_dir == FaceDir.SOUTH or face_dir == FaceDir.NORTH:
+				return 19
+			else:
+				return 20
+		BlockId.TORCH:
+			return 21
+		BlockId.BED:
+			return 22
+		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
+			return 23
+		BlockId.LADDER:
+			return 24
+		BlockId.TNT:
+			return 25
+		BlockId.SANDSTONE:
+			return 26
+		BlockId.CACTUS:
+			return 6
+		BlockId.MOSSY_COBBLE:
+			return 27
 		_:
 			return 3
 

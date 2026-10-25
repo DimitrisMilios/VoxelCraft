@@ -659,3 +659,56 @@ func get_surface_height_at(wx: int, wz: int) -> int:
 		if id != BlockRegistry.BlockId.AIR and id != BlockRegistry.BlockId.LEAVES and not BlockRegistry.is_liquid(id):
 			return y
 	return VoxelChunk.sample_surface_height(_surface_noise, wx, wz)
+
+
+## Ignites a placed TNT block into a 3.0-second flashing primed entity that blasts a spherical crater.
+func ignite_tnt_at(world_block_pos: Vector3i) -> void:
+	if get_block_world(world_block_pos) != BlockRegistry.BlockId.TNT:
+		return
+	set_block_world(world_block_pos, BlockRegistry.BlockId.AIR)
+
+	var tnt_mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.96, 0.96, 0.96)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.25, 0.20)
+	box.material = mat
+	tnt_mi.mesh = box
+	tnt_mi.position = Vector3(world_block_pos) + Vector3(0.5, 0.5, 0.5)
+	add_child(tnt_mi)
+
+	var tw: Tween = create_tween()
+	for i in range(6):
+		tw.tween_property(mat, "albedo_color", Color(1.0, 1.0, 1.0), 0.22)
+		tw.tween_property(mat, "albedo_color", Color(0.95, 0.20, 0.16), 0.22)
+	tw.tween_callback(_detonate_tnt_at.bind(world_block_pos, tnt_mi))
+
+
+func _detonate_tnt_at(center: Vector3i, visual_node: Node3D) -> void:
+	if is_instance_valid(visual_node):
+		visual_node.queue_free()
+
+	for dy in range(-3, 4):
+		for dx in range(-3, 4):
+			for dz in range(-3, 4):
+				if dx * dx + dy * dy + dz * dz <= 9:
+					var bpos: Vector3i = center + Vector3i(dx, dy, dz)
+					if bpos.y <= 1:
+						continue
+					var bid: int = get_block_world(bpos)
+					if bid == BlockRegistry.BlockId.TNT:
+						ignite_tnt_at(bpos)
+					elif BlockRegistry.is_solid(bid):
+						set_block_world(bpos, BlockRegistry.BlockId.AIR)
+						if randf() < 0.32:
+							var drop_id: int = InventoryManager.get_dropped_item_for_block(bid, InventoryManager.ItemId.DIAMOND_PICKAXE)
+							if drop_id > 0:
+								DroppedItem.spawn_drop(self, Vector3(bpos) + Vector3(0.5, 0.5, 0.5), drop_id, 1)
+
+	if _player != null and is_instance_valid(_player) and _player is PlayerController:
+		var p_ctrl := _player as PlayerController
+		var dist: float = p_ctrl.global_position.distance_to(Vector3(center) + Vector3(0.5, 0.5, 0.5))
+		if dist <= 6.0:
+			var dmg: int = maxi(2, int(round((6.0 - dist) * 2.4)))
+			p_ctrl.take_damage(dmg)
+			p_ctrl.velocity += (p_ctrl.global_position - Vector3(center)).normalized() * 10.0 + Vector3(0.0, 6.0, 0.0)

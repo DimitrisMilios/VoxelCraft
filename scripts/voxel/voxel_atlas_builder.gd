@@ -237,6 +237,59 @@ static func _sample_tile_pixel(
 				return _tint(Color(0.98, 0.48, 0.14) if ember else Color(0.22, 0.14, 0.12), jitter * 0.4)
 			return _tint(cobble_base, jitter)
 
+		19: # Chest Front (Oak wood with black iron seam & gold lock latch)
+			if x >= 7 and x <= 8 and y >= 5 and y <= 8:
+				return _tint(Color(0.96, 0.84, 0.22), jitter * 0.3)
+			if y == 6 or x == 0 or x == size - 1 or y == 0 or y == size - 1:
+				return _tint(Color(0.18, 0.14, 0.10), jitter * 0.3)
+			return _tint(Color(0.74, 0.50, 0.22), jitter * 0.5)
+
+		20: # Chest Side / Top (Framed oak chest box)
+			if y == 6 or x == 0 or x == size - 1 or y == 0 or y == size - 1:
+				return _tint(Color(0.18, 0.14, 0.10), jitter * 0.3)
+			return _tint(Color(0.72, 0.48, 0.20), jitter * 0.5)
+
+		21: # Torch (Glowing orange/yellow flame tip over oak handle)
+			if y <= 4:
+				return _tint(Color(1.0, 0.88, 0.26), jitter * 0.3)
+			return _tint(bark_base, jitter * 0.5)
+
+		22: # Bed (White pillow at head + Crimson wool blanket)
+			if y <= 4:
+				return _tint(Color(0.95, 0.95, 0.96), jitter * 0.3)
+			return _tint(Color(0.84, 0.18, 0.20), jitter * 0.4)
+
+		23: # Wooden Door (Oak door frame + window panes + gold doorknob)
+			if x >= 11 and x <= 13 and y >= 8 and y <= 9:
+				return _tint(Color(0.95, 0.82, 0.24), jitter * 0.2)
+			if (x >= 3 and x <= 6 and y >= 3 and y <= 6) or (x >= 9 and x <= 12 and y >= 3 and y <= 6):
+				return _tint(Color(0.18, 0.22, 0.28), jitter * 0.2)
+			return _tint(plank_base, jitter * 0.5)
+
+		24: # Ladder (Side rails + horizontal climbing rungs)
+			var on_rail: bool = (x >= 2 and x <= 3) or (x >= 12 and x <= 13)
+			var on_rung: bool = (y % 4 == 1) and (x >= 2 and x <= 13)
+			if on_rail or on_rung:
+				return _tint(plank_base, jitter * 0.5)
+			return _tint(Color(0.24, 0.18, 0.12), jitter * 0.3)
+
+		25: # TNT (Red dynamite sticks + white label band)
+			if y >= 6 and y <= 9:
+				var dark_txt: bool = ((x % 3 == 1) and (y == 7 or y == 8))
+				return _tint(Color(0.12, 0.12, 0.12) if dark_txt else Color(0.94, 0.94, 0.94), jitter * 0.2)
+			var stick_line: bool = (x % 4 == 0)
+			return _tint(Color(0.68, 0.14, 0.12) if stick_line else Color(0.90, 0.22, 0.18), jitter * 0.4)
+
+		26: # Sandstone (Warm desert sedimentary strata)
+			var band: float = -0.05 if (y == 3 or y == 8 or y == 13) else 0.02
+			return _tint(Color(0.86, 0.78, 0.52), jitter * 0.5 + band)
+
+		27: # Mossy Cobblestone (Cobble with lush green moss veins)
+			var mortar: bool = (y % 4 == 0) or ((x + (y / 4) * 2) % 4 == 0)
+			if mortar:
+				return _tint(Color(0.22, 0.48, 0.20), jitter * 0.5)
+			return _tint(cobble_base, jitter)
+
 		_:
 			return _tint(stone_base, jitter)
 
