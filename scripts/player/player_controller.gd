@@ -2,12 +2,14 @@ class_name PlayerController
 extends CharacterBody3D
 ## First-person player controller for VoxelCraft.
 ## Handles mouse-look camera rotation, WASD + sprint movement, jumping, gravity,
-## swimming buoyancy in water, and a toggleable Creative Fly Mode (F key).
+## swimming buoyancy in water, survival health & fall damage, and Creative Fly Mode (F key).
 
 signal fly_mode_changed(is_flying: bool)
 signal water_state_changed(is_in_water: bool)
 signal jumped()
 signal step_taken(is_in_water: bool)
+signal health_changed(current_hp: int, max_hp: int)
+signal player_damaged(amount: int)
 
 # --- Exported Movement Tuning ---
 @export_group("Movement")
@@ -25,6 +27,12 @@ signal step_taken(is_in_water: bool)
 @export var jump_velocity: float = 7.2
 @export var gravity_multiplier: float = 1.8
 
+# --- Exported Survival Tuning ---
+@export_group("Survival")
+@export var max_health: int = 20
+@export var fall_damage_threshold_speed: float = 12.2
+@export var regen_interval_seconds: float = 4.0
+
 # --- Exported Camera Tuning ---
 @export_group("Camera")
 @export var mouse_sensitivity: float = 0.0022
@@ -39,6 +47,7 @@ signal step_taken(is_in_water: bool)
 var is_flying: bool = false
 var is_in_water: bool = false
 var is_head_underwater: bool = false
+var current_health: int = 20
 
 # --- Node References ---
 @onready var head: Node3D = $Head
@@ -48,9 +57,14 @@ var is_head_underwater: bool = false
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _world_manager: WorldManager = null
 var _step_distance_accum: float = 0.0
+var _max_fall_speed: float = 0.0
+var _was_on_floor: bool = true
+var _regen_timer: float = 0.0
+var _hurt_roll: float = 0.0
 
 
 func _ready() -> void:
+	current_health = max_health
 	_register_default_inputs()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	if camera:
@@ -60,6 +74,7 @@ func _ready() -> void:
 
 func _resolve_world_manager() -> void:
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
+	health_changed.emit(current_health, max_health)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -78,7 +93,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("toggle_fly"):
 		is_flying = not is_flying
 		velocity.y = 0.0
+		_max_fall_speed = 0.0
 		fly_mode_changed.emit(is_flying)
+		health_changed.emit(current_health, max_health)
 		return
 
 	# Smooth first-person mouse look
@@ -96,17 +113,75 @@ func _physics_process(delta: float) -> void:
 	_update_water_submersion()
 
 	if is_flying:
+		_max_fall_speed = 0.0
 		_handle_fly_movement(delta)
 	elif is_in_water:
+		_max_fall_speed = 0.0
 		_handle_swim_movement(delta)
 	else:
+		if not is_on_floor() and velocity.y < 0.0:
+			_max_fall_speed = maxf(_max_fall_speed, -velocity.y)
 		_apply_gravity(delta)
 		_handle_jump()
 		_handle_horizontal_movement(delta)
 
-	_update_camera_fov(delta)
 	move_and_slide()
+
+	# Check landing impact for survival fall damage
+	var now_on_floor: bool = is_on_floor()
+	if now_on_floor and not _was_on_floor:
+		if not is_flying and not is_in_water and _max_fall_speed > fall_damage_threshold_speed:
+			var dmg: int = maxi(1, int(round((_max_fall_speed - (fall_damage_threshold_speed - 1.0)) * 1.4)))
+			take_damage(dmg)
+		_max_fall_speed = 0.0
+	elif now_on_floor:
+		_max_fall_speed = 0.0
+	_was_on_floor = now_on_floor
+
+	# Check void fall recovery
+	if global_position.y < -25.0:
+		take_damage(max_health)
+
+	_update_health_regen(delta)
+	_update_camera_fov_and_tilt(delta)
 	_track_footsteps(delta)
+
+
+func take_damage(amount: int) -> void:
+	if is_flying or amount <= 0:
+		return
+	current_health = maxi(0, current_health - amount)
+	_hurt_roll = deg_to_rad(6.5)
+	_regen_timer = 0.0
+	player_damaged.emit(amount)
+	health_changed.emit(current_health, max_health)
+
+	if current_health <= 0:
+		_respawn_player()
+
+
+func _respawn_player() -> void:
+	current_health = max_health
+	velocity = Vector3.ZERO
+	_max_fall_speed = 0.0
+	var spawn_x: int = 8
+	var spawn_z: int = 8
+	var surface_y: int = 56
+	if _world_manager != null:
+		surface_y = _world_manager.get_surface_height_at(spawn_x, spawn_z)
+	global_position = Vector3(float(spawn_x) + 0.5, float(surface_y) + 2.5, float(spawn_z) + 0.5)
+	health_changed.emit(current_health, max_health)
+
+
+func _update_health_regen(delta: float) -> void:
+	if current_health >= max_health:
+		_regen_timer = 0.0
+		return
+	_regen_timer += delta
+	if _regen_timer >= regen_interval_seconds:
+		_regen_timer = 0.0
+		current_health = mini(max_health, current_health + 1)
+		health_changed.emit(current_health, max_health)
 
 
 func _update_water_submersion() -> void:
@@ -127,6 +202,8 @@ func _update_water_submersion() -> void:
 
 	if now_in_water != is_in_water:
 		is_in_water = now_in_water
+		if is_in_water:
+			_max_fall_speed = 0.0
 		water_state_changed.emit(is_in_water)
 
 
@@ -185,7 +262,6 @@ func _handle_swim_movement(delta: float) -> void:
 	elif Input.is_action_pressed("fly_down"):
 		velocity.y = move_toward(velocity.y, -swim_up_speed, 14.0 * delta)
 	else:
-		# Gentle sinking buoyancy in water
 		velocity.y = move_toward(velocity.y, -2.2, 6.5 * delta)
 
 
@@ -232,7 +308,7 @@ func _track_footsteps(delta: float) -> void:
 		step_taken.emit(is_in_water)
 
 
-func _update_camera_fov(delta: float) -> void:
+func _update_camera_fov_and_tilt(delta: float) -> void:
 	if not camera:
 		return
 	var is_moving_forward: bool = Input.is_action_pressed("move_forward")
@@ -246,8 +322,13 @@ func _update_camera_fov(delta: float) -> void:
 		target_fov = base_fov * sprint_fov_multiplier
 	camera.fov = lerpf(camera.fov, target_fov, fov_lerp_speed * delta)
 
+	if _hurt_roll > 0.001:
+		_hurt_roll = lerpf(_hurt_roll, 0.0, 10.0 * delta)
+		camera.rotation.z = _hurt_roll
+	else:
+		camera.rotation.z = 0.0
 
-## Programmatically ensures all required input actions exist even in a fresh project.godot.
+
 func _register_default_inputs() -> void:
 	_bind_key_action("move_forward", KEY_W)
 	_bind_key_action("move_backward", KEY_S)

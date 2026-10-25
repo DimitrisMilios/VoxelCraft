@@ -16,6 +16,7 @@ var _sfx_step: AudioStreamWAV = null
 var _sfx_swim: AudioStreamWAV = null
 var _sfx_jump: AudioStreamWAV = null
 var _sfx_tick: AudioStreamWAV = null
+var _sfx_hurt: AudioStreamWAV = null
 
 
 func _ready() -> void:
@@ -37,6 +38,7 @@ func _bind_signals() -> void:
 	player.step_taken.connect(_on_step_taken)
 	player.jumped.connect(_on_player_jumped)
 	player.water_state_changed.connect(_on_water_state_changed)
+	player.player_damaged.connect(_on_player_damaged)
 
 	var interactor := player.get_node_or_null("BlockInteractor") as BlockInteractor
 	if interactor != null:
@@ -58,6 +60,10 @@ func _on_player_jumped() -> void:
 
 func _on_water_state_changed(_in_water: bool) -> void:
 	_play_stream(_sfx_swim, -5.5, randf_range(0.82, 1.05))
+
+
+func _on_player_damaged(_amount: int) -> void:
+	_play_stream(_sfx_hurt, -3.5, randf_range(0.92, 1.06))
 
 
 func _on_block_broken(_world_pos: Vector3i, block_id: int) -> void:
@@ -141,6 +147,15 @@ func _synthesize_all_streams() -> void:
 	_sfx_tick = _build_wav(0.025, func(t: float, dur: float) -> float:
 		var env: float = pow(1.0 - (t / dur), 2.5)
 		return sin(t * 780.0 * TAU) * env * 0.5
+	)
+
+	# 7. Fall Damage Hurt Crunch (0.18s): Classic retro impact thud + pitch drop
+	_sfx_hurt = _build_wav(0.18, func(t: float, dur: float) -> float:
+		var env: float = pow(1.0 - (t / dur), 1.3)
+		var freq: float = lerpf(240.0, 82.0, t / dur)
+		var saw: float = (fmod(t * freq, 1.0) * 2.0 - 1.0) * 0.55
+		var crunch: float = rng.randf_range(-0.6, 0.6) * (1.0 if t < 0.05 else 0.25)
+		return (saw + crunch) * env * 0.85
 	)
 
 
