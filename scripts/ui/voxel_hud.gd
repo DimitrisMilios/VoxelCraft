@@ -29,6 +29,9 @@ var _hotbar_swatches: Array[ColorRect] = []
 var _hotbar_labels: Array[Label] = []
 var _hotbar_dur_bars: Array[ColorRect] = []
 var _heart_rects: Array[ColorRect] = []
+var _hunger_rects: Array[ColorRect] = []
+var _oxygen_rects: Array[ColorRect] = []
+var _oxygen_hbox: HBoxContainer = null
 
 var _debug_label: Label = null
 var _loot_label: Label = null
@@ -112,6 +115,8 @@ func _process(delta: float) -> void:
 
 	if _underwater_tint != null and _player != null:
 		_underwater_tint.visible = _player.is_head_underwater
+		if _oxygen_hbox != null:
+			_oxygen_hbox.visible = _player.is_head_underwater or (_player.current_oxygen < _player.max_oxygen)
 
 	if _modal_overlay != null:
 		_modal_overlay.visible = (_modal_mode != ModalMode.NONE)
@@ -169,8 +174,12 @@ func _bind_references() -> void:
 
 	if _player != null:
 		_player.health_changed.connect(_on_health_changed)
+		_player.hunger_changed.connect(_on_hunger_changed)
+		_player.oxygen_changed.connect(_on_oxygen_changed)
 		_player.player_damaged.connect(_on_player_damaged)
 		_on_health_changed(_player.current_health, _player.max_health)
+		_on_hunger_changed(_player.current_hunger, _player.max_hunger)
+		_on_oxygen_changed(_player.current_oxygen, _player.max_oxygen)
 
 		_interactor = _player.get_node_or_null("BlockInteractor") as BlockInteractor
 		if _interactor != null:
@@ -273,6 +282,28 @@ func _on_health_changed(current_hp: int, _max_hp: int) -> void:
 			_heart_rects[i].color = Color(0.18, 0.18, 0.22, 0.78)
 
 
+func _on_hunger_changed(current_hunger: int, _max_hunger: int) -> void:
+	var is_creative: bool = _player != null and _player.is_flying
+	for i in range(_hunger_rects.size()):
+		var food_pts: int = current_hunger - (i * 2)
+		if is_creative or food_pts >= 2:
+			_hunger_rects[i].color = Color(0.84, 0.52, 0.22, 0.96)
+		elif food_pts == 1:
+			_hunger_rects[i].color = Color(0.68, 0.42, 0.18, 0.92)
+		else:
+			_hunger_rects[i].color = Color(0.18, 0.18, 0.22, 0.78)
+
+
+func _on_oxygen_changed(current_oxygen: int, max_oxygen: int) -> void:
+	if _oxygen_hbox != null:
+		_oxygen_hbox.visible = (_player != null and _player.is_head_underwater) or (current_oxygen < max_oxygen)
+	for i in range(_oxygen_rects.size()):
+		if i < current_oxygen:
+			_oxygen_rects[i].color = Color(0.24, 0.82, 0.98, 0.95)
+		else:
+			_oxygen_rects[i].color = Color(0.12, 0.22, 0.34, 0.45)
+
+
 func _build_screen_tints() -> void:
 	_underwater_tint = ColorRect.new()
 	_underwater_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -366,11 +397,46 @@ func _build_bottom_hud() -> void:
 	_loot_label.visible = false
 	root_vbox.add_child(_loot_label)
 
+	# Underwater Oxygen Bubbles Bar (10 Bubbles)
+	_oxygen_hbox = HBoxContainer.new()
+	_oxygen_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	_oxygen_hbox.add_theme_constant_override("separation", 4)
+	_oxygen_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_oxygen_hbox.visible = false
+	root_vbox.add_child(_oxygen_hbox)
+
+	for i in range(10):
+		var b_frame := PanelContainer.new()
+		b_frame.custom_minimum_size = Vector2(14, 14)
+		b_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var b_style := StyleBoxFlat.new()
+		b_style.bg_color = Color(0.05, 0.14, 0.24, 0.85)
+		b_style.border_color = Color(0.18, 0.65, 0.92, 0.95)
+		b_style.set_border_width_all(1)
+		b_style.set_corner_radius_all(6)
+		b_frame.add_theme_stylebox_override("panel", b_style)
+
+		var b_fill := ColorRect.new()
+		b_fill.custom_minimum_size = Vector2(10, 10)
+		b_fill.color = Color(0.24, 0.82, 0.98, 0.95)
+		b_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b_frame.add_child(b_fill)
+
+		_oxygen_hbox.add_child(b_frame)
+		_oxygen_rects.append(b_fill)
+
+	# Status Row: Left = 10 Hearts (Health) | Right = 10 Drumsticks (Hunger)
+	var vitals_row := HBoxContainer.new()
+	vitals_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vitals_row.add_theme_constant_override("separation", 56)
+	vitals_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root_vbox.add_child(vitals_row)
+
 	var hearts_hbox := HBoxContainer.new()
 	hearts_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hearts_hbox.add_theme_constant_override("separation", 5)
+	hearts_hbox.add_theme_constant_override("separation", 4)
 	hearts_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root_vbox.add_child(hearts_hbox)
+	vitals_row.add_child(hearts_hbox)
 
 	for i in range(HEART_COUNT):
 		var heart_frame := PanelContainer.new()
@@ -391,6 +457,32 @@ func _build_bottom_hud() -> void:
 
 		hearts_hbox.add_child(heart_frame)
 		_heart_rects.append(heart_fill)
+
+	var hunger_hbox := HBoxContainer.new()
+	hunger_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hunger_hbox.add_theme_constant_override("separation", 4)
+	hunger_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vitals_row.add_child(hunger_hbox)
+
+	for i in range(HEART_COUNT):
+		var food_frame := PanelContainer.new()
+		food_frame.custom_minimum_size = Vector2(16, 16)
+		food_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var f_style := StyleBoxFlat.new()
+		f_style.bg_color = Color(0.10, 0.08, 0.06, 0.85)
+		f_style.border_color = Color(0.24, 0.16, 0.08, 0.95)
+		f_style.set_border_width_all(1)
+		f_style.set_corner_radius_all(3)
+		food_frame.add_theme_stylebox_override("panel", f_style)
+
+		var food_fill := ColorRect.new()
+		food_fill.custom_minimum_size = Vector2(12, 12)
+		food_fill.color = Color(0.84, 0.52, 0.22, 0.96)
+		food_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		food_frame.add_child(food_fill)
+
+		hunger_hbox.add_child(food_frame)
+		_hunger_rects.append(food_fill)
 
 	var hbox := HBoxContainer.new()
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -771,14 +863,18 @@ func _rebuild_recipe_book_buttons() -> void:
 		["crafting_table", "Crafting Table (4 Planks)"],
 		["glowstone", "4x Torches (1 Coal + 1 Stick)"],
 		["wood_pickaxe", "[3x3] Wood Pick (3 Plank+2 Stick)"],
+		["wood_sword", "[3x3] Wood Sword (2 Plank+1 Stick)"],
 		["wood_axe", "[3x3] Wood Axe (3 Plank+2 Stick)"],
 		["wood_shovel", "[3x3] Wood Shovel (1 Plank+2 Stick)"],
 		["furnace", "[3x3] Furnace Oven (8 Cobble)"],
 		["stone_pickaxe", "[3x3] Stone Pick (3 Cobble+2 Stick)"],
+		["stone_sword", "[3x3] Stone Sword (2 Cobble+1 Stick)"],
 		["stone_axe", "[3x3] Stone Axe (3 Cobble+2 Stick)"],
 		["iron_pickaxe", "[3x3] Iron Pick (3 Iron+2 Stick)"],
+		["iron_sword", "[3x3] Iron Sword (2 Iron+1 Stick)"],
 		["bucket", "[3x3] Iron Bucket (3 Iron V-Shape)"],
 		["diamond_pickaxe", "[3x3] Diamond Pick (3 Diam+2 Stick)"],
+		["diamond_sword", "[3x3] Diamond Sword (2 Diam+1 Stick)"],
 	]
 
 	for rec in recipes:

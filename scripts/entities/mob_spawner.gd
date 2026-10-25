@@ -1,15 +1,17 @@
 class_name MobSpawner
 extends Node3D
-## Spawns and maintains passive mobs around the player on solid voxel terrain.
+## Spawns and maintains passive mobs (Pig, Cow) during the day and
+## hostile monsters (Zombie, Skeleton, Creeper, Spider) at night around the player.
 
-@export var max_mobs: int = 8
-@export var min_spawn_radius: float = 8.0
-@export var max_spawn_radius: float = 28.0
-@export var despawn_distance: float = 52.0
-@export var spawn_interval: float = 2.0
+@export var max_mobs: int = 12
+@export var min_spawn_radius: float = 9.0
+@export var max_spawn_radius: float = 30.0
+@export var despawn_distance: float = 54.0
+@export var spawn_interval: float = 1.8
 
 var _world_manager: WorldManager = null
 var _player: Node3D = null
+var _day_night: DayNightCycle = null
 var _mobs: Array[PassiveMob] = []
 var _timer: float = 0.8
 
@@ -21,6 +23,7 @@ func _ready() -> void:
 func _initialize_references() -> void:
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
 	_player = get_tree().get_first_node_in_group("player") as Node3D
+	_day_night = get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle
 
 
 func _process(delta: float) -> void:
@@ -55,11 +58,29 @@ func _try_spawn_mob() -> void:
 
 	var surface_y: int = _world_manager.get_surface_height_at(wx, wz)
 	var ground_block: int = _world_manager.get_block_world(Vector3i(wx, surface_y, wz))
-	if ground_block != BlockRegistry.BlockId.GRASS:
+	if not BlockRegistry.is_solid(ground_block):
 		return
 
+	var is_night: bool = false
+	if _day_night != null:
+		is_night = (_day_night.time_of_day < 0.24 or _day_night.time_of_day > 0.76)
+
 	var mob := PassiveMob.new()
-	mob.variant = PassiveMob.MobVariant.PIG if (randf() < 0.55) else PassiveMob.MobVariant.COW
+	if is_night:
+		var roll: float = randf()
+		if roll < 0.34:
+			mob.variant = PassiveMob.MobVariant.ZOMBIE
+		elif roll < 0.60:
+			mob.variant = PassiveMob.MobVariant.SKELETON
+		elif roll < 0.82:
+			mob.variant = PassiveMob.MobVariant.CREEPER
+		else:
+			mob.variant = PassiveMob.MobVariant.SPIDER
+	else:
+		if ground_block != BlockRegistry.BlockId.GRASS:
+			return
+		mob.variant = PassiveMob.MobVariant.PIG if (randf() < 0.55) else PassiveMob.MobVariant.COW
+
 	add_child(mob)
 	mob.global_position = Vector3(float(wx) + 0.5, float(surface_y) + 1.2, float(wz) + 0.5)
 	_mobs.append(mob)

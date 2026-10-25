@@ -9,6 +9,8 @@ signal water_state_changed(is_in_water: bool)
 signal jumped()
 signal step_taken(is_in_water: bool)
 signal health_changed(current_hp: int, max_hp: int)
+signal hunger_changed(current_hunger: int, max_hunger: int)
+signal oxygen_changed(current_oxygen: int, max_oxygen: int)
 signal player_damaged(amount: int)
 
 # --- Exported Movement Tuning ---
@@ -30,8 +32,10 @@ signal player_damaged(amount: int)
 # --- Exported Survival Tuning ---
 @export_group("Survival")
 @export var max_health: int = 20
+@export var max_hunger: int = 20
+@export var max_oxygen: int = 10
 @export var fall_damage_threshold_speed: float = 12.2
-@export var regen_interval_seconds: float = 4.0
+@export var regen_interval_seconds: float = 3.6
 
 # --- Exported Camera Tuning ---
 @export_group("Camera")
@@ -50,6 +54,10 @@ var is_head_underwater: bool = false
 var water_submersion_depth: float = 0.0
 var water_flow_vector: Vector3 = Vector3.ZERO
 var current_health: int = 20
+var current_hunger: int = 20
+var current_oxygen: int = 10
+var custom_respawn_pos: Vector3 = Vector3.ZERO
+var has_custom_respawn: bool = false
 
 # --- Node References ---
 @onready var head: Node3D = $Head
@@ -62,11 +70,16 @@ var _step_distance_accum: float = 0.0
 var _max_fall_speed: float = 0.0
 var _was_on_floor: bool = true
 var _regen_timer: float = 0.0
+var _exhaustion: float = 0.0
+var _starve_timer: float = 0.0
+var _oxygen_timer: float = 0.0
 var _hurt_roll: float = 0.0
 
 
 func _ready() -> void:
 	current_health = max_health
+	current_hunger = max_hunger
+	current_oxygen = max_oxygen
 	_register_default_inputs()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	if camera:
@@ -77,6 +90,8 @@ func _ready() -> void:
 func _resolve_world_manager() -> void:
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
 	health_changed.emit(current_health, max_health)
+	hunger_changed.emit(current_hunger, max_hunger)
+	oxygen_changed.emit(current_oxygen, max_oxygen)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -144,9 +159,27 @@ func _physics_process(delta: float) -> void:
 	if global_position.y < -25.0:
 		take_damage(max_health)
 
+	_update_hunger_and_oxygen(delta)
 	_update_health_regen(delta)
 	_update_camera_fov_and_tilt(delta)
 	_track_footsteps(delta)
+
+
+func eat_food(nutrition: int) -> bool:
+	if nutrition <= 0:
+		return false
+	if current_hunger >= max_hunger and current_health >= max_health:
+		return false
+	current_hunger = mini(max_hunger, current_hunger + nutrition)
+	current_health = mini(max_health, current_health + 2)
+	hunger_changed.emit(current_hunger, max_hunger)
+	health_changed.emit(current_health, max_health)
+	return true
+
+
+func set_respawn_bed_position(bed_world_pos: Vector3) -> void:
+	custom_respawn_pos = bed_world_pos
+	has_custom_respawn = true
 
 
 func take_damage(amount: int) -> void:
@@ -164,25 +197,83 @@ func take_damage(amount: int) -> void:
 
 func _respawn_player() -> void:
 	current_health = max_health
+	current_hunger = max_hunger
+	current_oxygen = max_oxygen
 	velocity = Vector3.ZERO
 	_max_fall_speed = 0.0
-	var spawn_x: int = 8
-	var spawn_z: int = 8
-	var surface_y: int = 56
-	if _world_manager != null:
-		surface_y = _world_manager.get_surface_height_at(spawn_x, spawn_z)
-	global_position = Vector3(float(spawn_x) + 0.5, float(surface_y) + 2.5, float(spawn_z) + 0.5)
+	if has_custom_respawn:
+		global_position = custom_respawn_pos + Vector3(0.5, 1.5, 0.5)
+	else:
+		var spawn_x: int = 8
+		var spawn_z: int = 8
+		var surface_y: int = 56
+		if _world_manager != null:
+			surface_y = _world_manager.get_surface_height_at(spawn_x, spawn_z)
+		global_position = Vector3(float(spawn_x) + 0.5, float(surface_y) + 2.5, float(spawn_z) + 0.5)
 	health_changed.emit(current_health, max_health)
+	hunger_changed.emit(current_hunger, max_hunger)
+	oxygen_changed.emit(current_oxygen, max_oxygen)
+
+
+func _update_hunger_and_oxygen(delta: float) -> void:
+	if is_flying:
+		return
+
+	# 1. Underwater Oxygen Bubbles & Drowning
+	if is_head_underwater:
+		_oxygen_timer += delta
+		if current_oxygen > 0 and _oxygen_timer >= 1.5:
+			_oxygen_timer = 0.0
+			current_oxygen = maxi(0, current_oxygen - 1)
+			oxygen_changed.emit(current_oxygen, max_oxygen)
+		elif current_oxygen <= 0 and _oxygen_timer >= 1.2:
+			_oxygen_timer = 0.0
+			take_damage(2)
+	elif current_oxygen < max_oxygen:
+		_oxygen_timer += delta
+		if _oxygen_timer >= 0.25:
+			_oxygen_timer = 0.0
+			current_oxygen = mini(max_oxygen, current_oxygen + 1)
+			oxygen_changed.emit(current_oxygen, max_oxygen)
+	else:
+		_oxygen_timer = 0.0
+
+	# 2. Hunger Exhaustion Drain
+	var horiz_speed: float = Vector2(velocity.x, velocity.z).length()
+	if horiz_speed > 0.5:
+		if is_in_water:
+			_exhaustion += delta * 0.18
+		elif Input.is_action_pressed("sprint"):
+			_exhaustion += delta * 0.36
+		else:
+			_exhaustion += delta * 0.06
+
+	if _exhaustion >= 4.0:
+		_exhaustion -= 4.0
+		if current_hunger > 0:
+			current_hunger = maxi(0, current_hunger - 1)
+			hunger_changed.emit(current_hunger, max_hunger)
+
+	# 3. Starvation when Hunger == 0
+	if current_hunger <= 0:
+		_starve_timer += delta
+		if _starve_timer >= 4.5:
+			_starve_timer = 0.0
+			if current_health > 1:
+				take_damage(1)
+	else:
+		_starve_timer = 0.0
 
 
 func _update_health_regen(delta: float) -> void:
-	if current_health >= max_health:
+	if current_health >= max_health or current_hunger < 16:
 		_regen_timer = 0.0
 		return
 	_regen_timer += delta
 	if _regen_timer >= regen_interval_seconds:
 		_regen_timer = 0.0
 		current_health = mini(max_health, current_health + 1)
+		_exhaustion += 1.2
 		health_changed.emit(current_health, max_health)
 
 

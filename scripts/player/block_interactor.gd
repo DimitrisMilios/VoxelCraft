@@ -179,7 +179,12 @@ func _update_raycast_target() -> void:
 func _on_left_click_pressed() -> void:
 	if _targeted_mob != null and is_instance_valid(_targeted_mob):
 		var attacker_pos: Vector3 = _player_body.global_position if _player_body != null else global_position
-		_targeted_mob.on_hit_by_player(attacker_pos)
+		var equipped_id: int = get_selected_item_id()
+		var atk_dmg: int = InventoryManager.get_attack_damage(equipped_id)
+		_targeted_mob.on_hit_by_player(attacker_pos, atk_dmg)
+		if _inventory != null and (_player_body == null or not _player_body.is_flying) and InventoryManager.get_max_durability(equipped_id) > 0:
+			if _inventory.damage_hotbar_tool(selected_slot, 1):
+				loot_notification.emit("Your %s broke!" % InventoryManager.get_item_name(equipped_id))
 		mob_interacted.emit(true, int(_targeted_mob.variant))
 		return
 
@@ -270,6 +275,13 @@ func _complete_break_block() -> void:
 				drop_id,
 				1
 			)
+			if previous_id == BlockRegistry.BlockId.LEAVES and randf() < 0.25:
+				DroppedItem.spawn_drop(
+					_world_manager,
+					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
+					InventoryManager.ItemId.APPLE,
+					1
+				)
 		else:
 			loot_notification.emit("Broken! (Requires proper Pickaxe tier to harvest)")
 
@@ -320,6 +332,17 @@ func _try_interact_or_place_block() -> void:
 
 	var selected_item: int = get_selected_item_id()
 	var is_creative: bool = _player_body != null and _player_body.is_flying
+
+	# Eating Food Item on Right-Click
+	if InventoryManager.is_food_item(selected_item) and _player_body != null and _inventory != null:
+		var nutrition: int = InventoryManager.get_food_nutrition(selected_item)
+		if _player_body.eat_food(nutrition):
+			_inventory.consume_from_hotbar_slot(selected_slot, 1)
+			loot_notification.emit("Ate %s (+%d Hunger)" % [InventoryManager.get_item_name(selected_item), nutrition])
+			mob_interacted.emit(false, 0)
+		else:
+			loot_notification.emit("Hunger & Health are already full!")
+		return
 
 	# Empty Bucket: Ray-step along look direction to scoop up a Water Source block
 	if selected_item == InventoryManager.ItemId.BUCKET and _raycast != null:

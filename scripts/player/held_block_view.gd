@@ -17,6 +17,7 @@ var _hand_root: Node3D = null
 var _pickaxe_root: Node3D = null
 var _axe_root: Node3D = null
 var _shovel_root: Node3D = null
+var _sword_root: Node3D = null
 var _item_bar_mesh: MeshInstance3D = null
 var _tool_head_mat: StandardMaterial3D = null
 var _item_bar_mat: StandardMaterial3D = null
@@ -108,6 +109,7 @@ func _update_held_visual(item_id: int) -> void:
 	_pickaxe_root.visible = false
 	_axe_root.visible = false
 	_shovel_root.visible = false
+	_sword_root.visible = false
 	_item_bar_mesh.visible = false
 
 	if item_id <= 0:
@@ -124,6 +126,8 @@ func _update_held_visual(item_id: int) -> void:
 				_axe_root.visible = true
 			InventoryManager.ToolCategory.SHOVEL:
 				_shovel_root.visible = true
+			InventoryManager.ToolCategory.SWORD:
+				_sword_root.visible = true
 		return
 
 	if InventoryManager.is_placeable_block(item_id):
@@ -194,6 +198,15 @@ func _build_all_viewmodels() -> void:
 	add_child(_shovel_root)
 	_shovel_root.add_child(_make_part(Vector3(0.045, 0.34, 0.045), handle_mat, Vector3.ZERO))
 	_shovel_root.add_child(_make_part(Vector3(0.13, 0.15, 0.04), _tool_head_mat, Vector3(0.0, 0.18, 0.0)))
+
+	# 5. Sword Viewmodel
+	_sword_root = Node3D.new()
+	_sword_root.name = "SwordModel"
+	_sword_root.rotation = Vector3(deg_to_rad(-22.0), deg_to_rad(35.0), deg_to_rad(-8.0))
+	add_child(_sword_root)
+	_sword_root.add_child(_make_part(Vector3(0.045, 0.16, 0.045), handle_mat, Vector3(0.0, -0.10, 0.0)))
+	_sword_root.add_child(_make_part(Vector3(0.18, 0.045, 0.055), handle_mat, Vector3(0.0, -0.02, 0.0)))
+	_sword_root.add_child(_make_part(Vector3(0.085, 0.30, 0.035), _tool_head_mat, Vector3(0.0, 0.14, 0.0)))
 
 	# 5. Held Resource Item (Ingot / Coal / Stick / Diamond)
 	_item_bar_mat = StandardMaterial3D.new()

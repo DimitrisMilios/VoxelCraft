@@ -24,6 +24,13 @@ enum ItemId {
 	DIAMOND = 106,
 	BUCKET = 107,
 	WATER_BUCKET = 108,
+	RAW_PORKCHOP = 110,
+	COOKED_PORKCHOP = 111,
+	RAW_BEEF = 112,
+	STEAK = 113,
+	APPLE = 114,
+	ROTTEN_FLESH = 115,
+	GUNPOWDER = 116,
 
 	# Pickaxes (201..204)
 	WOOD_PICKAXE = 201,
@@ -42,6 +49,12 @@ enum ItemId {
 	STONE_SHOVEL = 222,
 	IRON_SHOVEL = 223,
 	DIAMOND_SHOVEL = 224,
+
+	# Swords (231..234)
+	WOOD_SWORD = 231,
+	STONE_SWORD = 232,
+	IRON_SWORD = 233,
+	DIAMOND_SWORD = 234,
 }
 
 enum ToolCategory {
@@ -49,6 +62,7 @@ enum ToolCategory {
 	PICKAXE = 1,
 	AXE = 2,
 	SHOVEL = 3,
+	SWORD = 4,
 }
 
 ## 36 inventory slots (`0..8` hotbar, `9..35` main inventory). Each slot is `{"id": int, "count": int}`.
@@ -119,7 +133,35 @@ func return_crafting_grid_to_inventory() -> void:
 # ============================================================================
 
 static func is_tool_item(item_id: int) -> bool:
-	return (item_id >= ItemId.WOOD_PICKAXE and item_id <= ItemId.DIAMOND_SHOVEL) or item_id == ItemId.WATER_BUCKET
+	return (item_id >= ItemId.WOOD_PICKAXE and item_id <= ItemId.DIAMOND_SWORD) or item_id == ItemId.WATER_BUCKET
+
+
+static func is_food_item(item_id: int) -> bool:
+	return item_id >= ItemId.RAW_PORKCHOP and item_id <= ItemId.ROTTEN_FLESH
+
+
+static func get_food_nutrition(item_id: int) -> int:
+	match item_id:
+		ItemId.COOKED_PORKCHOP, ItemId.STEAK:
+			return 8
+		ItemId.APPLE:
+			return 4
+		ItemId.RAW_PORKCHOP, ItemId.RAW_BEEF:
+			return 3
+		ItemId.ROTTEN_FLESH:
+			return 2
+		_:
+			return 0
+
+
+static func get_attack_damage(item_id: int) -> int:
+	var cat: int = get_tool_category(item_id)
+	var tier: int = get_tool_tier(item_id)
+	if cat == ToolCategory.SWORD:
+		return 3 + tier # Wood=4, Stone=5, Iron=6, Diamond=7
+	if cat != ToolCategory.NONE:
+		return 1 + tier
+	return 2 # Bare fist
 
 
 static func is_placeable_block(item_id: int) -> bool:
@@ -133,19 +175,21 @@ static func get_tool_category(item_id: int) -> int:
 		return ToolCategory.AXE
 	if item_id >= ItemId.WOOD_SHOVEL and item_id <= ItemId.DIAMOND_SHOVEL:
 		return ToolCategory.SHOVEL
+	if item_id >= ItemId.WOOD_SWORD and item_id <= ItemId.DIAMOND_SWORD:
+		return ToolCategory.SWORD
 	return ToolCategory.NONE
 
 
 ## Returns tool tier: 0 = Hand/None, 1 = Wood, 2 = Stone, 3 = Iron, 4 = Diamond.
 static func get_tool_tier(item_id: int) -> int:
 	match item_id:
-		ItemId.WOOD_PICKAXE, ItemId.WOOD_AXE, ItemId.WOOD_SHOVEL:
+		ItemId.WOOD_PICKAXE, ItemId.WOOD_AXE, ItemId.WOOD_SHOVEL, ItemId.WOOD_SWORD:
 			return 1
-		ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL:
+		ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL, ItemId.STONE_SWORD:
 			return 2
-		ItemId.IRON_PICKAXE, ItemId.IRON_AXE, ItemId.IRON_SHOVEL:
+		ItemId.IRON_PICKAXE, ItemId.IRON_AXE, ItemId.IRON_SHOVEL, ItemId.IRON_SWORD:
 			return 3
-		ItemId.DIAMOND_PICKAXE, ItemId.DIAMOND_AXE, ItemId.DIAMOND_SHOVEL:
+		ItemId.DIAMOND_PICKAXE, ItemId.DIAMOND_AXE, ItemId.DIAMOND_SHOVEL, ItemId.DIAMOND_SWORD:
 			return 4
 		_:
 			return 0
@@ -269,6 +313,20 @@ static func get_item_name(item_id: int) -> String:
 			return "Iron Bucket"
 		ItemId.WATER_BUCKET:
 			return "Water Bucket"
+		ItemId.RAW_PORKCHOP:
+			return "Raw Porkchop"
+		ItemId.COOKED_PORKCHOP:
+			return "Cooked Porkchop"
+		ItemId.RAW_BEEF:
+			return "Raw Beef"
+		ItemId.STEAK:
+			return "Steak"
+		ItemId.APPLE:
+			return "Red Apple"
+		ItemId.ROTTEN_FLESH:
+			return "Rotten Flesh"
+		ItemId.GUNPOWDER:
+			return "Gunpowder"
 		ItemId.WOOD_PICKAXE:
 			return "Wooden Pickaxe"
 		ItemId.STONE_PICKAXE:
@@ -293,6 +351,14 @@ static func get_item_name(item_id: int) -> String:
 			return "Iron Shovel"
 		ItemId.DIAMOND_SHOVEL:
 			return "Diamond Shovel"
+		ItemId.WOOD_SWORD:
+			return "Wooden Sword"
+		ItemId.STONE_SWORD:
+			return "Stone Sword"
+		ItemId.IRON_SWORD:
+			return "Iron Sword"
+		ItemId.DIAMOND_SWORD:
+			return "Diamond Sword"
 		_:
 			return BlockRegistry.get_block_name(item_id)
 
@@ -319,6 +385,20 @@ static func get_item_short_label(item_id: int) -> String:
 			return "Bucket"
 		ItemId.WATER_BUCKET:
 			return "WtrBkt"
+		ItemId.RAW_PORKCHOP:
+			return "RawPrk"
+		ItemId.COOKED_PORKCHOP:
+			return "Pork"
+		ItemId.RAW_BEEF:
+			return "RawBf"
+		ItemId.STEAK:
+			return "Steak"
+		ItemId.APPLE:
+			return "Apple"
+		ItemId.ROTTEN_FLESH:
+			return "Flesh"
+		ItemId.GUNPOWDER:
+			return "Gunpwd"
 		ItemId.WOOD_PICKAXE:
 			return "W-Pick"
 		ItemId.STONE_PICKAXE:
@@ -343,6 +423,14 @@ static func get_item_short_label(item_id: int) -> String:
 			return "I-Shvl"
 		ItemId.DIAMOND_SHOVEL:
 			return "D-Shvl"
+		ItemId.WOOD_SWORD:
+			return "W-Swrd"
+		ItemId.STONE_SWORD:
+			return "S-Swrd"
+		ItemId.IRON_SWORD:
+			return "I-Swrd"
+		ItemId.DIAMOND_SWORD:
+			return "D-Swrd"
 		_:
 			return BlockRegistry.get_block_name(item_id).substr(0, 6)
 
@@ -369,13 +457,27 @@ static func get_item_color(item_id: int) -> Color:
 			return Color(0.76, 0.80, 0.86)
 		ItemId.WATER_BUCKET:
 			return Color(0.22, 0.56, 0.96)
-		ItemId.WOOD_PICKAXE, ItemId.WOOD_AXE, ItemId.WOOD_SHOVEL:
+		ItemId.RAW_PORKCHOP:
+			return Color(0.94, 0.58, 0.60)
+		ItemId.COOKED_PORKCHOP:
+			return Color(0.76, 0.48, 0.26)
+		ItemId.RAW_BEEF:
+			return Color(0.82, 0.24, 0.24)
+		ItemId.STEAK:
+			return Color(0.52, 0.28, 0.16)
+		ItemId.APPLE:
+			return Color(0.92, 0.18, 0.20)
+		ItemId.ROTTEN_FLESH:
+			return Color(0.54, 0.34, 0.24)
+		ItemId.GUNPOWDER:
+			return Color(0.36, 0.36, 0.38)
+		ItemId.WOOD_PICKAXE, ItemId.WOOD_AXE, ItemId.WOOD_SHOVEL, ItemId.WOOD_SWORD:
 			return Color(0.68, 0.50, 0.28)
-		ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL:
+		ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL, ItemId.STONE_SWORD:
 			return Color(0.56, 0.58, 0.62)
-		ItemId.IRON_PICKAXE, ItemId.IRON_AXE, ItemId.IRON_SHOVEL:
+		ItemId.IRON_PICKAXE, ItemId.IRON_AXE, ItemId.IRON_SHOVEL, ItemId.IRON_SWORD:
 			return Color(0.88, 0.90, 0.95)
-		ItemId.DIAMOND_PICKAXE, ItemId.DIAMOND_AXE, ItemId.DIAMOND_SHOVEL:
+		ItemId.DIAMOND_PICKAXE, ItemId.DIAMOND_AXE, ItemId.DIAMOND_SHOVEL, ItemId.DIAMOND_SWORD:
 			return Color(0.26, 0.94, 0.96)
 		_:
 			return BlockRegistry.get_block_color(item_id)
@@ -762,7 +864,7 @@ func _match_crafting_grid() -> Dictionary:
 		if pattern == [D, D, D, 0, S, 0, 0, S, 0]:
 			return {"id": ItemId.DIAMOND_PICKAXE, "count": 1}
 
-	# 5. Shovels: 1x3 Vertical [M, S, S]
+	# 5. Shovels & Swords: 1x3 Vertical [M, S, S] or [M, M, S]
 	if box_w == 1 and box_h == 3:
 		if pattern == [P, S, S]:
 			return {"id": ItemId.WOOD_SHOVEL, "count": 1}
@@ -772,6 +874,14 @@ func _match_crafting_grid() -> Dictionary:
 			return {"id": ItemId.IRON_SHOVEL, "count": 1}
 		if pattern == [D, S, S]:
 			return {"id": ItemId.DIAMOND_SHOVEL, "count": 1}
+		if pattern == [P, P, S]:
+			return {"id": ItemId.WOOD_SWORD, "count": 1}
+		if pattern == [C, C, S]:
+			return {"id": ItemId.STONE_SWORD, "count": 1}
+		if pattern == [FE, FE, S]:
+			return {"id": ItemId.IRON_SWORD, "count": 1}
+		if pattern == [D, D, S]:
+			return {"id": ItemId.DIAMOND_SWORD, "count": 1}
 
 	# 6. Axes: 2x3 [M, M, M, S, 0, S] or mirrored [M, M, S, M, S, 0]
 	if box_w == 2 and box_h == 3:
@@ -850,6 +960,18 @@ func autofill_recipe_pattern(recipe_key: String) -> String:
 		"bucket":
 			requires_3x3 = true
 			target_grid = [FE, 0, FE, 0, FE, 0, 0, 0, 0]
+		"wood_sword":
+			requires_3x3 = true
+			target_grid = [0, P, 0, 0, P, 0, 0, S, 0]
+		"stone_sword":
+			requires_3x3 = true
+			target_grid = [0, C, 0, 0, C, 0, 0, S, 0]
+		"iron_sword":
+			requires_3x3 = true
+			target_grid = [0, FE, 0, 0, FE, 0, 0, S, 0]
+		"diamond_sword":
+			requires_3x3 = true
+			target_grid = [0, D, 0, 0, D, 0, 0, S, 0]
 
 	if requires_3x3 and craft_grid_size < 3:
 		return "Place & Right-Click a Crafting Table for 3x3 recipes!"
@@ -936,6 +1058,10 @@ static func _get_smelt_result(input_id: int) -> int:
 			return ItemId.IRON_INGOT
 		ItemId.RAW_GOLD, BlockRegistry.BlockId.GOLD_ORE:
 			return ItemId.GOLD_INGOT
+		ItemId.RAW_PORKCHOP:
+			return ItemId.COOKED_PORKCHOP
+		ItemId.RAW_BEEF:
+			return ItemId.STEAK
 		BlockRegistry.BlockId.COBBLESTONE:
 			return BlockRegistry.BlockId.STONE
 		BlockRegistry.BlockId.WOOD_LOG:
