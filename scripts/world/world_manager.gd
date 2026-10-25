@@ -325,18 +325,18 @@ func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
 		false
 	)
 
-	chunk.rebuild_mesh()
+	chunk.rebuild_at_local_y(world_block_pos.y)
 
-	# If on a chunk boundary, rebuild adjacent neighbor chunk so newly exposed/occluded border faces update
+	# If on a chunk boundary, rebuild only the affected vertical sub-chunk on the adjacent neighbor
 	if lx == 0 and _active_chunks.has(chunk_coord + Vector2i(-1, 0)):
-		(_active_chunks[chunk_coord + Vector2i(-1, 0)] as VoxelChunk).rebuild_mesh()
+		(_active_chunks[chunk_coord + Vector2i(-1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 	elif lx == VoxelChunk.CHUNK_SIZE_X - 1 and _active_chunks.has(chunk_coord + Vector2i(1, 0)):
-		(_active_chunks[chunk_coord + Vector2i(1, 0)] as VoxelChunk).rebuild_mesh()
+		(_active_chunks[chunk_coord + Vector2i(1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 
 	if lz == 0 and _active_chunks.has(chunk_coord + Vector2i(0, -1)):
-		(_active_chunks[chunk_coord + Vector2i(0, -1)] as VoxelChunk).rebuild_mesh()
+		(_active_chunks[chunk_coord + Vector2i(0, -1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 	elif lz == VoxelChunk.CHUNK_SIZE_Z - 1 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
-		(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_mesh()
+		(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 
 	return true
 

@@ -1,13 +1,13 @@
 class_name VoxelChunk
 extends StaticBody3D
-## Represents a single 16 x 256 x 16 voxel chunk.
-## Supports both synchronous and WorkerThreadPool background terrain/mesh generation,
-## dual-pass rendering (opaque solid blocks + translucent water pass),
-## cross-chunk neighbor face culling, and dirty-state tracking for persistence.
+## Represents a single 16 x 256 x 16 voxel chunk partitioned into sixteen 16 x 16 x 16
+## vertical sub-chunks for fast localized remeshing on block break/place.
 
 const CHUNK_SIZE_X: int = 16
 const CHUNK_SIZE_Y: int = 256
 const CHUNK_SIZE_Z: int = 16
+const SUB_CHUNK_HEIGHT: int = 16
+const SUB_CHUNK_COUNT: int = 16 # 256 / 16
 const SEA_LEVEL: int = 48
 const WATER_LEVEL: int = 45
 
@@ -25,9 +25,9 @@ var neighbor_block_getter: Callable = Callable()
 var _voxels: PackedByteArray = PackedByteArray()
 var _highest_solid_y: int = 0
 
-var _mesh_instance: MeshInstance3D = null
-var _water_mesh_instance: MeshInstance3D = null
-var _collision_shape: CollisionShape3D = null
+var _sub_solid_meshes: Array[MeshInstance3D] = []
+var _sub_water_meshes: Array[MeshInstance3D] = []
+var _sub_colliders: Array[CollisionShape3D] = []
 
 
 func _ready() -> void:
@@ -37,21 +37,30 @@ func _ready() -> void:
 
 
 func _ensure_child_nodes() -> void:
-	if _mesh_instance == null:
-		_mesh_instance = MeshInstance3D.new()
-		_mesh_instance.name = "ChunkMesh"
-		_mesh_instance.material_override = VoxelAtlasBuilder.get_shared_voxel_material()
-		add_child(_mesh_instance)
-	if _water_mesh_instance == null:
-		_water_mesh_instance = MeshInstance3D.new()
-		_water_mesh_instance.name = "WaterMesh"
-		_water_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_water_mesh_instance.material_override = VoxelAtlasBuilder.get_shared_water_material()
-		add_child(_water_mesh_instance)
-	if _collision_shape == null:
-		_collision_shape = CollisionShape3D.new()
-		_collision_shape.name = "ChunkCollision"
-		add_child(_collision_shape)
+	if not _sub_solid_meshes.is_empty():
+		return
+
+	var solid_mat: StandardMaterial3D = VoxelAtlasBuilder.get_shared_voxel_material()
+	var water_mat: StandardMaterial3D = VoxelAtlasBuilder.get_shared_water_material()
+
+	for sub_idx in range(SUB_CHUNK_COUNT):
+		var solid_mi := MeshInstance3D.new()
+		solid_mi.name = "SubMesh_%d" % sub_idx
+		solid_mi.material_override = solid_mat
+		add_child(solid_mi)
+		_sub_solid_meshes.append(solid_mi)
+
+		var water_mi := MeshInstance3D.new()
+		water_mi.name = "SubWater_%d" % sub_idx
+		water_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		water_mi.material_override = water_mat
+		add_child(water_mi)
+		_sub_water_meshes.append(water_mi)
+
+		var col := CollisionShape3D.new()
+		col.name = "SubCol_%d" % sub_idx
+		add_child(col)
+		_sub_colliders.append(col)
 
 
 ## Restores voxel data directly from a saved persistence buffer.
@@ -152,11 +161,9 @@ func _place_tree(lx: int, base_y: int, lz: int) -> void:
 	if base_y + trunk_height + 2 >= CHUNK_SIZE_Y:
 		return
 
-	# Vertical wood log trunk
 	for ty in range(base_y, base_y + trunk_height):
 		_set_voxel_raw(lx, ty, lz, BlockRegistry.BlockId.WOOD_LOG)
 
-	# Leaf canopy
 	var canopy_base: int = base_y + trunk_height - 2
 	var canopy_top: int = base_y + trunk_height + 1
 	for cy in range(canopy_base, canopy_top + 1):
@@ -174,20 +181,34 @@ func _place_tree(lx: int, base_y: int, lz: int) -> void:
 		_highest_solid_y = canopy_top
 
 
-## Thread-safe dual mesh (solid + translucent water) and trimesh collision builder.
-## Returns `{ "mesh": ArrayMesh, "water_mesh": ArrayMesh, "shape": ConcavePolygonShape3D }`.
+## Thread-safe builder for all 16 vertical sub-chunks. Can be called from WorkerThreadPool.
 func build_mesh_data() -> Dictionary:
+	var sub_results: Array[Dictionary] = []
+	var max_sub_idx: int = mini(_highest_solid_y / SUB_CHUNK_HEIGHT, SUB_CHUNK_COUNT - 1)
+
+	for sub_idx in range(SUB_CHUNK_COUNT):
+		if sub_idx <= max_sub_idx:
+			sub_results.append(_build_single_sub_chunk_data(sub_idx))
+		else:
+			sub_results.append({"mesh": null, "water_mesh": null, "shape": null})
+
+	return {"sub_chunks": sub_results}
+
+
+## Builds solid mesh, water mesh, and trimesh collision for a single 16x16x16 vertical slice.
+func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 	var st_solid := SurfaceTool.new()
 	st_solid.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var st_water := SurfaceTool.new()
 	st_water.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	var max_y_to_scan: int = mini(_highest_solid_y + 1, CHUNK_SIZE_Y)
+	var y_start: int = sub_idx * SUB_CHUNK_HEIGHT
+	var y_end: int = mini(y_start + SUB_CHUNK_HEIGHT, CHUNK_SIZE_Y)
 	var solid_faces: int = 0
 	var water_faces: int = 0
 
-	for ly in range(max_y_to_scan):
+	for ly in range(y_start, y_end):
 		for lx in range(CHUNK_SIZE_X):
 			for lz in range(CHUNK_SIZE_Z):
 				var block_id: int = get_block_local(lx, ly, lz)
@@ -195,7 +216,6 @@ func build_mesh_data() -> Dictionary:
 					continue
 
 				if block_id == BlockRegistry.BlockId.WATER:
-					# Emit water faces only when bordering AIR
 					if _get_neighbor_id(lx, ly + 1, lz) == BlockRegistry.BlockId.AIR:
 						_emit_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP)
 						water_faces += 1
@@ -216,7 +236,6 @@ func build_mesh_data() -> Dictionary:
 						water_faces += 1
 					continue
 
-				# Solid block: emit faces when neighbor is not solid (i.e. AIR or WATER)
 				if not _is_neighbor_solid(lx, ly + 1, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
 					solid_faces += 1
@@ -247,15 +266,34 @@ func build_mesh_data() -> Dictionary:
 	}
 
 
-## Applies prebuilt solid mesh, water mesh, and collision shape resources on the main thread.
+## Applies prebuilt sub-chunk meshes and collision shapes on the main thread.
 func apply_mesh_data(mesh_data: Dictionary) -> void:
 	_ensure_child_nodes()
-	_mesh_instance.mesh = mesh_data.get("mesh", null) as ArrayMesh
-	_water_mesh_instance.mesh = mesh_data.get("water_mesh", null) as ArrayMesh
-	_collision_shape.shape = mesh_data.get("shape", null) as Shape3D
+	var sub_chunks: Array = mesh_data.get("sub_chunks", [])
+	for sub_idx in range(mini(sub_chunks.size(), SUB_CHUNK_COUNT)):
+		_apply_single_sub_chunk(sub_idx, sub_chunks[sub_idx])
 
 
-## Synchronous convenience method for immediate main-thread block breaking/placing updates.
+func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:
+	_sub_solid_meshes[sub_idx].mesh = sub_data.get("mesh", null) as ArrayMesh
+	_sub_water_meshes[sub_idx].mesh = sub_data.get("water_mesh", null) as ArrayMesh
+	_sub_colliders[sub_idx].shape = sub_data.get("shape", null) as Shape3D
+
+
+## Rebuilds only the 16x16x16 vertical sub-chunk containing `ly` (and vertical neighbor if on a 16-block seam).
+func rebuild_at_local_y(ly: int) -> void:
+	_ensure_child_nodes()
+	var sub_idx: int = clampi(ly / SUB_CHUNK_HEIGHT, 0, SUB_CHUNK_COUNT - 1)
+	_apply_single_sub_chunk(sub_idx, _build_single_sub_chunk_data(sub_idx))
+
+	var local_sub_y: int = ly % SUB_CHUNK_HEIGHT
+	if local_sub_y == 0 and sub_idx > 0:
+		_apply_single_sub_chunk(sub_idx - 1, _build_single_sub_chunk_data(sub_idx - 1))
+	elif local_sub_y == SUB_CHUNK_HEIGHT - 1 and sub_idx < SUB_CHUNK_COUNT - 1:
+		_apply_single_sub_chunk(sub_idx + 1, _build_single_sub_chunk_data(sub_idx + 1))
+
+
+## Full chunk synchronous rebuild.
 func rebuild_mesh() -> void:
 	var mesh_data: Dictionary = build_mesh_data()
 	apply_mesh_data(mesh_data)
@@ -283,7 +321,7 @@ func _is_neighbor_solid(lx: int, ly: int, lz: int) -> bool:
 
 func _emit_water_face(st: SurfaceTool, lx: int, ly: int, lz: int, face_dir: int) -> void:
 	var origin := Vector3(float(lx), float(ly), float(lz))
-	var top_h: float = 0.88 # Slightly recessed water surface for classic shoreline look
+	var top_h: float = 0.88
 	var verts: Array[Vector3]
 	var normal: Vector3
 	var shade: float = 1.0
@@ -492,7 +530,7 @@ func set_block_local(lx: int, ly: int, lz: int, block_id: int, immediate_rebuild
 	if block_id != BlockRegistry.BlockId.AIR and ly > _highest_solid_y:
 		_highest_solid_y = ly
 	if immediate_rebuild:
-		rebuild_mesh()
+		rebuild_at_local_y(ly)
 
 
 func _set_voxel_raw(lx: int, ly: int, lz: int, block_id: int) -> void:
