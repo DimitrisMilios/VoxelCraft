@@ -343,6 +343,9 @@ func _try_interact_or_place_block() -> void:
 		if _player_body.eat_food(nutrition):
 			_inventory.consume_from_hotbar_slot(selected_slot, 1)
 			loot_notification.emit("Ate %s (+%d Hunger)" % [InventoryManager.get_item_name(selected_item), nutrition])
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+			if sfx != null and sfx.has_method("play_sfx"):
+				sfx.play_sfx("eat", -2.0)
 			mob_interacted.emit(false, 0)
 		else:
 			loot_notification.emit("Hunger & Health are already full!")

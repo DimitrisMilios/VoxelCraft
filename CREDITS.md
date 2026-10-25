@@ -27,6 +27,16 @@ Asset extraction and composition is automated via [`tools/build_faithful_64x_ass
 
 ---
 
+## 🔊 Sound Pack
+
+- **Project:** Sound Pack for Minetest
+- **Author:** Jordan Irwin (AntumDeluge) & Contributors
+- **License:** MIT License (full text in [`assets/audio/LICENSE.txt`](assets/audio/LICENSE.txt))
+- **Audio Sources & Licensing:** Creative Commons (CC0, CC-BY 3.0, CC-BY 4.0, MIT) - detailed in [`assets/audio/sources.md`](assets/audio/sources.md)
+- **Included Sounds:** Material footsteps (grass, dirt, stone, wood, sand, snow, gravel, water), block dig/break/place effects, mob sounds (zombie, skeleton, creeper, spider, cow, pig), player damage/eating/jumping, tool breaking, door/chest opening/closing, explosions, and environmental ambiance.
+
+---
+
 ## ⚙️ Godot Engine
 
 - **Project:** [Godot Engine](https://godotengine.org)

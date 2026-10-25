@@ -169,6 +169,9 @@ func _collect_into_inventory() -> void:
 	if _inventory != null:
 		if _inventory.add_item(item_id, count, durability):
 			_collected = true
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+			if sfx != null and sfx.has_method("play_sfx"):
+				sfx.play_sfx("item_pickup", -4.0, 1.15)
 			if _player != null:
 				var interactor := _player.get_node_or_null("BlockInteractor") as BlockInteractor
 				if interactor != null:

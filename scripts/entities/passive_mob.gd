@@ -41,6 +41,7 @@ var _hurt_flash_timer: float = 0.0
 var _attack_cooldown: float = 0.0
 var _creeper_fuse: float = 0.0
 var _sun_burn_timer: float = 0.0
+var _ambient_sound_timer: float = randf_range(3.0, 8.0)
 
 var _visual_root: Node3D = null
 var _legs: Array[Node3D] = []
@@ -113,6 +114,11 @@ func _physics_process(delta: float) -> void:
 		if _state_timer <= 0.0:
 			_pick_next_state()
 
+	_ambient_sound_timer -= delta
+	if _ambient_sound_timer <= 0.0:
+		_ambient_sound_timer = randf_range(5.0, 12.0)
+		_play_ambient_vocal()
+
 	if _state == MobState.WANDER or _state == MobState.PANIC or _state == MobState.CHASE:
 		var active_speed: float = move_speed
 		if _state == MobState.PANIC:
@@ -173,6 +179,10 @@ func _process_hostile_ai(delta: float) -> void:
 
 		if variant == MobVariant.CREEPER:
 			if dist <= 2.8:
+				if _creeper_fuse == 0.0:
+					var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+					if sfx != null and sfx.has_method("play_sfx_at_pos"):
+						sfx.play_sfx_at_pos("creeper_fuse", global_position, 0.0)
 				_creeper_fuse += delta
 				var flash: bool = (int(_creeper_fuse * 10.0) % 2 == 0)
 				if _mob_mat != null:
@@ -206,6 +216,11 @@ func _process_hostile_ai(delta: float) -> void:
 
 
 func _trigger_creeper_explosion() -> void:
+	if get_tree() != null:
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			sfx.play_sfx_at_pos("creeper_explode", global_position, 4.0, 1.0, 48.0)
+
 	if _world_manager != null:
 		var center := Vector3i(floori(global_position.x), floori(global_position.y + 0.5), floori(global_position.z))
 		for dy in range(-2, 3):
@@ -253,11 +268,38 @@ func on_hit_by_player(attacker_pos: Vector3, damage: int = 2) -> void:
 	if _mob_mat != null:
 		_mob_mat.albedo_color = Color(1.0, 0.32, 0.32)
 
+	if get_tree() != null:
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			var hurt_sfx := ""
+			match variant:
+				MobVariant.ZOMBIE: hurt_sfx = "zombie_hurt"
+				MobVariant.SKELETON: hurt_sfx = "skeleton_hurt"
+				MobVariant.CREEPER: hurt_sfx = "creeper_fuse"
+				MobVariant.COW: hurt_sfx = "cow_hurt"
+				MobVariant.PIG: hurt_sfx = "pig_hurt"
+				MobVariant.SPIDER: hurt_sfx = "spider_hurt"
+			if not hurt_sfx.is_empty():
+				sfx.play_sfx_at_pos(hurt_sfx, current_pos, 1.0)
+
 	if health <= 0:
 		_die_and_drop_loot()
 
 
 func _die_and_drop_loot() -> void:
+	if get_tree() != null:
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			var death_sfx := ""
+			match variant:
+				MobVariant.ZOMBIE: death_sfx = "zombie_death"
+				MobVariant.SKELETON: death_sfx = "skeleton_death"
+				MobVariant.PIG: death_sfx = "pig_hurt"
+				MobVariant.COW: death_sfx = "cow_hurt"
+				MobVariant.SPIDER: death_sfx = "spider_hurt"
+			if not death_sfx.is_empty():
+				sfx.play_sfx_at_pos(death_sfx, global_position if is_inside_tree() else position, 2.0)
+
 	if _world_manager != null:
 		var drop_id: int = 0
 		var drop_cnt: int = randi_range(1, 2)
@@ -283,6 +325,23 @@ func _die_and_drop_loot() -> void:
 				drop_cnt
 			)
 	queue_free()
+
+
+func _play_ambient_vocal() -> void:
+	if get_tree() == null:
+		return
+	var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+	if sfx == null or not sfx.has_method("play_sfx_at_pos"):
+		return
+	var sfx_name := ""
+	match variant:
+		MobVariant.ZOMBIE: sfx_name = "zombie_ambient"
+		MobVariant.SKELETON: sfx_name = "skeleton_ambient"
+		MobVariant.COW: sfx_name = "cow_ambient"
+		MobVariant.PIG: sfx_name = "pig_ambient"
+		MobVariant.SPIDER: sfx_name = "spider_ambient"
+	if not sfx_name.is_empty():
+		sfx.play_sfx_at_pos(sfx_name, global_position if is_inside_tree() else position, -1.5, 1.0, 24.0)
 
 
 ## Called when the player right-clicks this mob. Faces the player, hops happily, and emits heart particles.

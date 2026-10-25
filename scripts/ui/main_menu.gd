@@ -34,6 +34,21 @@ var _world_seed_input: LineEdit = null
 var _render_dist_label: Label = null
 var _render_dist_slider: HSlider = null
 
+var _click_player: AudioStreamPlayer = null
+
+
+func _play_ui_click() -> void:
+	if _click_player == null:
+		_click_player = AudioStreamPlayer.new()
+		_click_player.volume_db = -4.0
+		var path := "res://assets/audio/sounds/sounds_node_step_hard.1.ogg"
+		if FileAccess.file_exists(path):
+			_click_player.stream = AudioStreamOggVorbis.load_from_file(path)
+		add_child(_click_player)
+	if _click_player.stream != null:
+		_click_player.pitch_scale = randf_range(0.95, 1.05)
+		_click_player.play()
+
 
 func _ready() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
@@ -105,6 +120,7 @@ func _style_faithful_button(btn: Button) -> void:
 	btn.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	btn.add_theme_constant_override("shadow_offset_x", 1)
 	btn.add_theme_constant_override("shadow_offset_y", 1)
+	btn.pressed.connect(_play_ui_click)
 
 
 func _style_panel_box(panel: PanelContainer) -> void:

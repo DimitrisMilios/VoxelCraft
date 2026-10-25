@@ -783,6 +783,11 @@ func ignite_tnt_at(world_block_pos: Vector3i) -> void:
 		return
 	set_block_world(world_block_pos, BlockRegistry.BlockId.AIR)
 
+	var sound_pos := Vector3(world_block_pos) + Vector3(0.5, 0.5, 0.5)
+	var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
+	if sfx != null and sfx.has_method("play_sfx_at_pos"):
+		sfx.play_sfx_at_pos("fuse", sound_pos, 2.0, 1.0, 36.0)
+
 	var tnt_mi := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3(0.96, 0.96, 0.96)
@@ -790,7 +795,7 @@ func ignite_tnt_at(world_block_pos: Vector3i) -> void:
 	mat.albedo_color = Color(1.0, 0.25, 0.20)
 	box.material = mat
 	tnt_mi.mesh = box
-	tnt_mi.position = Vector3(world_block_pos) + Vector3(0.5, 0.5, 0.5)
+	tnt_mi.position = sound_pos
 	add_child(tnt_mi)
 
 	var tw: Tween = create_tween()
@@ -803,6 +808,11 @@ func ignite_tnt_at(world_block_pos: Vector3i) -> void:
 func _detonate_tnt_at(center: Vector3i, visual_node: Node3D) -> void:
 	if is_instance_valid(visual_node):
 		visual_node.queue_free()
+
+	var det_pos := Vector3(center) + Vector3(0.5, 0.5, 0.5)
+	var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
+	if sfx != null and sfx.has_method("play_sfx_at_pos"):
+		sfx.play_sfx_at_pos("explosion", det_pos, 5.0, 1.0, 60.0)
 
 	for dy in range(-3, 4):
 		for dx in range(-3, 4):

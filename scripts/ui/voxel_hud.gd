@@ -1013,6 +1013,7 @@ func _create_interactive_slot_widget(w: float, h: float, on_click: Callable, is_
 	panel.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed:
 			if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
+				_play_ui_click()
 				on_click.call(event.button_index)
 	)
 
@@ -1063,6 +1064,7 @@ func _rebuild_recipe_book_buttons() -> void:
 		btn.custom_minimum_size = Vector2(0, 28)
 		btn.add_theme_font_size_override("font_size", 11)
 		btn.pressed.connect(func() -> void:
+			_play_ui_click()
 			if _inventory != null:
 				var msg: String = _inventory.autofill_recipe_pattern(r_key)
 				_modal_feedback_label.text = msg
@@ -1288,6 +1290,15 @@ func _apply_faithful_button_style(btn: Button) -> void:
 	btn.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	btn.add_theme_constant_override("shadow_offset_x", 1)
 	btn.add_theme_constant_override("shadow_offset_y", 1)
+	btn.pressed.connect(_play_ui_click)
+
+
+func _play_ui_click() -> void:
+	if get_tree() == null:
+		return
+	var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+	if sfx != null and sfx.has_method("play_sfx"):
+		sfx.play_sfx("slot_tick", -2.0)
 
 
 func _build_pause_menu() -> void:
