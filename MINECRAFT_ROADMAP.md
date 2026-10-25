@@ -2,8 +2,8 @@
 
 This document defines the complete, step-by-step engineering specification to transform **VoxelCraft** into an authentic Minecraft experience across **3 Major Phases**:
 
-1. **Phase 1: Core Minecraft Gameplay Mechanics & World Structures** *(Starting with Step 1.1: Authentic Sloped & Finite Flowing Water + Buoyancy)*
-2. **Phase 2: Blender-Rendered Minecraft UI, HUD & 3D Item Icon Overhaul**
+1. **Phase 1: Core Minecraft Gameplay Mechanics & World Structures** — **✅ COMPLETED (`Steps 1.1 – 1.5`)**
+2. **Phase 2: Blender-Rendered Minecraft UI, HUD & 3D Item Icon Overhaul** *(Next Up)*
 3. **Phase 3: Blender-Baked Block & Material Texture Atlas Overhaul**
 
 > **Blender 5.2 Automated Pipeline:** We have detected **`C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`** on your system. All UI panels, recessed slots, HUD status icons (Hearts, Hunger Drumsticks, Oxygen Bubbles), 3D Isometric Block/Tool Icons, and the entire Block Texture Atlas will be generated and rendered using **headless Blender Python scripts (`tools/blender/*.py`)** with studio lighting, orthographic cameras, Cycles/EEVEE baking, and saved as crisp `res://assets/` PNG textures!

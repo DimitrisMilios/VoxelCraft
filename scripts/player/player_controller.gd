@@ -274,6 +274,16 @@ func _update_hunger_and_oxygen(delta: float) -> void:
 	else:
 		_starve_timer = 0.0
 
+	# 4. Cactus Contact Prick Damage
+	if _world_manager != null and is_on_wall():
+		var waist_y: int = floori(global_position.y + 0.7)
+		var dirs: Array[Vector2] = [Vector2(0.45, 0.0), Vector2(-0.45, 0.0), Vector2(0.0, 0.45), Vector2(0.0, -0.45)]
+		for d in dirs:
+			var check_p := Vector3i(floori(global_position.x + d.x), waist_y, floori(global_position.z + d.y))
+			if _world_manager.get_block_world(check_p) == BlockRegistry.BlockId.CACTUS:
+				take_damage(1)
+				break
+
 
 func _update_health_regen(delta: float) -> void:
 	if current_health >= max_health or current_hunger < 16:

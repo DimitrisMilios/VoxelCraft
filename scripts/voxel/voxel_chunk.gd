@@ -11,11 +11,21 @@ const SUB_CHUNK_COUNT: int = 16 # 256 / 16
 const SEA_LEVEL: int = 48
 const WATER_LEVEL: int = 45
 
+enum Biome {
+	PLAINS = 0,
+	FOREST = 1,
+	DESERT = 2,
+	SNOWY_TAIGA = 3,
+}
+
 ## Coordinate of this chunk in chunk-grid space (e.g., Vector2i(0, 0), Vector2i(1, -2)).
 var chunk_coords: Vector2i = Vector2i.ZERO
 
 ## True if the player has broken or placed at least one block in this chunk.
 var is_dirty: bool = false
+
+## World positions of any Loot Chests generated in this chunk's structures.
+var generated_loot_chests: Array[Vector3i] = []
 
 ## Optional thread-safe callback `(world_pos: Vector3i) -> int` provided by WorldManager
 ## for seamless cross-chunk border face culling.
@@ -105,14 +115,33 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			if top_y > _highest_solid_y:
 				_highest_solid_y = top_y
 
-			# Deterministic tree placement on Grass or Alpine Snow above water level
+			# Deterministic tree or desert cactus placement above water level
 			if surface_y > WATER_LEVEL + 1 and lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
 				var surface_id: int = get_block_local(lx, surface_y, lz)
-				if _should_spawn_tree(wx, wz) and (surface_id == BlockRegistry.BlockId.GRASS or surface_id == BlockRegistry.BlockId.SNOW):
-					if surface_y >= SEA_LEVEL + 4:
+				var biome: int = sample_biome(wx, wz)
+				if biome == Biome.DESERT and surface_id == BlockRegistry.BlockId.SAND:
+					if _should_spawn_tree(wx, wz):
+						_place_cactus(lx, surface_y + 1, lz)
+				elif _should_spawn_tree(wx, wz) and (surface_id == BlockRegistry.BlockId.GRASS or surface_id == BlockRegistry.BlockId.SNOW):
+					if biome == Biome.SNOWY_TAIGA or surface_y >= SEA_LEVEL + 4:
 						_place_pine_tree(lx, surface_y + 1, lz)
 					else:
 						_place_tree(lx, surface_y + 1, lz)
+
+	_generate_chunk_structures(surface_noise)
+
+
+## Deterministic 2D climate biome sampler (Plains, Forest, Desert, Snowy Taiga).
+static func sample_biome(wx: int, wz: int) -> int:
+	var temp: float = sin(float(wx) * 0.0085 + cos(float(wz) * 0.0065) * 1.4) + cos(float(wz) * 0.0075)
+	var humid: float = cos(float(wx) * 0.0072 - float(wz) * 0.0080)
+	if temp > 0.68:
+		return Biome.DESERT
+	if temp < -0.72:
+		return Biome.SNOWY_TAIGA
+	if humid > 0.25:
+		return Biome.FOREST
+	return Biome.PLAINS
 
 
 ## Deterministic heightmap helper shared with WorldManager for cross-chunk border culling.
@@ -149,11 +178,19 @@ static func sample_terrain_voxel(
 	# Low-lying basins and shorelines near/below water level generate sandy beaches
 	if surface_y <= WATER_LEVEL + 1 and ly >= surface_y - 2:
 		return BlockRegistry.BlockId.SAND
-	# High alpine mountain peaks generate snow caps over rocky stone
-	if surface_y >= SEA_LEVEL + 8:
+
+	var biome: int = sample_biome(wx, wz)
+	if biome == Biome.DESERT and surface_y > WATER_LEVEL:
+		if ly == surface_y or ly == surface_y - 1:
+			return BlockRegistry.BlockId.SAND
+		if ly >= surface_y - 4:
+			return BlockRegistry.BlockId.SANDSTONE
+
+	# High alpine mountain peaks or Snowy Taiga biome generate snow caps
+	if surface_y >= SEA_LEVEL + 8 or (biome == Biome.SNOWY_TAIGA and surface_y > WATER_LEVEL + 1):
 		if ly == surface_y:
 			return BlockRegistry.BlockId.SNOW
-		if ly >= surface_y - 2:
+		if ly >= surface_y - 2 and surface_y >= SEA_LEVEL + 8:
 			return BlockRegistry.BlockId.STONE
 	if ly == surface_y:
 		return BlockRegistry.BlockId.GRASS
@@ -251,6 +288,168 @@ func _place_pine_tree(lx: int, base_y: int, lz: int) -> void:
 		_set_voxel_raw(lx, spire_y, lz, BlockRegistry.BlockId.SNOW)
 	if spire_y > _highest_solid_y:
 		_highest_solid_y = spire_y
+
+
+func _place_cactus(lx: int, base_y: int, lz: int) -> void:
+	var cactus_height: int = 3
+	if base_y + cactus_height >= CHUNK_SIZE_Y:
+		return
+	for cy in range(base_y, base_y + cactus_height):
+		_set_voxel_raw(lx, cy, lz, BlockRegistry.BlockId.CACTUS)
+	if base_y + cactus_height > _highest_solid_y:
+		_highest_solid_y = base_y + cactus_height
+
+
+## Deterministically builds Plains Village Houses, Desert Pyramids, and Underground Mossy Dungeons.
+func _generate_chunk_structures(surface_noise: FastNoiseLite) -> void:
+	var cx: int = chunk_coords.x
+	var cz: int = chunk_coords.y
+	var chunk_hash: int = absi((cx * 73856093) ^ (cz * 19349663))
+
+	# 1. Underground Mossy Cobblestone Dungeon (spawns at y = 20..25 in ~14% of chunks)
+	if chunk_hash % 7 == 0:
+		var d_y: int = 20 + (chunk_hash % 5)
+		_build_underground_dungeon(5, d_y, 5, chunk_hash)
+
+	# 2. Surface Structures (Plains Village Cottage or Desert Sandstone Pyramid)
+	var center_wx: int = cx * CHUNK_SIZE_X + 8
+	var center_wz: int = cz * CHUNK_SIZE_Z + 8
+	var center_y: int = sample_surface_height(surface_noise, center_wx, center_wz)
+	if center_y <= WATER_LEVEL + 1 or center_y >= SEA_LEVEL + 7:
+		return
+
+	var biome: int = sample_biome(center_wx, center_wz)
+	if biome == Biome.PLAINS and chunk_hash % 9 == 0:
+		_build_village_house(4, center_y, 4, chunk_hash)
+	elif biome == Biome.DESERT and chunk_hash % 8 == 0:
+		_build_desert_pyramid(3, center_y, 3, chunk_hash)
+
+
+func _build_underground_dungeon(ox: int, oy: int, oz: int, seed_val: int) -> void:
+	var world_origin_x: int = chunk_coords.x * CHUNK_SIZE_X
+	var world_origin_z: int = chunk_coords.y * CHUNK_SIZE_Z
+	for dx in range(7):
+		for dy in range(5):
+			for dz in range(7):
+				var lx: int = ox + dx
+				var ly: int = oy + dy
+				var lz: int = oz + dz
+				if not is_in_bounds(lx, ly, lz):
+					continue
+				var is_shell: bool = (dx == 0 or dx == 6 or dy == 0 or dy == 4 or dz == 0 or dz == 6)
+				if is_shell:
+					var mossy: bool = ((dx * 17 + dy * 31 + dz * 13 + seed_val) % 3) != 0
+					_set_voxel_raw(
+						lx,
+						ly,
+						lz,
+						BlockRegistry.BlockId.MOSSY_COBBLE if mossy else BlockRegistry.BlockId.COBBLESTONE
+					)
+				else:
+					_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.AIR)
+
+	# Central torch & loot chest inside dungeon
+	if is_in_bounds(ox + 3, oy + 1, oz + 3):
+		_set_voxel_raw(ox + 3, oy + 1, oz + 3, BlockRegistry.BlockId.TORCH)
+	if is_in_bounds(ox + 1, oy + 1, oz + 3):
+		_set_voxel_raw(ox + 1, oy + 1, oz + 3, BlockRegistry.BlockId.CHEST)
+		generated_loot_chests.append(Vector3i(world_origin_x + ox + 1, oy + 1, world_origin_z + oz + 3))
+
+
+func _build_village_house(ox: int, base_y: int, oz: int, _seed_val: int) -> void:
+	var world_origin_x: int = chunk_coords.x * CHUNK_SIZE_X
+	var world_origin_z: int = chunk_coords.y * CHUNK_SIZE_Z
+	if base_y + 7 >= CHUNK_SIZE_Y:
+		return
+
+	# Cobblestone foundation & leveling down 2 blocks
+	for dx in range(7):
+		for dz in range(7):
+			for fy in range(base_y - 2, base_y + 1):
+				if is_in_bounds(ox + dx, fy, oz + dz):
+					_set_voxel_raw(ox + dx, fy, oz + dz, BlockRegistry.BlockId.COBBLESTONE)
+
+	# Walls & interior
+	for dy in range(1, 5):
+		var ly: int = base_y + dy
+		for dx in range(7):
+			for dz in range(7):
+				var lx: int = ox + dx
+				var lz: int = oz + dz
+				if not is_in_bounds(lx, ly, lz):
+					continue
+				var is_corner: bool = (dx == 0 or dx == 6) and (dz == 0 or dz == 6)
+				var is_wall: bool = (dx == 0 or dx == 6 or dz == 0 or dz == 6)
+				if is_corner:
+					_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.WOOD_LOG)
+				elif is_wall:
+					# Front door at (dx=3, dz=0, dy=1..2)
+					if dx == 3 and dz == 0 and (dy == 1 or dy == 2):
+						_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.DOOR_CLOSED)
+					elif dy == 4:
+						_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.WOOD_LOG)
+					else:
+						_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.WOOD_PLANKS)
+				else:
+					_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.AIR)
+
+	# Stepped wooden roof
+	for dx in range(7):
+		for dz in range(7):
+			if is_in_bounds(ox + dx, base_y + 5, oz + dz):
+				_set_voxel_raw(ox + dx, base_y + 5, oz + dz, BlockRegistry.BlockId.WOOD_PLANKS)
+
+	# Interior furnishings: Torch, Crafting Table, Bed, and Village Loot Chest
+	_set_voxel_raw(ox + 3, base_y + 1, oz + 3, BlockRegistry.BlockId.TORCH)
+	_set_voxel_raw(ox + 1, base_y + 1, oz + 5, BlockRegistry.BlockId.CRAFTING_TABLE)
+	_set_voxel_raw(ox + 5, base_y + 1, oz + 5, BlockRegistry.BlockId.BED)
+	_set_voxel_raw(ox + 1, base_y + 1, oz + 1, BlockRegistry.BlockId.CHEST)
+	generated_loot_chests.append(Vector3i(world_origin_x + ox + 1, base_y + 1, world_origin_z + oz + 1))
+
+	if base_y + 6 > _highest_solid_y:
+		_highest_solid_y = base_y + 6
+
+
+func _build_desert_pyramid(ox: int, base_y: int, oz: int, _seed_val: int) -> void:
+	var world_origin_x: int = chunk_coords.x * CHUNK_SIZE_X
+	var world_origin_z: int = chunk_coords.y * CHUNK_SIZE_Z
+	if base_y + 7 >= CHUNK_SIZE_Y:
+		return
+
+	# Sandstone base platform
+	for dx in range(9):
+		for dz in range(9):
+			for fy in range(base_y - 2, base_y + 1):
+				if is_in_bounds(ox + dx, fy, oz + dz):
+					_set_voxel_raw(ox + dx, fy, oz + dz, BlockRegistry.BlockId.SANDSTONE)
+
+	# Stepped pyramid layers (5 tiers from 9x9 down to 1x1)
+	for tier in range(5):
+		var ly: int = base_y + 1 + tier
+		for dx in range(tier, 9 - tier):
+			for dz in range(tier, 9 - tier):
+				var lx: int = ox + dx
+				var lz: int = oz + dz
+				if not is_in_bounds(lx, ly, lz):
+					continue
+				var is_outer: bool = (dx == tier or dx == 8 - tier or dz == tier or dz == 8 - tier)
+				if tier <= 2 and not is_outer:
+					_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.AIR)
+				else:
+					_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.SANDSTONE)
+
+	# Front entrance archway
+	_set_voxel_raw(ox + 4, base_y + 1, oz, BlockRegistry.BlockId.AIR)
+	_set_voxel_raw(ox + 4, base_y + 2, oz, BlockRegistry.BlockId.AIR)
+
+	# Interior Torch, TNT trap block, and Pharaoh Loot Chest
+	_set_voxel_raw(ox + 4, base_y + 1, oz + 3, BlockRegistry.BlockId.TORCH)
+	_set_voxel_raw(ox + 4, base_y + 1, oz + 5, BlockRegistry.BlockId.TNT)
+	_set_voxel_raw(ox + 4, base_y + 1, oz + 6, BlockRegistry.BlockId.CHEST)
+	generated_loot_chests.append(Vector3i(world_origin_x + ox + 4, base_y + 1, world_origin_z + oz + 6))
+
+	if base_y + 6 > _highest_solid_y:
+		_highest_solid_y = base_y + 6
 
 
 ## Thread-safe builder for all 16 vertical sub-chunks. Can be called from WorkerThreadPool.
@@ -394,6 +593,13 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 	for sub_idx in range(mini(sub_chunks.size(), SUB_CHUNK_COUNT)):
 		_apply_single_sub_chunk(sub_idx, sub_chunks[sub_idx])
 	_sync_all_light_emitters()
+	if not generated_loot_chests.is_empty() and is_inside_tree():
+		var inv := get_tree().get_first_node_in_group("inventory_manager") as InventoryManager
+		if inv != null:
+			for chest_pos in generated_loot_chests:
+				var seed_val: int = absi((chest_pos.x * 73856093) ^ (chest_pos.y * 19349663) ^ (chest_pos.z * 83492791))
+				inv.populate_loot_chest_at(chest_pos, seed_val)
+			generated_loot_chests.clear()
 
 
 func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:
