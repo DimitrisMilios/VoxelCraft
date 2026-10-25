@@ -14,13 +14,9 @@ var _player: PlayerController = null
 var _interactor: BlockInteractor = null
 var _mesh_instance: MeshInstance3D = null
 var _hand_root: Node3D = null
-var _pickaxe_root: Node3D = null
-var _axe_root: Node3D = null
-var _shovel_root: Node3D = null
-var _sword_root: Node3D = null
-var _item_bar_mesh: MeshInstance3D = null
-var _tool_head_mat: StandardMaterial3D = null
-var _item_bar_mat: StandardMaterial3D = null
+var _held_item_root: Node3D = null
+var _held_item_mesh: MeshInstance3D = null
+var _held_item_mat: StandardMaterial3D = null
 var _viewmodel_material: StandardMaterial3D = null
 
 var _bob_time: float = 0.0
@@ -106,28 +102,10 @@ func _on_action_swing(_world_pos: Vector3i, _block_id: int) -> void:
 func _update_held_visual(item_id: int) -> void:
 	_mesh_instance.visible = false
 	_hand_root.visible = false
-	_pickaxe_root.visible = false
-	_axe_root.visible = false
-	_shovel_root.visible = false
-	_sword_root.visible = false
-	_item_bar_mesh.visible = false
+	_held_item_root.visible = false
 
 	if item_id <= 0:
 		_hand_root.visible = true
-		return
-
-	var tool_cat: int = InventoryManager.get_tool_category(item_id)
-	if tool_cat != InventoryManager.ToolCategory.NONE:
-		_tool_head_mat.albedo_color = InventoryManager.get_item_color(item_id)
-		match tool_cat:
-			InventoryManager.ToolCategory.PICKAXE:
-				_pickaxe_root.visible = true
-			InventoryManager.ToolCategory.AXE:
-				_axe_root.visible = true
-			InventoryManager.ToolCategory.SHOVEL:
-				_shovel_root.visible = true
-			InventoryManager.ToolCategory.SWORD:
-				_sword_root.visible = true
 		return
 
 	if InventoryManager.is_placeable_block(item_id):
@@ -135,85 +113,57 @@ func _update_held_visual(item_id: int) -> void:
 		_rebuild_held_cube_mesh(item_id)
 		return
 
-	# Non-block resource item (Stick, Coal, Raw Iron, Ingot, Diamond)
-	_item_bar_mat.albedo_color = InventoryManager.get_item_color(item_id)
-	_item_bar_mesh.visible = true
+	# Held Tool, Weapon, Food, Ingot, or Resource Item (Textured with Faithful 64x)
+	var icon_tex: Texture2D = InventoryManager.get_item_icon_texture(item_id)
+	if icon_tex != null and _held_item_mat != null:
+		_held_item_mat.albedo_texture = icon_tex
+		_held_item_root.visible = true
+	else:
+		_mesh_instance.visible = true
+		_rebuild_held_cube_mesh(item_id)
 
 
 func _build_all_viewmodels() -> void:
-	var handle_mat := StandardMaterial3D.new()
-	handle_mat.albedo_color = Color(0.55, 0.38, 0.20)
-	handle_mat.no_depth_test = true
-	handle_mat.render_priority = 10
-
-	_tool_head_mat = StandardMaterial3D.new()
-	_tool_head_mat.albedo_color = Color(0.68, 0.50, 0.28)
-	_tool_head_mat.no_depth_test = true
-	_tool_head_mat.render_priority = 10
-
-	# 1. Empty Right Arm/Hand (Classic Minecraft blocky arm)
+	# 1. Empty Right Arm/Hand (Classic Minecraft Steve arm textured with Faithful 64x)
 	_hand_root = Node3D.new()
 	_hand_root.name = "RightArmModel"
 	_hand_root.rotation = Vector3(deg_to_rad(52.0), deg_to_rad(18.0), deg_to_rad(-12.0))
 	add_child(_hand_root)
 
-	var skin_mat := StandardMaterial3D.new()
-	skin_mat.albedo_color = Color(0.88, 0.68, 0.54)
-	skin_mat.no_depth_test = true
-	skin_mat.render_priority = 10
+	var steve_img: Image = TexturePack.load_image("res://assets/textures/entity/steve.png")
+	var steve_mat := StandardMaterial3D.new()
+	if steve_img != null:
+		steve_mat.albedo_texture = ImageTexture.create_from_image(steve_img)
+		steve_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	else:
+		steve_mat.albedo_color = Color(0.88, 0.68, 0.54)
+	steve_mat.no_depth_test = true
+	steve_mat.render_priority = 10
 
-	var sleeve_mat := StandardMaterial3D.new()
-	sleeve_mat.albedo_color = Color(0.22, 0.56, 0.78)
-	sleeve_mat.no_depth_test = true
-	sleeve_mat.render_priority = 10
-
-	var forearm := _make_part(Vector3(0.13, 0.26, 0.13), skin_mat, Vector3(0.0, 0.04, 0.0))
-	var sleeve := _make_part(Vector3(0.14, 0.16, 0.14), sleeve_mat, Vector3(0.0, -0.14, 0.0))
+	var forearm := _make_part(Vector3(0.13, 0.26, 0.13), steve_mat, Vector3(0.0, 0.04, 0.0))
 	_hand_root.add_child(forearm)
-	_hand_root.add_child(sleeve)
 
-	# 2. Pickaxe Viewmodel
-	_pickaxe_root = Node3D.new()
-	_pickaxe_root.name = "PickaxeModel"
-	_pickaxe_root.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), deg_to_rad(-10.0))
-	add_child(_pickaxe_root)
-	_pickaxe_root.add_child(_make_part(Vector3(0.045, 0.36, 0.045), handle_mat, Vector3.ZERO))
-	_pickaxe_root.add_child(_make_part(Vector3(0.28, 0.065, 0.06), _tool_head_mat, Vector3(0.0, 0.14, 0.0)))
-	for side in [-1.0, 1.0]:
-		_pickaxe_root.add_child(_make_part(Vector3(0.055, 0.075, 0.055), _tool_head_mat, Vector3(side * 0.12, 0.10, 0.0)))
+	# 2. 3D Faithful 64x Held Tool / Item (Double-Sided Textured In-Hand Viewmodel)
+	_held_item_root = Node3D.new()
+	_held_item_root.name = "HeldItemRoot"
+	_held_item_root.position = Vector3(0.04, 0.04, 0.02)
+	_held_item_root.rotation = Vector3(deg_to_rad(-18.0), deg_to_rad(45.0), deg_to_rad(-24.0))
+	add_child(_held_item_root)
 
-	# 3. Axe Viewmodel
-	_axe_root = Node3D.new()
-	_axe_root.name = "AxeModel"
-	_axe_root.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), deg_to_rad(-10.0))
-	add_child(_axe_root)
-	_axe_root.add_child(_make_part(Vector3(0.045, 0.36, 0.045), handle_mat, Vector3.ZERO))
-	_axe_root.add_child(_make_part(Vector3(0.16, 0.14, 0.055), _tool_head_mat, Vector3(-0.06, 0.11, 0.0)))
-	_axe_root.add_child(_make_part(Vector3(0.06, 0.18, 0.045), _tool_head_mat, Vector3(-0.13, 0.09, 0.0)))
+	_held_item_mat = StandardMaterial3D.new()
+	_held_item_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_held_item_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_held_item_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	_held_item_mat.no_depth_test = true
+	_held_item_mat.render_priority = 10
 
-	# 4. Shovel Viewmodel
-	_shovel_root = Node3D.new()
-	_shovel_root.name = "ShovelModel"
-	_shovel_root.rotation = Vector3(deg_to_rad(-15.0), deg_to_rad(35.0), deg_to_rad(-10.0))
-	add_child(_shovel_root)
-	_shovel_root.add_child(_make_part(Vector3(0.045, 0.34, 0.045), handle_mat, Vector3.ZERO))
-	_shovel_root.add_child(_make_part(Vector3(0.13, 0.15, 0.04), _tool_head_mat, Vector3(0.0, 0.18, 0.0)))
-
-	# 5. Sword Viewmodel
-	_sword_root = Node3D.new()
-	_sword_root.name = "SwordModel"
-	_sword_root.rotation = Vector3(deg_to_rad(-22.0), deg_to_rad(35.0), deg_to_rad(-8.0))
-	add_child(_sword_root)
-	_sword_root.add_child(_make_part(Vector3(0.045, 0.16, 0.045), handle_mat, Vector3(0.0, -0.10, 0.0)))
-	_sword_root.add_child(_make_part(Vector3(0.18, 0.045, 0.055), handle_mat, Vector3(0.0, -0.02, 0.0)))
-	_sword_root.add_child(_make_part(Vector3(0.085, 0.30, 0.035), _tool_head_mat, Vector3(0.0, 0.14, 0.0)))
-
-	# 5. Held Resource Item (Ingot / Coal / Stick / Diamond)
-	_item_bar_mat = StandardMaterial3D.new()
-	_item_bar_mat.no_depth_test = true
-	_item_bar_mat.render_priority = 10
-	_item_bar_mesh = _make_part(Vector3(0.16, 0.16, 0.08), _item_bar_mat, Vector3.ZERO)
-	add_child(_item_bar_mesh)
+	var quad_mesh := QuadMesh.new()
+	quad_mesh.size = Vector2(0.42, 0.42)
+	_held_item_mesh = MeshInstance3D.new()
+	_held_item_mesh.mesh = quad_mesh
+	_held_item_mesh.material_override = _held_item_mat
+	_held_item_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_held_item_root.add_child(_held_item_mesh)
 
 
 func _make_part(size: Vector3, mat: Material, pos: Vector3) -> MeshInstance3D:

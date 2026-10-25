@@ -21,6 +21,8 @@ var time_of_day: float:
 
 var _sun_light: DirectionalLight3D = null
 var _world_env: WorldEnvironment = null
+var _sun_mesh: MeshInstance3D = null
+var _moon_mesh: MeshInstance3D = null
 
 
 func _ready() -> void:
@@ -28,7 +30,45 @@ func _ready() -> void:
 	current_hour = start_hour
 	_sun_light = get_node_or_null(sun_light_path) as DirectionalLight3D
 	_world_env = get_node_or_null(world_env_path) as WorldEnvironment
+	_build_celestial_bodies()
 	_apply_lighting(current_hour)
+
+
+func _build_celestial_bodies() -> void:
+	if _sun_light == null:
+		return
+	var sun_img: Image = TexturePack.load_image("res://assets/textures/environment/sun.png")
+	if sun_img != null:
+		var sun_mat := StandardMaterial3D.new()
+		sun_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		sun_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		sun_mat.albedo_texture = ImageTexture.create_from_image(sun_img)
+		sun_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		_sun_mesh = MeshInstance3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(26.0, 26.0)
+		_sun_mesh.mesh = q
+		_sun_mesh.material_override = sun_mat
+		_sun_mesh.position = Vector3(0.0, 0.0, -180.0)
+		_sun_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_sun_light.add_child(_sun_mesh)
+
+	var moon_img: Image = TexturePack.load_image("res://assets/textures/environment/moon.png")
+	if moon_img != null:
+		var moon_mat := StandardMaterial3D.new()
+		moon_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		moon_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		moon_mat.albedo_texture = ImageTexture.create_from_image(moon_img)
+		moon_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		_moon_mesh = MeshInstance3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(24.0, 24.0)
+		_moon_mesh.mesh = q
+		_moon_mesh.material_override = moon_mat
+		_moon_mesh.position = Vector3(0.0, 0.0, 180.0)
+		_moon_mesh.rotation = Vector3(0.0, PI, 0.0)
+		_moon_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_sun_light.add_child(_moon_mesh)
 
 
 func _unhandled_input(event: InputEvent) -> void:

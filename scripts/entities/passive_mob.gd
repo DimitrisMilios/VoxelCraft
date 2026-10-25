@@ -403,6 +403,33 @@ func _build_voxel_model() -> void:
 	_accent_mat.albedo_color = _accent_color
 	_accent_mat.roughness = 0.9
 
+	# Load Authentic Faithful 64x Mob Texture
+	var mob_tex_path: String = ""
+	match variant:
+		MobVariant.ZOMBIE:
+			mob_tex_path = "res://assets/textures/entity/zombie.png"
+		MobVariant.SKELETON:
+			mob_tex_path = "res://assets/textures/entity/skeleton.png"
+		MobVariant.CREEPER:
+			mob_tex_path = "res://assets/textures/entity/creeper.png"
+		MobVariant.SPIDER:
+			mob_tex_path = "res://assets/textures/entity/spider.png"
+		MobVariant.COW:
+			mob_tex_path = "res://assets/textures/entity/cow.png"
+		MobVariant.PIG:
+			mob_tex_path = "res://assets/textures/entity/pig.png"
+
+	if not mob_tex_path.is_empty():
+		var mob_img: Image = TexturePack.load_image(mob_tex_path)
+		if mob_img != null:
+			var mob_tex := ImageTexture.create_from_image(mob_img)
+			_body_mat.albedo_texture = mob_tex
+			_body_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+			_body_mat.albedo_color = Color.WHITE
+			_accent_mat.albedo_texture = mob_tex
+			_accent_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+			_accent_mat.albedo_color = Color.WHITE
+
 	var eye_mat := StandardMaterial3D.new()
 	eye_mat.albedo_color = Color(0.95, 0.12, 0.12) if variant == MobVariant.SPIDER else Color(0.08, 0.08, 0.08)
 

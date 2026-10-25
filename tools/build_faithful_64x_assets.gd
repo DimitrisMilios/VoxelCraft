@@ -16,6 +16,7 @@ func _initialize() -> void:
 	_copy_destroy_stages()
 	_build_hud_and_gui_assets()
 	_copy_2d_item_icons()
+	_copy_entity_and_environment_textures()
 	_write_license_and_credits()
 	print("[Faithful64xBuilder] Completed Faithful 64x asset generation successfully!")
 	quit(0)
@@ -25,7 +26,7 @@ func _initialize() -> void:
 ## (required by the Faithful License, Requirement 5).
 func _write_license_and_credits() -> void:
 	var pack_dir: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/")
-	var license_src: String = FAITHFUL_ROOT.get_base_dir().get_base_dir() + "/LICENSE.txt"
+	var license_src: String = "c:/Users/dimit/Desktop/Faithful 64x - Release 15/LICENSE.txt"
 	if FileAccess.file_exists(license_src):
 		DirAccess.copy_absolute(license_src, pack_dir + "LICENSE.txt")
 	var info := FileAccess.open(pack_dir + "pack_info.txt", FileAccess.WRITE)
@@ -34,9 +35,7 @@ func _write_license_and_credits() -> void:
 			"Faithful 64x - Release 15\n"
 			+ "Textures by the Faithful Resource Pack team - https://faithfulpack.net\n"
 			+ "License: see LICENSE.txt in this folder or https://faithfulpack.net/license\n"
-			+ "Used in VoxelCraft for blocks, water, mining cracks, HUD, GUI and item icons.\n"
-			+ "Some textures were rearranged/composited (atlas, chest/bed/door/torch tiles, isometric icons)\n"
-			+ "by tools/build_faithful_64x_assets.gd.\n"
+			+ "Used in VoxelCraft for blocks, water, mining cracks, HUD, GUI, mobs, player skin, tools, items, and environment.\n"
 		)
 		info.close()
 
@@ -45,6 +44,8 @@ func _ensure_dirs() -> void:
 	var dirs: Array[String] = [
 		"res://assets/packs/faithful_64x/textures",
 		"res://assets/packs/faithful_64x/textures/destroy_stages",
+		"res://assets/packs/faithful_64x/textures/entity",
+		"res://assets/packs/faithful_64x/textures/environment",
 		"res://assets/packs/faithful_64x/ui/hud_icons",
 		"res://assets/packs/faithful_64x/ui/gui_panels",
 		"res://assets/packs/faithful_64x/ui/item_icons",
@@ -479,40 +480,73 @@ func _build_hud_and_gui_assets() -> void:
 	else:
 		panel_bg.fill(Color(0.77, 0.77, 0.77, 1.0))
 	panel_bg.save_png(gui_dir + "panel_bg.png")
+	# 6. Authentic Container Windows
+	var inv_full: Image = _load_faithful_image("gui/container/inventory.png")
+	inv_full.save_png(gui_dir + "container_inventory.png")
+	var craft_full: Image = _load_faithful_image("gui/container/crafting_table.png")
+	craft_full.save_png(gui_dir + "container_crafting_table.png")
+	var furn_full: Image = _load_faithful_image("gui/container/furnace.png")
+	furn_full.save_png(gui_dir + "container_furnace.png")
+	var chest_full: Image = _load_faithful_image("gui/container/generic_54.png")
+	chest_full.save_png(gui_dir + "container_chest.png")
+	var furn_lit: Image = _load_faithful_image("gui/sprites/container/furnace/lit_progress.png")
+	furn_lit.save_png(gui_dir + "furnace_lit_progress.png")
+	var furn_burn: Image = _load_faithful_image("gui/sprites/container/furnace/burn_progress.png")
+	furn_burn.save_png(gui_dir + "furnace_burn_progress.png")
+
 	print("[Faithful64xBuilder] Saved Faithful 64x HUD & GUI textures.")
 
 
 func _copy_2d_item_icons() -> void:
 	var icon_dir: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/ui/item_icons/")
 	var item_map: Dictionary = {
+		# Placeable Non-Full-Block Items
 		19: "block/torch.png",
 		21: "item/oak_door.png",
 		22: "item/oak_door.png",
 		23: "block/ladder.png",
-		101: "item/stick.png",
-		102: "item/wooden_pickaxe.png",
-		103: "item/stone_pickaxe.png",
-		104: "item/iron_pickaxe.png",
-		105: "item/diamond_pickaxe.png",
-		106: "item/coal.png",
-		107: "item/iron_ingot.png",
-		108: "item/gold_ingot.png",
-		109: "item/diamond.png",
-		110: "item/bucket.png",
-		111: "item/water_bucket.png",
-		112: "item/wooden_axe.png",
-		113: "item/stone_axe.png",
-		114: "item/wooden_shovel.png",
-		115: "item/apple.png",
-		116: "item/bread.png",
-		117: "item/beef.png",
-		118: "item/cooked_beef.png",
-		119: "item/rotten_flesh.png",
-		120: "item/wooden_sword.png",
-		121: "item/stone_sword.png",
-		122: "item/iron_sword.png",
-		123: "item/diamond_sword.png",
-		126: "item/gunpowder.png",
+
+		# Resources & Food (Matching InventoryManager.ItemId exactly)
+		100: "item/stick.png",
+		101: "item/coal.png",
+		102: "item/raw_iron.png",
+		103: "item/iron_ingot.png",
+		104: "item/raw_gold.png",
+		105: "item/gold_ingot.png",
+		106: "item/diamond.png",
+		107: "item/bucket.png",
+		108: "item/water_bucket.png",
+		110: "item/porkchop.png",
+		111: "item/cooked_porkchop.png",
+		112: "item/beef.png",
+		113: "item/cooked_beef.png",
+		114: "item/apple.png",
+		115: "item/rotten_flesh.png",
+		116: "item/gunpowder.png",
+
+		# Pickaxes (201..204)
+		201: "item/wooden_pickaxe.png",
+		202: "item/stone_pickaxe.png",
+		203: "item/iron_pickaxe.png",
+		204: "item/diamond_pickaxe.png",
+
+		# Axes (211..214)
+		211: "item/wooden_axe.png",
+		212: "item/stone_axe.png",
+		213: "item/iron_axe.png",
+		214: "item/diamond_axe.png",
+
+		# Shovels (221..224)
+		221: "item/wooden_shovel.png",
+		222: "item/stone_shovel.png",
+		223: "item/iron_shovel.png",
+		224: "item/diamond_shovel.png",
+
+		# Swords (231..234)
+		231: "item/wooden_sword.png",
+		232: "item/stone_sword.png",
+		233: "item/iron_sword.png",
+		234: "item/diamond_sword.png",
 	}
 
 	for item_id in item_map.keys():
@@ -521,3 +555,31 @@ func _copy_2d_item_icons() -> void:
 		img.save_png(icon_dir + ("item_%d.png" % int(item_id)))
 
 	print("[Faithful64xBuilder] Copied %d Faithful 64x 2D Item & Tool icons." % item_map.size())
+
+
+func _copy_entity_and_environment_textures() -> void:
+	var entity_dir: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/textures/entity/")
+	var env_dir: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/textures/environment/")
+
+	var entities: Dictionary = {
+		"zombie.png": "entity/zombie/zombie.png",
+		"skeleton.png": "entity/skeleton/skeleton.png",
+		"creeper.png": "entity/creeper/creeper.png",
+		"spider.png": "entity/spider/spider.png",
+		"cow.png": "entity/cow/cow_temperate.png",
+		"pig.png": "entity/pig/pig_temperate.png",
+		"steve.png": "entity/player/wide/steve.png",
+	}
+	for out_name in entities.keys():
+		var src_img: Image = _load_faithful_image(entities[out_name])
+		src_img.save_png(entity_dir + out_name)
+
+	var env: Dictionary = {
+		"sun.png": "environment/celestial/sun.png",
+		"moon.png": "environment/celestial/moon/full_moon.png",
+	}
+	for out_name in env.keys():
+		var src_img: Image = _load_faithful_image(env[out_name])
+		src_img.save_png(env_dir + out_name)
+
+	print("[Faithful64xBuilder] Copied Faithful 64x Mob, Player Skin, Sun and Moon textures.")

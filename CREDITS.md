@@ -18,6 +18,10 @@ VoxelCraft uses third-party assets in accordance with their respective open lice
 - **Block Mining Destruction Overlays:** 10-stage block cracking textures at [`assets/packs/faithful_64x/textures/destroy_stages/`](assets/packs/faithful_64x/textures/destroy_stages/).
 - **HUD & GUI Elements:** Hearts, hunger drumsticks, oxygen bubbles, crosshair, slot frames, and container dialog styling in [`assets/packs/faithful_64x/ui/`](assets/packs/faithful_64x/ui/).
 - **Item & Tool Icons:** 2D tool, weapon, ingot, and food sprites, along with 3D isometric block previews in [`assets/packs/faithful_64x/ui/item_icons/`](assets/packs/faithful_64x/ui/item_icons/).
+- **First-Person Viewmodels:** In-hand 3D tools (Pickaxes, Swords, Axes, Shovels), held resource items, and the player's textured arm using the Steve skin.
+- **Dropped 3D Item Entities:** Spinning double-sided textured item quads for dropped tools, weapons, and resources floating in water or on land.
+- **Autonomous Mobs & Animals:** Authentic entity textures for Zombies, Skeletons, Creepers, Spiders, Cows, and Pigs at [`assets/packs/faithful_64x/textures/entity/`](assets/packs/faithful_64x/textures/entity/).
+- **Celestial Sky:** Sun and Moon billboards in the dynamic day/night cycle at [`assets/packs/faithful_64x/textures/environment/`](assets/packs/faithful_64x/textures/environment/).
 
 Asset extraction and composition is automated via [`tools/build_faithful_64x_assets.gd`](tools/build_faithful_64x_assets.gd).
 

@@ -188,36 +188,24 @@ func _build_visual_mesh() -> void:
 		mi.mesh = _build_mini_block_mesh(item_id)
 		_visual_root.add_child(mi)
 	else:
+		# Double-sided textured quad using authentic Faithful 64x tool / item sprite
+		var icon_tex: Texture2D = InventoryManager.get_item_icon_texture(item_id)
 		var mat := StandardMaterial3D.new()
-		mat.albedo_color = InventoryManager.get_item_color(item_id)
-		mat.roughness = 0.45
-		mat.metallic = 0.25 if InventoryManager.get_tool_tier(item_id) >= 3 else 0.05
-
-		var tool_cat: int = InventoryManager.get_tool_category(item_id)
-		if tool_cat != InventoryManager.ToolCategory.NONE:
-			var handle_mat := StandardMaterial3D.new()
-			handle_mat.albedo_color = Color(0.55, 0.38, 0.20)
-			var handle_mi := MeshInstance3D.new()
-			var handle_box := BoxMesh.new()
-			handle_box.size = Vector3(0.05, 0.28, 0.05)
-			handle_box.material = handle_mat
-			handle_mi.mesh = handle_box
-			_visual_root.add_child(handle_mi)
-
-			var head_mi := MeshInstance3D.new()
-			var head_box := BoxMesh.new()
-			head_box.size = Vector3(0.22, 0.07, 0.06) if tool_cat == InventoryManager.ToolCategory.PICKAXE else Vector3(0.14, 0.14, 0.06)
-			head_box.material = mat
-			head_mi.mesh = head_box
-			head_mi.position = Vector3(0.0, 0.10, 0.0)
-			_visual_root.add_child(head_mi)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		mat.roughness = 0.5
+		if icon_tex != null:
+			mat.albedo_texture = icon_tex
 		else:
-			var item_mi := MeshInstance3D.new()
-			var item_box := BoxMesh.new()
-			item_box.size = Vector3(0.20, 0.20, 0.08)
-			item_box.material = mat
-			item_mi.mesh = item_box
-			_visual_root.add_child(item_mi)
+			mat.albedo_color = InventoryManager.get_item_color(item_id)
+
+		var item_mi := MeshInstance3D.new()
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.36, 0.36)
+		quad.material = mat
+		item_mi.mesh = quad
+		_visual_root.add_child(item_mi)
 
 
 func _build_mini_block_mesh(block_id: int) -> ArrayMesh:
