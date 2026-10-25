@@ -151,6 +151,42 @@ static func get_tool_tier(item_id: int) -> int:
 			return 0
 
 
+## Returns authentic Minecraft max durability for tools (Wood=60, Stone=132, Iron=251, Diamond=1562, None=0).
+static func get_max_durability(item_id: int) -> int:
+	match get_tool_tier(item_id):
+		1:
+			return 60
+		2:
+			return 132
+		3:
+			return 251
+		4:
+			return 1562
+		_:
+			return 0
+
+
+## Returns the item ID dropped when `broken_block_id` is broken with `equipped_item_id` (0 if unharvestable).
+static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: int) -> int:
+	if not can_harvest_block(equipped_item_id, broken_block_id):
+		return 0
+	match broken_block_id:
+		BlockRegistry.BlockId.STONE:
+			return BlockRegistry.BlockId.COBBLESTONE
+		BlockRegistry.BlockId.GRASS:
+			return BlockRegistry.BlockId.DIRT
+		BlockRegistry.BlockId.COAL_ORE:
+			return ItemId.COAL
+		BlockRegistry.BlockId.IRON_ORE:
+			return ItemId.RAW_IRON
+		BlockRegistry.BlockId.GOLD_ORE:
+			return ItemId.RAW_GOLD
+		BlockRegistry.BlockId.DIAMOND_ORE:
+			return ItemId.DIAMOND
+		_:
+			return broken_block_id
+
+
 ## Checks whether the equipped item can harvest drops from `block_id` (Minecraft harvest rules).
 static func can_harvest_block(equipped_item_id: int, block_id: int) -> bool:
 	var cat: int = get_tool_category(equipped_item_id)
@@ -364,12 +400,14 @@ func get_total_count(item_id: int) -> int:
 
 
 ## Adds `amount` of `item_id` into hotbar/backpack (stacking existing first, then empty slots).
-func add_item(item_id: int, amount: int = 1) -> bool:
+func add_item(item_id: int, amount: int = 1, custom_durability: int = -1) -> bool:
 	if item_id <= 0 or amount <= 0:
 		return false
 
 	var max_stack_for_item: int = 1 if is_tool_item(item_id) else MAX_STACK
 	var remaining: int = amount
+	var max_dur: int = get_max_durability(item_id)
+	var assign_dur: int = custom_durability if custom_durability > 0 else max_dur
 
 	# 1. Try merging into existing non-full stacks
 	if max_stack_for_item > 1:
@@ -387,7 +425,7 @@ func add_item(item_id: int, amount: int = 1) -> bool:
 	for i in range(TOTAL_SLOTS):
 		if int(slots[i]["id"]) == 0 or int(slots[i]["count"]) <= 0:
 			var to_place: int = mini(remaining, max_stack_for_item)
-			slots[i] = {"id": item_id, "count": to_place}
+			slots[i] = {"id": item_id, "count": to_place, "durability": assign_dur}
 			remaining -= to_place
 			if remaining <= 0:
 				inventory_updated.emit()
@@ -395,6 +433,45 @@ func add_item(item_id: int, amount: int = 1) -> bool:
 
 	inventory_updated.emit()
 	return remaining < amount
+
+
+## Reduces durability of a tool in `slot_idx`. Returns true if the tool broke and was destroyed.
+func damage_hotbar_tool(slot_idx: int, wear_amount: int = 1) -> bool:
+	if slot_idx < 0 or slot_idx >= HOTBAR_SIZE:
+		return false
+	var entry: Dictionary = slots[slot_idx]
+	var item_id: int = int(entry.get("id", 0))
+	var max_dur: int = get_max_durability(item_id)
+	if max_dur <= 0:
+		return false
+	var cur_dur: int = int(entry.get("durability", max_dur))
+	if cur_dur <= 0:
+		cur_dur = max_dur
+	cur_dur -= wear_amount
+	if cur_dur <= 0:
+		slots[slot_idx] = {"id": 0, "count": 0}
+		inventory_updated.emit()
+		return true
+	entry["durability"] = cur_dur
+	inventory_updated.emit()
+	return false
+
+
+## Pops 1 item from `slot_idx` so the player can toss it into the 3D world with the Q key.
+func pop_one_from_hotbar_for_drop(slot_idx: int) -> Dictionary:
+	if slot_idx < 0 or slot_idx >= HOTBAR_SIZE:
+		return {"id": 0, "count": 0, "durability": -1}
+	var entry: Dictionary = slots[slot_idx]
+	var item_id: int = int(entry.get("id", 0))
+	var cur_cnt: int = int(entry.get("count", 0))
+	if item_id <= 0 or cur_cnt <= 0:
+		return {"id": 0, "count": 0, "durability": -1}
+	var dur: int = int(entry.get("durability", get_max_durability(item_id)))
+	entry["count"] = cur_cnt - 1
+	if int(entry["count"]) <= 0:
+		slots[slot_idx] = {"id": 0, "count": 0}
+	inventory_updated.emit()
+	return {"id": item_id, "count": 1, "durability": dur}
 
 
 ## Consumes `1` unit from a specific hotbar slot when placing a block.
@@ -508,7 +585,7 @@ func click_craft_output_slot() -> void:
 		return
 
 	if cur_id == 0:
-		cursor_stack = {"id": out_id, "count": out_count}
+		cursor_stack = {"id": out_id, "count": out_count, "durability": get_max_durability(out_id)}
 	else:
 		cursor_stack["count"] = cur_count + out_count
 
@@ -549,17 +626,19 @@ func click_furnace_slot(furnace_slot_type: int, mouse_button: int) -> void:
 func _interact_slot_with_cursor(target_slot: Dictionary, mouse_button: int) -> Dictionary:
 	var slot_id: int = int(target_slot.get("id", 0))
 	var slot_cnt: int = int(target_slot.get("count", 0))
+	var slot_dur: int = int(target_slot.get("durability", get_max_durability(slot_id)))
 	var cur_id: int = int(cursor_stack.get("id", 0))
 	var cur_cnt: int = int(cursor_stack.get("count", 0))
+	var cur_dur: int = int(cursor_stack.get("durability", get_max_durability(cur_id)))
 
 	if mouse_button == MOUSE_BUTTON_LEFT:
 		if cur_id == 0:
 			# Pick up entire slot stack onto cursor
-			cursor_stack = {"id": slot_id, "count": slot_cnt}
+			cursor_stack = {"id": slot_id, "count": slot_cnt, "durability": slot_dur}
 			return {"id": 0, "count": 0}
 		elif slot_id == 0:
 			# Place entire cursor stack into empty slot
-			var placed := {"id": cur_id, "count": cur_cnt}
+			var placed := {"id": cur_id, "count": cur_cnt, "durability": cur_dur}
 			cursor_stack = {"id": 0, "count": 0}
 			return placed
 		elif slot_id == cur_id and not is_tool_item(slot_id):
@@ -572,33 +651,33 @@ func _interact_slot_with_cursor(target_slot: Dictionary, mouse_button: int) -> D
 				cursor_stack = {"id": 0, "count": 0}
 			else:
 				cursor_stack["count"] = cur_cnt
-			return {"id": slot_id, "count": slot_cnt}
+			return {"id": slot_id, "count": slot_cnt, "durability": slot_dur}
 		else:
 			# Swap cursor and slot
-			cursor_stack = {"id": slot_id, "count": slot_cnt}
-			return {"id": cur_id, "count": cur_cnt}
+			cursor_stack = {"id": slot_id, "count": slot_cnt, "durability": slot_dur}
+			return {"id": cur_id, "count": cur_cnt, "durability": cur_dur}
 
 	elif mouse_button == MOUSE_BUTTON_RIGHT:
 		if cur_id == 0 and slot_id != 0:
 			# Split stack: pick up half (rounded up)
 			var take_half: int = int(ceil(float(slot_cnt) * 0.5))
 			var leave_half: int = slot_cnt - take_half
-			cursor_stack = {"id": slot_id, "count": take_half}
+			cursor_stack = {"id": slot_id, "count": take_half, "durability": slot_dur}
 			if leave_half <= 0:
 				return {"id": 0, "count": 0}
-			return {"id": slot_id, "count": leave_half}
+			return {"id": slot_id, "count": leave_half, "durability": slot_dur}
 		elif cur_id != 0:
 			# Place 1 single item from cursor into empty or matching slot
 			if slot_id == 0:
 				cursor_stack["count"] = cur_cnt - 1
 				if int(cursor_stack["count"]) <= 0:
 					cursor_stack = {"id": 0, "count": 0}
-				return {"id": cur_id, "count": 1}
+				return {"id": cur_id, "count": 1, "durability": cur_dur}
 			elif slot_id == cur_id and not is_tool_item(slot_id) and slot_cnt < MAX_STACK:
 				cursor_stack["count"] = cur_cnt - 1
 				if int(cursor_stack["count"]) <= 0:
 					cursor_stack = {"id": 0, "count": 0}
-				return {"id": slot_id, "count": slot_cnt + 1}
+				return {"id": slot_id, "count": slot_cnt + 1, "durability": slot_dur}
 
 	return target_slot
 

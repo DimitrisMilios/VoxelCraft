@@ -27,6 +27,7 @@ var _inventory: InventoryManager = null
 var _hotbar_panels: Array[PanelContainer] = []
 var _hotbar_swatches: Array[ColorRect] = []
 var _hotbar_labels: Array[Label] = []
+var _hotbar_dur_bars: Array[ColorRect] = []
 var _heart_rects: Array[ColorRect] = []
 
 var _debug_label: Label = null
@@ -420,10 +421,19 @@ func _build_bottom_hud() -> void:
 		label.add_theme_font_size_override("font_size", 10)
 		vbox.add_child(label)
 
+		var dur_bar := ColorRect.new()
+		dur_bar.custom_minimum_size = Vector2(44, 3)
+		dur_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		dur_bar.color = Color(0.2, 0.95, 0.25)
+		dur_bar.visible = false
+		dur_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vbox.add_child(dur_bar)
+
 		hbox.add_child(panel)
 		_hotbar_panels.append(panel)
 		_hotbar_swatches.append(swatch)
 		_hotbar_labels.append(label)
+		_hotbar_dur_bars.append(dur_bar)
 
 	_update_hotbar_visuals(0)
 
@@ -727,6 +737,14 @@ func _create_interactive_slot_widget(w: float, h: float, on_click: Callable, is_
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(label)
 
+	var dur_bar := ColorRect.new()
+	dur_bar.custom_minimum_size = Vector2(38, 3)
+	dur_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	dur_bar.color = Color(0.2, 0.95, 0.25)
+	dur_bar.visible = false
+	dur_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(dur_bar)
+
 	panel.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed:
 			if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
@@ -737,6 +755,7 @@ func _create_interactive_slot_widget(w: float, h: float, on_click: Callable, is_
 		"panel": panel,
 		"swatch": swatch,
 		"label": label,
+		"dur_bar": dur_bar,
 	}
 
 
@@ -821,10 +840,13 @@ func _refresh_all_slot_visuals() -> void:
 		_hotbar_swatches[i].color = InventoryManager.get_item_color(id)
 		if id == 0 or cnt <= 0:
 			_hotbar_labels[i].text = "%d:---" % [i + 1]
+			_hotbar_dur_bars[i].visible = false
 		elif InventoryManager.is_tool_item(id):
 			_hotbar_labels[i].text = "%d:%s" % [i + 1, InventoryManager.get_item_short_label(id)]
+			_update_durability_bar(_hotbar_dur_bars[i], id, int(slot_data.get("durability", -1)), 44.0)
 		else:
 			_hotbar_labels[i].text = "%d:%s\nx%d" % [i + 1, InventoryManager.get_item_short_label(id), cnt]
+			_hotbar_dur_bars[i].visible = false
 
 	# 2. Refresh all 36 modal inventory slots
 	for i in range(mini(_inv_modal_slots.size(), _inventory.slots.size())):
@@ -862,13 +884,31 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 	var cnt: int = int(slot_data.get("count", 0))
 	var swatch: ColorRect = widget["swatch"]
 	var label: Label = widget["label"]
+	var dur_bar: ColorRect = widget.get("dur_bar", null) as ColorRect
 	swatch.color = InventoryManager.get_item_color(id)
 	if id == 0 or cnt <= 0:
 		label.text = ""
+		if dur_bar != null:
+			dur_bar.visible = false
 	elif InventoryManager.is_tool_item(id):
 		label.text = InventoryManager.get_item_short_label(id)
+		if dur_bar != null:
+			_update_durability_bar(dur_bar, id, int(slot_data.get("durability", -1)), 38.0)
 	else:
 		label.text = "%s\nx%d" % [InventoryManager.get_item_short_label(id), cnt]
+		if dur_bar != null:
+			dur_bar.visible = false
+
+
+func _update_durability_bar(bar: ColorRect, item_id: int, cur_dur: int, max_width: float) -> void:
+	var max_dur: int = InventoryManager.get_max_durability(item_id)
+	if max_dur <= 0 or cur_dur < 0 or cur_dur >= max_dur:
+		bar.visible = false
+		return
+	var ratio: float = clampf(float(cur_dur) / float(max_dur), 0.0, 1.0)
+	bar.visible = true
+	bar.custom_minimum_size.x = maxf(3.0, max_width * ratio)
+	bar.color = Color(1.0 - ratio, ratio * 0.95, 0.15, 1.0)
 
 
 func _build_debug_overlay() -> void:

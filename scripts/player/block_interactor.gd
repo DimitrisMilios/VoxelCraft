@@ -27,6 +27,9 @@ var _world_manager: WorldManager = null
 var _inventory: InventoryManager = null
 var _selection_box: MeshInstance3D = null
 var _selection_mat: StandardMaterial3D = null
+var _crack_box: MeshInstance3D = null
+var _crack_mat: StandardMaterial3D = null
+var _crack_textures: Array[ImageTexture] = []
 var _targeted_mob: PassiveMob = null
 var _last_mining_pos: Vector3i = Vector3i(999999, 999999, 999999)
 var _swing_repeat_timer: float = 0.0
@@ -36,6 +39,7 @@ func _ready() -> void:
 	_raycast = get_node_or_null(raycast_path) as RayCast3D
 	_player_body = get_node_or_null(player_body_path) as PlayerController
 	_create_selection_wireframe()
+	_create_crack_overlay_mesh()
 	call_deferred("_resolve_dependencies")
 
 
@@ -87,6 +91,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				select_slot(7)
 			KEY_9:
 				select_slot(8)
+			KEY_Q:
+				_toss_selected_item()
 
 	# Mouse buttons & scroll wheel
 	if event is InputEventMouseButton and event.pressed:
@@ -216,6 +222,13 @@ func _process_continuous_mining(delta: float) -> void:
 		var pulse_col: Color = Color(1.0, 0.78, 0.15) if can_harvest else Color(0.95, 0.22, 0.20)
 		_selection_mat.albedo_color = Color(0.08, 0.08, 0.08).lerp(pulse_col, clampf(mining_progress, 0.0, 1.0))
 
+	if _crack_box != null and not _crack_textures.is_empty():
+		var stage_idx: int = clampi(int(mining_progress * 10.0), 0, 9)
+		_crack_mat.albedo_texture = _crack_textures[stage_idx]
+		_crack_box.global_position = Vector3(target_block_pos) + Vector3(0.5, 0.5, 0.5)
+		_crack_box.global_rotation = Vector3.ZERO
+		_crack_box.visible = true
+
 	mining_progress_changed.emit(
 		clampf(mining_progress, 0.0, 1.0),
 		BlockRegistry.get_block_name(target_id),
@@ -228,6 +241,8 @@ func _process_continuous_mining(delta: float) -> void:
 
 
 func _reset_mining_progress() -> void:
+	if _crack_box != null:
+		_crack_box.visible = false
 	if mining_progress > 0.0:
 		mining_progress = 0.0
 		if _selection_mat != null:
@@ -243,14 +258,54 @@ func _complete_break_block() -> void:
 		return
 	var broken_pos: Vector3i = target_block_pos
 	var equipped_id: int = get_selected_item_id()
+	var is_creative: bool = _player_body != null and _player_body.is_flying
+
 	if _world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.AIR):
-		if _inventory != null:
-			# In Creative Fly mode, always award drop regardless of tool
-			var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if (_player_body != null and _player_body.is_flying) else equipped_id
-			var drop_msg: String = _inventory.award_block_drop(previous_id, effective_tool)
-			loot_notification.emit(drop_msg)
+		var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if is_creative else equipped_id
+		var drop_id: int = InventoryManager.get_dropped_item_for_block(previous_id, effective_tool)
+		if drop_id > 0:
+			DroppedItem.spawn_drop(
+				_world_manager,
+				Vector3(broken_pos) + Vector3(0.5, 0.38, 0.5),
+				drop_id,
+				1
+			)
+		else:
+			loot_notification.emit("Broken! (Requires proper Pickaxe tier to harvest)")
+
+		# Apply tool durability wear when mining in Survival mode
+		if not is_creative and _inventory != null and InventoryManager.get_max_durability(equipped_id) > 0:
+			if _inventory.damage_hotbar_tool(selected_slot, 1):
+				loot_notification.emit("Your %s broke!" % InventoryManager.get_item_name(equipped_id))
+
 		block_broken.emit(broken_pos, previous_id)
 		_update_raycast_target()
+
+
+func _toss_selected_item() -> void:
+	if _inventory == null or _world_manager == null:
+		return
+	var popped: Dictionary = _inventory.pop_one_from_hotbar_for_drop(selected_slot)
+	var item_id: int = int(popped.get("id", 0))
+	if item_id <= 0:
+		return
+	var drop_origin: Vector3 = global_position + Vector3(0.0, 1.25, 0.0)
+	var throw_dir := Vector3(0.0, 0.2, -1.0)
+	if _raycast != null:
+		drop_origin = _raycast.global_position - _raycast.global_transform.basis.z.normalized() * 0.35
+		throw_dir = -_raycast.global_transform.basis.z.normalized()
+
+	var throw_vel: Vector3 = throw_dir * 5.8 + Vector3(0.0, 1.85, 0.0)
+	DroppedItem.spawn_drop(
+		_world_manager,
+		drop_origin,
+		item_id,
+		1,
+		throw_vel,
+		1.35,
+		int(popped.get("durability", -1))
+	)
+	mob_interacted.emit(false, 0)
 
 
 func _try_interact_or_place_block() -> void:
@@ -368,3 +423,48 @@ func _create_selection_wireframe() -> void:
 	_selection_mat.albedo_color = Color(0.08, 0.08, 0.08, 1.0)
 	_selection_box.material_override = _selection_mat
 	add_child(_selection_box)
+
+
+func _create_crack_overlay_mesh() -> void:
+	_crack_textures.clear()
+	for stage in range(10):
+		var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+		img.fill(Color(0.0, 0.0, 0.0, 0.0))
+		var reach: int = 1 + int(ceil(float(stage + 1) * 0.72))
+		for i in range(-reach, reach + 1):
+			var px1: int = clampi(8 + i, 0, 15)
+			var py1: int = clampi(8 + int(round(float(i) * 0.8 + sin(float(i)) * 1.3)), 0, 15)
+			img.set_pixel(px1, py1, Color(0.05, 0.05, 0.06, 0.76))
+
+			var px2: int = clampi(8 + i, 0, 15)
+			var py2: int = clampi(8 - int(round(float(i) * 0.75 + cos(float(i)) * 1.2)), 0, 15)
+			img.set_pixel(px2, py2, Color(0.05, 0.05, 0.06, 0.76))
+
+			if stage >= 3:
+				var px3: int = clampi(8 + int(sin(float(i)) * 2.0), 0, 15)
+				var py3: int = clampi(8 + i, 0, 15)
+				img.set_pixel(px3, py3, Color(0.04, 0.04, 0.05, 0.78))
+			if stage >= 6:
+				var px4: int = clampi(8 + i, 0, 15)
+				var py4: int = clampi(8 + ((i * 3) % 5) - 2, 0, 15)
+				img.set_pixel(px4, py4, Color(0.04, 0.04, 0.05, 0.82))
+		_crack_textures.append(ImageTexture.create_from_image(img))
+
+	_crack_box = MeshInstance3D.new()
+	_crack_box.name = "BlockCrackOverlay"
+	_crack_box.top_level = true
+	_crack_box.visible = false
+	_crack_box.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	var box_mesh := BoxMesh.new()
+	box_mesh.size = Vector3(1.006, 1.006, 1.006)
+	_crack_box.mesh = box_mesh
+
+	_crack_mat = StandardMaterial3D.new()
+	_crack_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_crack_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	_crack_mat.albedo_texture = _crack_textures[0]
+	_crack_mat.uv1_triplanar = true
+	_crack_mat.uv1_scale = Vector3(1.0, 1.0, 1.0)
+	_crack_box.material_override = _crack_mat
+	add_child(_crack_box)
