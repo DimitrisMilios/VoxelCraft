@@ -187,6 +187,11 @@ func _update_health_regen(delta: float) -> void:
 func _update_water_submersion() -> void:
 	if _world_manager == null:
 		return
+	var feet_pos := Vector3i(
+		floori(global_position.x),
+		floori(global_position.y + 0.12),
+		floori(global_position.z)
+	)
 	var waist_pos := Vector3i(
 		floori(global_position.x),
 		floori(global_position.y + 0.65),
@@ -197,7 +202,10 @@ func _update_water_submersion() -> void:
 		floori(head.global_position.y + 0.12),
 		floori(head.global_position.z)
 	)
-	var now_in_water: bool = BlockRegistry.is_liquid(_world_manager.get_block_world(waist_pos))
+	var now_in_water: bool = (
+		BlockRegistry.is_liquid(_world_manager.get_block_world(feet_pos))
+		or BlockRegistry.is_liquid(_world_manager.get_block_world(waist_pos))
+	)
 	is_head_underwater = BlockRegistry.is_liquid(_world_manager.get_block_world(eye_pos))
 
 	if now_in_water != is_in_water:
@@ -258,11 +266,18 @@ func _handle_swim_movement(delta: float) -> void:
 		velocity.z = move_toward(velocity.z, 0.0, 5.0 * delta * target_speed)
 
 	if Input.is_action_pressed("jump"):
-		velocity.y = move_toward(velocity.y, swim_up_speed, 14.0 * delta)
+		# If near the water surface or pressing against a shoreline ledge, give a strong hop out of water
+		if is_on_wall() or not is_head_underwater:
+			velocity.y = move_toward(velocity.y, jump_velocity * 0.96, 26.0 * delta)
+		else:
+			velocity.y = move_toward(velocity.y, swim_up_speed, 16.0 * delta)
+	elif is_on_wall() and move_direction != Vector3.ZERO and not is_head_underwater:
+		# Auto-climb shoreline ledge when swimming into a same-level bank
+		velocity.y = move_toward(velocity.y, jump_velocity * 0.92, 24.0 * delta)
 	elif Input.is_action_pressed("fly_down"):
 		velocity.y = move_toward(velocity.y, -swim_up_speed, 14.0 * delta)
 	else:
-		velocity.y = move_toward(velocity.y, -2.2, 6.5 * delta)
+		velocity.y = move_toward(velocity.y, -1.8, 5.5 * delta)
 
 
 func _handle_fly_movement(delta: float) -> void:

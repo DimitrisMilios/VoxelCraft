@@ -25,13 +25,31 @@ static func get_shared_water_material() -> StandardMaterial3D:
 	if _cached_water_material != null:
 		return _cached_water_material
 
+	var water_img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	for y in range(16):
+		for x in range(16):
+			var wave: float = sin((float(x) + float(y) * 1.5) * 0.78) * 0.045
+			var highlight: float = 0.06 if ((x + y * 2) % 7 == 0) else 0.0
+			var col := Color(
+				clampf(0.14 + wave + highlight, 0.0, 1.0),
+				clampf(0.46 + wave + highlight, 0.0, 1.0),
+				clampf(0.86 + wave + highlight, 0.0, 1.0),
+				0.72
+			)
+			water_img.set_pixel(x, y, col)
+
+	var water_tex := ImageTexture.create_from_image(water_img)
 	var material := StandardMaterial3D.new()
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.albedo_color = Color(0.16, 0.48, 0.88, 0.64)
+	material.albedo_texture = water_tex
+	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	material.uv1_scale = Vector3(0.25, 0.25, 0.25)
+	material.uv1_triplanar = true
 	material.vertex_color_use_as_albedo = true
-	material.roughness = 0.15
-	material.metallic = 0.05
+	material.roughness = 0.08
+	material.metallic = 0.12
+	material.specular = 0.85
 	_cached_water_material = material
 	return _cached_water_material
 

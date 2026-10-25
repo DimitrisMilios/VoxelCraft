@@ -30,6 +30,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	var water_mat: StandardMaterial3D = VoxelAtlasBuilder.get_shared_water_material()
+	if water_mat != null:
+		water_mat.uv1_offset += Vector3(delta * 0.08, delta * 0.04, delta * 0.06)
+
 	if day_length_seconds <= 0.0:
 		return
 	var hours_per_sec: float = 24.0 / day_length_seconds
