@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://b6v0x3lplayer"]
+[gd_scene load_steps=4 format=3 uid="uid://b6v0x3lplayer"]
 
 [ext_resource type="Script" path="res://scripts/player/player_controller.gd" id="1_player_script"]
+[ext_resource type="Script" path="res://scripts/player/block_interactor.gd" id="2_interactor_script"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.35
@@ -29,3 +30,6 @@ far = 500.0
 [node name="InteractionRay" type="RayCast3D" parent="Head/Camera3D"]
 target_position = Vector3(0, 0, -5.5)
 collision_mask = 1
+
+[node name="BlockInteractor" type="Node3D" parent="."]
+script = ExtResource("2_interactor_script")
