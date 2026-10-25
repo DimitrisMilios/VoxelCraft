@@ -45,6 +45,7 @@ func _bind_player() -> void:
 		_interactor.hotbar_slot_changed.connect(_on_hotbar_slot_changed)
 		_interactor.block_broken.connect(_on_action_swing)
 		_interactor.block_placed.connect(_on_action_swing)
+		_interactor.mob_interacted.connect(func(_is_hit: bool, _variant: int) -> void: _swing_progress = 1.0)
 		_current_block_id = _interactor.get_selected_block_id()
 		_rebuild_held_cube_mesh(_current_block_id)
 

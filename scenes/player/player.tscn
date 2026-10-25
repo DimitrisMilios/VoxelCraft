@@ -30,7 +30,7 @@ far = 500.0
 
 [node name="InteractionRay" type="RayCast3D" parent="Head/Camera3D"]
 target_position = Vector3(0, 0, -5.5)
-collision_mask = 1
+collision_mask = 5
 
 [node name="HeldBlockView" type="Node3D" parent="Head/Camera3D"]
 script = ExtResource("3_held_block_script")

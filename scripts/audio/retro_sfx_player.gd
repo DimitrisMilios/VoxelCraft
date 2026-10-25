@@ -17,6 +17,8 @@ var _sfx_swim: AudioStreamWAV = null
 var _sfx_jump: AudioStreamWAV = null
 var _sfx_tick: AudioStreamWAV = null
 var _sfx_hurt: AudioStreamWAV = null
+var _sfx_mob_pig: AudioStreamWAV = null
+var _sfx_mob_cow: AudioStreamWAV = null
 
 
 func _ready() -> void:
@@ -45,6 +47,7 @@ func _bind_signals() -> void:
 		interactor.block_broken.connect(_on_block_broken)
 		interactor.block_placed.connect(_on_block_placed)
 		interactor.hotbar_slot_changed.connect(_on_hotbar_slot_changed)
+		interactor.mob_interacted.connect(_on_mob_interacted)
 
 
 func _on_step_taken(in_water: bool) -> void:
@@ -84,6 +87,14 @@ func _on_block_placed(_world_pos: Vector3i, block_id: int) -> void:
 
 func _on_hotbar_slot_changed(_slot_index: int, _block_id: int) -> void:
 	_play_stream(_sfx_tick, -12.0, randf_range(0.96, 1.04))
+
+
+func _on_mob_interacted(is_hit: bool, mob_variant: int) -> void:
+	var pitch_boost: float = 1.18 if is_hit else 1.0
+	if mob_variant == 0: # Pig oink/squeal
+		_play_stream(_sfx_mob_pig, -4.5, pitch_boost * randf_range(0.92, 1.10))
+	else: # Cow moo
+		_play_stream(_sfx_mob_cow, -4.5, pitch_boost * randf_range(0.92, 1.08))
 
 
 func _play_stream(stream: AudioStreamWAV, volume_db: float, pitch_scale: float) -> void:
@@ -156,6 +167,22 @@ func _synthesize_all_streams() -> void:
 		var saw: float = (fmod(t * freq, 1.0) * 2.0 - 1.0) * 0.55
 		var crunch: float = rng.randf_range(-0.6, 0.6) * (1.0 if t < 0.05 else 0.25)
 		return (saw + crunch) * env * 0.85
+	)
+
+	# 8. Pig Oink / Squeal (0.16s): Nasal FM-vibrato oink
+	_sfx_mob_pig = _build_wav(0.16, func(t: float, dur: float) -> float:
+		var env: float = sin((t / dur) * PI)
+		var vibrato: float = sin(t * 55.0 * TAU) * 35.0
+		var freq: float = lerpf(320.0, 440.0, t / dur) + vibrato
+		return sin(t * freq * TAU) * env * 0.65
+	)
+
+	# 9. Cow Low Moo (0.28s): Warm low-frequency resonant harmonics
+	_sfx_mob_cow = _build_wav(0.28, func(t: float, dur: float) -> float:
+		var env: float = sin((t / dur) * PI)
+		var freq: float = lerpf(135.0, 112.0, t / dur)
+		var wave: float = sin(t * freq * TAU) * 0.6 + sin(t * freq * 2.0 * TAU) * 0.3
+		return wave * env * 0.7
 	)
 
 

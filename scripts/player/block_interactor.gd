@@ -5,6 +5,7 @@ extends Node3D
 signal hotbar_slot_changed(slot_index: int, block_id: int)
 signal block_broken(world_pos: Vector3i, broken_block_id: int)
 signal block_placed(world_pos: Vector3i, placed_block_id: int)
+signal mob_interacted(is_hit: bool, mob_variant: int)
 
 const HOTBAR_BLOCKS: Array[int] = [
 	BlockRegistry.BlockId.GRASS,
@@ -31,6 +32,7 @@ var _raycast: RayCast3D = null
 var _player_body: CharacterBody3D = null
 var _world_manager: WorldManager = null
 var _selection_box: MeshInstance3D = null
+var _targeted_mob: PassiveMob = null
 
 
 func _ready() -> void:
@@ -108,10 +110,20 @@ func _update_raycast_target() -> void:
 	_raycast.force_raycast_update()
 	if not _raycast.is_colliding():
 		has_target = false
+		_targeted_mob = null
 		if _selection_box != null:
 			_selection_box.visible = false
 		return
 
+	var collider: Object = _raycast.get_collider()
+	if collider is PassiveMob:
+		_targeted_mob = collider as PassiveMob
+		has_target = false
+		if _selection_box != null:
+			_selection_box.visible = false
+		return
+
+	_targeted_mob = null
 	var hit_point: Vector3 = _raycast.get_collision_point()
 	var hit_normal: Vector3 = _raycast.get_collision_normal()
 
@@ -138,6 +150,12 @@ func _update_raycast_target() -> void:
 
 
 func _try_break_block() -> void:
+	if _targeted_mob != null and is_instance_valid(_targeted_mob):
+		var attacker_pos: Vector3 = _player_body.global_position if _player_body != null else global_position
+		_targeted_mob.on_hit_by_player(attacker_pos)
+		mob_interacted.emit(true, int(_targeted_mob.variant))
+		return
+
 	if not has_target or _world_manager == null:
 		return
 	var previous_id: int = _world_manager.get_block_world(target_block_pos)
@@ -150,6 +168,12 @@ func _try_break_block() -> void:
 
 
 func _try_place_block() -> void:
+	if _targeted_mob != null and is_instance_valid(_targeted_mob):
+		var feeder_pos: Vector3 = _player_body.global_position if _player_body != null else global_position
+		_targeted_mob.on_fed_by_player(feeder_pos)
+		mob_interacted.emit(false, int(_targeted_mob.variant))
+		return
+
 	if not has_target or _world_manager == null:
 		return
 
