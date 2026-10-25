@@ -63,12 +63,15 @@ func _resolve_world_manager() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Toggle mouse capture with Escape
+	# Toggle mouse capture (Pause Menu) with Escape
 	if event.is_action_pressed("ui_cancel"):
 		if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		else:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+		return
+
+	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		return
 
 	# Toggle Creative Fly Mode with F
@@ -78,14 +81,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		fly_mode_changed.emit(is_flying)
 		return
 
-	# Re-capture mouse when clicking inside the game window
-	if event is InputEventMouseButton and event.pressed:
-		if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
-			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-			return
-
 	# Smooth first-person mouse look
-	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+	if event is InputEventMouseMotion:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		head.rotate_x(-event.relative.y * mouse_sensitivity)
 		head.rotation.x = clampf(

@@ -1,6 +1,7 @@
 class_name VoxelHUD
 extends CanvasLayer
-## Retro HUD displaying center crosshair, 8-slot block hotbar, and debug status overlay.
+## Retro HUD displaying center crosshair, 8-slot block hotbar, debug status overlay,
+## underwater screen tint, and an interactive Pause Menu (Esc).
 
 var _player: PlayerController = null
 var _world_manager: WorldManager = null
@@ -9,6 +10,9 @@ var _interactor: BlockInteractor = null
 var _slot_panels: Array[PanelContainer] = []
 var _debug_label: Label = null
 var _underwater_tint: ColorRect = null
+var _pause_overlay: Control = null
+var _render_dist_label: Label = null
+var _pause_status_label: Label = null
 var _save_toast_timer: float = 0.0
 
 
@@ -17,6 +21,7 @@ func _ready() -> void:
 	_build_crosshair()
 	_build_hotbar()
 	_build_debug_overlay()
+	_build_pause_menu()
 	call_deferred("_bind_references")
 
 
@@ -26,6 +31,9 @@ func _process(delta: float) -> void:
 
 	if _underwater_tint != null and _player != null:
 		_underwater_tint.visible = _player.is_head_underwater
+
+	if _pause_overlay != null:
+		_pause_overlay.visible = (Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED)
 
 	if _debug_label != null and _player != null:
 		var pos: Vector3 = _player.global_position
@@ -42,11 +50,11 @@ func _process(delta: float) -> void:
 		var save_status: String = " | [SAVED TO DISK!]" if _save_toast_timer > 0.0 else ""
 
 		_debug_label.text = (
-			"VoxelCraft 0.4 | %d FPS | %s | Mode: %s | Chunks: %d (Saved: %d)%s\n"
+			"VoxelCraft 0.5 | %d FPS | %s | Mode: %s | Chunks: %d (Saved: %d)%s\n"
 			% [fps, time_str, mode_str, active_chunks, modified_chunks, save_status]
 			+ "XYZ: %.1f, %.1f, %.1f | Chunk: (%d, %d) | Block: %s\n"
 			% [pos.x, pos.y, pos.z, chunk_coord.x, chunk_coord.y, block_name]
-			+ "[LMB] Break  [RMB] Place  [1-8/Scroll] Block  [F] Fly  [T] +Time  [F6] Save  [Esc] Cursor"
+			+ "[LMB] Break  [RMB] Place  [1-8/Scroll] Block  [F] Fly  [T] +Time  [F6] Save  [Esc] Menu"
 		)
 
 
@@ -65,8 +73,10 @@ func _bind_references() -> void:
 			_on_hotbar_slot_changed(_interactor.selected_slot, _interactor.get_selected_block_id())
 
 
-func _on_world_saved(_saved_chunk_count: int) -> void:
+func _on_world_saved(saved_chunk_count: int) -> void:
 	_save_toast_timer = 2.5
+	if _pause_status_label != null:
+		_pause_status_label.text = "Saved %d modified chunk(s) to disk!" % saved_chunk_count
 
 
 func _build_underwater_overlay() -> void:
@@ -157,6 +167,114 @@ func _build_debug_overlay() -> void:
 	_debug_label.add_theme_constant_override("shadow_offset_x", 1)
 	_debug_label.add_theme_constant_override("shadow_offset_y", 1)
 	add_child(_debug_label)
+
+
+func _build_pause_menu() -> void:
+	_pause_overlay = ColorRect.new()
+	_pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_pause_overlay.color = Color(0.05, 0.07, 0.10, 0.65)
+	_pause_overlay.visible = false
+	add_child(_pause_overlay)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_pause_overlay.add_child(center)
+
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(360, 340)
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color(0.12, 0.14, 0.18, 0.96)
+	card_style.border_color = Color(0.42, 0.72, 0.36, 1.0)
+	card_style.set_border_width_all(3)
+	card_style.set_corner_radius_all(8)
+	card_style.set_content_margin_all(20)
+	card.add_theme_stylebox_override("panel", card_style)
+	center.add_child(card)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	card.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "VOXELCRAFT — PAUSED"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 20)
+	vbox.add_child(title)
+
+	_pause_status_label = Label.new()
+	_pause_status_label.text = "Adjust settings or save your world"
+	_pause_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pause_status_label.add_theme_font_size_override("font_size", 12)
+	_pause_status_label.add_theme_color_override("font_color", Color(0.75, 0.85, 0.75))
+	vbox.add_child(_pause_status_label)
+
+	var resume_btn := Button.new()
+	resume_btn.text = "Resume Game (Esc)"
+	resume_btn.custom_minimum_size = Vector2(0, 36)
+	resume_btn.pressed.connect(func() -> void:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	)
+	vbox.add_child(resume_btn)
+
+	# Render Distance Slider
+	_render_dist_label = Label.new()
+	_render_dist_label.text = "Render Distance: 5 Chunks"
+	_render_dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_render_dist_label)
+
+	var slider := HSlider.new()
+	slider.min_value = 2
+	slider.max_value = 8
+	slider.step = 1
+	slider.value = 5
+	slider.value_changed.connect(func(val: float) -> void:
+		var dist: int = int(val)
+		_render_dist_label.text = "Render Distance: %d Chunks" % dist
+		if _world_manager != null:
+			_world_manager.set_render_distance(dist)
+	)
+	vbox.add_child(slider)
+
+	var fly_btn := Button.new()
+	fly_btn.text = "Toggle Creative Fly Mode (F)"
+	fly_btn.custom_minimum_size = Vector2(0, 34)
+	fly_btn.pressed.connect(func() -> void:
+		if _player != null:
+			_player.is_flying = not _player.is_flying
+			_player.velocity.y = 0.0
+			_pause_status_label.text = "Fly Mode: %s" % ("ENABLED" if _player.is_flying else "DISABLED")
+	)
+	vbox.add_child(fly_btn)
+
+	var time_btn := Button.new()
+	time_btn.text = "Advance Time +2.5 Hours (T)"
+	time_btn.custom_minimum_size = Vector2(0, 34)
+	time_btn.pressed.connect(func() -> void:
+		if _day_night != null:
+			_day_night.advance_hours(2.5)
+			_pause_status_label.text = "Time set to %s" % _day_night.get_formatted_time()
+	)
+	vbox.add_child(time_btn)
+
+	var save_btn := Button.new()
+	save_btn.text = "Save World to Disk (F6)"
+	save_btn.custom_minimum_size = Vector2(0, 34)
+	save_btn.pressed.connect(func() -> void:
+		if _world_manager != null:
+			var count: int = _world_manager.save_all_modified_chunks()
+			_on_world_saved(count)
+	)
+	vbox.add_child(save_btn)
+
+	var quit_btn := Button.new()
+	quit_btn.text = "Save & Quit to Desktop"
+	quit_btn.custom_minimum_size = Vector2(0, 34)
+	quit_btn.pressed.connect(func() -> void:
+		if _world_manager != null:
+			_world_manager.save_all_modified_chunks()
+		get_tree().quit()
+	)
+	vbox.add_child(quit_btn)
 
 
 func _on_hotbar_slot_changed(slot_index: int, _block_id: int) -> void:

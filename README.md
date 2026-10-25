@@ -79,7 +79,7 @@
 | `Right Mouse Button` | Place Selected Block |
 | `1` – `8` / `Mouse Wheel` | Select Hotbar Slot (Grass, Dirt, Stone, Cobble, Wood Log, Planks, Leaves, Sand) |
 | `F6` | Quick-Save Modified Chunks to Disk (`user://worlds/`) |
-| `Esc` | Toggle Mouse Cursor Capture |
+| `Esc` | Open Interactive Pause & Settings Menu |
 
 ---
 
