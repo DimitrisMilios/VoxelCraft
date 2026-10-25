@@ -11,6 +11,14 @@ extends Node
 var current_hour: float = 9.5
 var day_number: int = 1
 
+## Normalized time of day (`0.0 .. 1.0`, where `0.25 = 06:00 Sunrise`, `0.50 = 12:00 Noon`, `0.75 = 18:00 Sunset`).
+var time_of_day: float:
+	get:
+		return clampf(current_hour / 24.0, 0.0, 1.0)
+	set(value):
+		current_hour = fposmod(value * 24.0, 24.0)
+		_apply_lighting(current_hour)
+
 var _sun_light: DirectionalLight3D = null
 var _world_env: WorldEnvironment = null
 

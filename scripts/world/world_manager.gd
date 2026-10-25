@@ -27,6 +27,8 @@ var _mirror_mutex: Mutex = Mutex.new()
 ## Coordinates currently queued or running on WorkerThreadPool.
 var _load_queue: Array[Vector2i] = []
 var _in_flight_coords: Dictionary = {}
+var _active_task_ids: Array[int] = []
+var _is_shutting_down: bool = false
 
 ## Completed background chunk builds waiting to be attached on the main thread.
 var _completed_builds: Array[Dictionary] = []
@@ -72,8 +74,17 @@ func _ready() -> void:
 	_last_player_chunk = start_chunk
 
 
+func _exit_tree() -> void:
+	_is_shutting_down = true
+	for tid in _active_task_ids:
+		WorkerThreadPool.wait_for_task_completion(tid)
+	_active_task_ids.clear()
+	save_all_modified_chunks()
+
+
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_is_shutting_down = true
 		save_all_modified_chunks()
 
 
@@ -162,15 +173,28 @@ func _update_chunk_targets(center_chunk: Vector2i) -> void:
 
 
 func _dispatch_background_tasks() -> void:
+	if _is_shutting_down:
+		return
+	var still_running: Array[int] = []
+	for tid in _active_task_ids:
+		if WorkerThreadPool.is_task_completed(tid):
+			WorkerThreadPool.wait_for_task_completion(tid)
+		else:
+			still_running.append(tid)
+	_active_task_ids = still_running
+
 	while not _load_queue.is_empty() and _in_flight_coords.size() < max_concurrent_tasks:
 		var coord: Vector2i = _load_queue.pop_front()
 		if _active_chunks.has(coord) or _in_flight_coords.has(coord):
 			continue
 		_in_flight_coords[coord] = true
-		WorkerThreadPool.add_task(_worker_build_chunk.bind(coord), false, "BuildChunk_%d_%d" % [coord.x, coord.y])
+		var task_id: int = WorkerThreadPool.add_task(_worker_build_chunk.bind(coord), false, "BuildChunk_%d_%d" % [coord.x, coord.y])
+		_active_task_ids.append(task_id)
 
 
 func _worker_build_chunk(coord: Vector2i) -> void:
+	if _is_shutting_down:
+		return
 	var chunk := VoxelChunk.new()
 	chunk.name = "Chunk_%d_%d" % [coord.x, coord.y]
 	chunk.chunk_coords = coord
@@ -181,6 +205,9 @@ func _worker_build_chunk(coord: Vector2i) -> void:
 		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]))
 	else:
 		chunk.generate_terrain(_surface_noise, _cave_noise)
+
+	if _is_shutting_down:
+		return
 
 	_mirror_mutex.lock()
 	_chunk_voxel_mirror[coord] = chunk.get_voxels_buffer()
