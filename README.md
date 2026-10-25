@@ -75,9 +75,10 @@
 | `F` | Toggle Creative Fly Mode |
 | `T` | Fast-Forward Time of Day (+2.5 Hours) |
 | `Mouse Movement` | First-Person Camera Look |
-| `Left Mouse Button` | Break Targeted Block |
-| `Right Mouse Button` | Place Selected Block |
-| `1` – `8` / `Mouse Wheel` | Select Hotbar Slot (Grass, Dirt, Stone, Cobble, Wood Log, Planks, Leaves, Sand) |
+| `Left Mouse Button (Hold)` | Mine Targeted Block (with Pickaxe speed) / Knockback Mob |
+| `Right Mouse Button` | Place Selected Block / Open Crafting Table or Furnace Oven / Feed Mob |
+| `E` | Open Crafting Table & Furnace Oven UI |
+| `1` – `9`, `0` / `Scroll` | Select Hotbar Slot (Pickaxe, Crafting Table, Furnace, Blocks) |
 | `F6` | Quick-Save Modified Chunks to Disk (`user://worlds/`) |
 | `Esc` | Open Interactive Pause & Settings Menu |
 
