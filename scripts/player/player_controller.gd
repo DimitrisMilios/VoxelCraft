@@ -1,14 +1,21 @@
 class_name PlayerController
 extends CharacterBody3D
 ## First-person player controller for VoxelCraft.
-## Handles mouse-look camera rotation, WASD + sprint movement, jumping, and custom gravity.
+## Handles mouse-look camera rotation, WASD + sprint movement, jumping, gravity,
+## and a toggleable Creative Fly Mode (F key).
+
+signal fly_mode_changed(is_flying: bool)
 
 # --- Exported Movement Tuning ---
 @export_group("Movement")
 @export var walk_speed: float = 5.5
 @export var sprint_speed: float = 8.0
+@export var fly_speed: float = 13.0
+@export var fly_sprint_speed: float = 22.0
+@export var fly_vertical_speed: float = 9.5
 @export var acceleration: float = 14.0
 @export var air_acceleration: float = 4.5
+@export var fly_acceleration: float = 10.0
 @export var friction: float = 12.0
 @export var jump_velocity: float = 7.2
 @export var gravity_multiplier: float = 1.8
@@ -20,7 +27,11 @@ extends CharacterBody3D
 @export var max_pitch_deg: float = 89.0
 @export var base_fov: float = 75.0
 @export var sprint_fov_multiplier: float = 1.10
+@export var fly_fov_multiplier: float = 1.14
 @export var fov_lerp_speed: float = 8.0
+
+# --- State ---
+var is_flying: bool = false
 
 # --- Node References ---
 @onready var head: Node3D = $Head
@@ -46,6 +57,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 		return
 
+	# Toggle Creative Fly Mode with F
+	if event.is_action_pressed("toggle_fly"):
+		is_flying = not is_flying
+		velocity.y = 0.0
+		fly_mode_changed.emit(is_flying)
+		return
+
 	# Re-capture mouse when clicking inside the game window
 	if event is InputEventMouseButton and event.pressed:
 		if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
@@ -64,9 +82,13 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	_apply_gravity(delta)
-	_handle_jump()
-	_handle_horizontal_movement(delta)
+	if is_flying:
+		_handle_fly_movement(delta)
+	else:
+		_apply_gravity(delta)
+		_handle_jump()
+		_handle_horizontal_movement(delta)
+
 	_update_camera_fov(delta)
 	move_and_slide()
 
@@ -103,12 +125,44 @@ func _handle_horizontal_movement(delta: float) -> void:
 		velocity.z = move_toward(velocity.z, 0.0, decel * delta * target_speed)
 
 
+func _handle_fly_movement(delta: float) -> void:
+	var input_dir: Vector2 = Input.get_vector(
+		"move_left",
+		"move_right",
+		"move_forward",
+		"move_backward"
+	)
+	var move_direction: Vector3 = (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()
+	var is_sprinting: bool = Input.is_action_pressed("sprint")
+	var target_speed: float = fly_sprint_speed if is_sprinting else fly_speed
+
+	if move_direction != Vector3.ZERO:
+		velocity.x = move_toward(velocity.x, move_direction.x * target_speed, fly_acceleration * delta * target_speed)
+		velocity.z = move_toward(velocity.z, move_direction.z * target_speed, fly_acceleration * delta * target_speed)
+	else:
+		velocity.x = move_toward(velocity.x, 0.0, fly_acceleration * delta * target_speed)
+		velocity.z = move_toward(velocity.z, 0.0, fly_acceleration * delta * target_speed)
+
+	var vertical_dir: float = 0.0
+	if Input.is_action_pressed("jump"):
+		vertical_dir += 1.0
+	if Input.is_action_pressed("fly_down"):
+		vertical_dir -= 1.0
+
+	var v_speed: float = fly_vertical_speed * (1.5 if is_sprinting else 1.0)
+	velocity.y = move_toward(velocity.y, vertical_dir * v_speed, fly_acceleration * delta * v_speed)
+
+
 func _update_camera_fov(delta: float) -> void:
 	if not camera:
 		return
 	var is_moving_forward: bool = Input.is_action_pressed("move_forward")
 	var is_sprinting: bool = Input.is_action_pressed("sprint") and is_moving_forward
-	var target_fov: float = base_fov * sprint_fov_multiplier if is_sprinting else base_fov
+	var target_fov: float = base_fov
+	if is_flying and is_sprinting:
+		target_fov = base_fov * fly_fov_multiplier
+	elif is_sprinting:
+		target_fov = base_fov * sprint_fov_multiplier
 	camera.fov = lerpf(camera.fov, target_fov, fov_lerp_speed * delta)
 
 
@@ -120,6 +174,9 @@ func _register_default_inputs() -> void:
 	_bind_key_action("move_right", KEY_D)
 	_bind_key_action("jump", KEY_SPACE)
 	_bind_key_action("sprint", KEY_SHIFT)
+	_bind_key_action("toggle_fly", KEY_F)
+	_bind_key_action("fly_down", KEY_CTRL)
+	_bind_key_action("fly_down", KEY_C)
 
 
 func _bind_key_action(action_name: StringName, keycode: Key) -> void:
