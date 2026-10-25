@@ -1,17 +1,10 @@
 class_name VoxelHUD
 extends CanvasLayer
-## Retro HUD displaying center crosshair, 5-slot block hotbar, and debug status overlay.
+## Retro HUD displaying center crosshair, 8-slot block hotbar, and debug status overlay.
 
-const SLOT_COLORS: Dictionary = {
-	BlockRegistry.BlockId.GRASS: Color(0.36, 0.71, 0.28),
-	BlockRegistry.BlockId.DIRT: Color(0.53, 0.36, 0.21),
-	BlockRegistry.BlockId.STONE: Color(0.52, 0.54, 0.56),
-	BlockRegistry.BlockId.WOOD_LOG: Color(0.41, 0.27, 0.14),
-	BlockRegistry.BlockId.LEAVES: Color(0.24, 0.56, 0.20),
-}
-
-var _player: Node3D = null
+var _player: PlayerController = null
 var _world_manager: WorldManager = null
+var _day_night: DayNightCycle = null
 var _interactor: BlockInteractor = null
 var _slot_panels: Array[PanelContainer] = []
 var _debug_label: Label = null
@@ -39,18 +32,24 @@ func _process(delta: float) -> void:
 
 		var active_chunks: int = _world_manager.get_active_chunk_count() if _world_manager != null else 0
 		var modified_chunks: int = _world_manager.get_modified_chunk_count() if _world_manager != null else 0
+		var time_str: String = _day_night.get_formatted_time() if _day_night != null else "Day 1 09:30"
+		var mode_str: String = "FLY" if _player.is_flying else "WALK"
 		var save_status: String = " | [SAVED TO DISK!]" if _save_toast_timer > 0.0 else ""
 
 		_debug_label.text = (
-			"VoxelCraft 0.2 | %d FPS | Chunks: %d (Edited: %d)%s\n" % [fps, active_chunks, modified_chunks, save_status]
-			+ "XYZ: %.1f, %.1f, %.1f | Chunk: (%d, %d)\n" % [pos.x, pos.y, pos.z, chunk_coord.x, chunk_coord.y]
-			+ "Selected: %s | [LMB] Break  [RMB] Place  [1-5/Scroll] Block  [F6] Save  [Esc] Cursor" % block_name
+			"VoxelCraft 0.3 | %d FPS | %s | Mode: %s | Chunks: %d (Saved: %d)%s\n"
+			% [fps, time_str, mode_str, active_chunks, modified_chunks, save_status]
+			+ "XYZ: %.1f, %.1f, %.1f | Chunk: (%d, %d) | Block: %s\n"
+			% [pos.x, pos.y, pos.z, chunk_coord.x, chunk_coord.y, block_name]
+			+ "[LMB] Break  [RMB] Place  [1-8/Scroll] Block  [F] Fly  [T] +Time  [F6] Save  [Esc] Cursor"
 		)
 
 
 func _bind_references() -> void:
-	_player = get_tree().get_first_node_in_group("player") as Node3D
+	_player = get_tree().get_first_node_in_group("player") as PlayerController
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
+	_day_night = get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle
+
 	if _world_manager != null:
 		_world_manager.world_saved.connect(_on_world_saved)
 
@@ -101,14 +100,14 @@ func _build_hotbar() -> void:
 
 	var hbox := HBoxContainer.new()
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_theme_constant_override("separation", 8)
+	hbox.add_theme_constant_override("separation", 6)
 	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bottom_margin.add_child(hbox)
 
 	for i in range(BlockInteractor.HOTBAR_BLOCKS.size()):
 		var block_id: int = BlockInteractor.HOTBAR_BLOCKS[i]
 		var panel := PanelContainer.new()
-		panel.custom_minimum_size = Vector2(64, 64)
+		panel.custom_minimum_size = Vector2(62, 62)
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 		var vbox := VBoxContainer.new()
@@ -117,9 +116,9 @@ func _build_hotbar() -> void:
 		panel.add_child(vbox)
 
 		var swatch := ColorRect.new()
-		swatch.custom_minimum_size = Vector2(28, 28)
+		swatch.custom_minimum_size = Vector2(26, 26)
 		swatch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		swatch.color = SLOT_COLORS.get(block_id, Color.GRAY)
+		swatch.color = BlockRegistry.get_block_color(block_id)
 		swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vbox.add_child(swatch)
 

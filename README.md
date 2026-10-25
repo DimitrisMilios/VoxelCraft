@@ -70,11 +70,14 @@
 | :--- | :--- |
 | `W` `A` `S` `D` | Move Forward / Left / Backward / Right |
 | `Shift` | Sprint (with dynamic FOV) |
-| `Space` | Jump |
+| `Space` | Jump (or Ascend in Fly Mode) |
+| `Ctrl` / `C` | Descend in Fly Mode |
+| `F` | Toggle Creative Fly Mode |
+| `T` | Fast-Forward Time of Day (+2.5 Hours) |
 | `Mouse Movement` | First-Person Camera Look |
 | `Left Mouse Button` | Break Targeted Block |
 | `Right Mouse Button` | Place Selected Block |
-| `1` – `5` / `Mouse Wheel` | Select Hotbar Slot (Grass, Dirt, Stone, Wood Log, Leaves) |
+| `1` – `8` / `Mouse Wheel` | Select Hotbar Slot (Grass, Dirt, Stone, Cobble, Wood Log, Planks, Leaves, Sand) |
 | `F6` | Quick-Save Modified Chunks to Disk (`user://worlds/`) |
 | `Esc` | Toggle Mouse Cursor Capture |
 
