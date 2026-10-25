@@ -1,5 +1,7 @@
 class_name HeldBlockView
 extends Node3D
+
+const CuboidMeshBuilder = preload("res://scripts/entities/cuboid_mesh_builder.gd")
 ## Renders the player's first-person right-hand viewmodel:
 ## - Empty Right Arm/Hand when slot is empty (punching trees!)
 ## - 3D Voxel Pickaxe, 3D Axe, or 3D Shovel when a tool is equipped
@@ -45,6 +47,8 @@ func _ready() -> void:
 
 
 func _bind_player() -> void:
+	if get_tree() == null:
+		return
 	_player = get_tree().get_first_node_in_group("player") as PlayerController
 	if _player == null:
 		return
@@ -140,7 +144,11 @@ func _build_all_viewmodels() -> void:
 	steve_mat.no_depth_test = true
 	steve_mat.render_priority = 10
 
-	var forearm := _make_part(Vector3(0.13, 0.26, 0.13), steve_mat, Vector3(0.0, 0.04, 0.0))
+	var forearm := MeshInstance3D.new()
+	forearm.mesh = CuboidMeshBuilder.build_cuboid(Vector3(0.14, 0.44, 0.14), 40, 16, 4, 12, 4, 64.0, 64.0)
+	forearm.material_override = steve_mat
+	forearm.position = Vector3(0.0, 0.04, 0.0)
+	forearm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_hand_root.add_child(forearm)
 
 	# 2. 3D Faithful 64x Held Tool / Item (Double-Sided Textured In-Hand Viewmodel)
