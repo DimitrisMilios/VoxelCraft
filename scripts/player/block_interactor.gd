@@ -3,13 +3,18 @@ extends Node3D
 ## Handles raycast block targeting, wireframe block outline, breaking, placing, and hotbar state.
 
 signal hotbar_slot_changed(slot_index: int, block_id: int)
+signal block_broken(world_pos: Vector3i, broken_block_id: int)
+signal block_placed(world_pos: Vector3i, placed_block_id: int)
 
 const HOTBAR_BLOCKS: Array[int] = [
 	BlockRegistry.BlockId.GRASS,
 	BlockRegistry.BlockId.DIRT,
 	BlockRegistry.BlockId.STONE,
+	BlockRegistry.BlockId.COBBLESTONE,
 	BlockRegistry.BlockId.WOOD_LOG,
+	BlockRegistry.BlockId.WOOD_PLANKS,
 	BlockRegistry.BlockId.LEAVES,
+	BlockRegistry.BlockId.SAND,
 ]
 
 @export var raycast_path: NodePath = NodePath("../Head/Camera3D/InteractionRay")
@@ -46,7 +51,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		return
 
-	# Hotbar number keys 1..5
+	# Hotbar number keys 1..8
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_1:
@@ -59,6 +64,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				select_slot(3)
 			KEY_5:
 				select_slot(4)
+			KEY_6:
+				select_slot(5)
+			KEY_7:
+				select_slot(6)
+			KEY_8:
+				select_slot(7)
 
 	# Mouse buttons & scroll wheel
 	if event is InputEventMouseButton and event.pressed:
@@ -123,8 +134,13 @@ func _update_raycast_target() -> void:
 func _try_break_block() -> void:
 	if not has_target or _world_manager == null:
 		return
-	_world_manager.set_block_world(target_block_pos, BlockRegistry.BlockId.AIR)
-	_update_raycast_target()
+	var previous_id: int = _world_manager.get_block_world(target_block_pos)
+	if previous_id == BlockRegistry.BlockId.AIR:
+		return
+	var broken_pos: Vector3i = target_block_pos
+	if _world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.AIR):
+		block_broken.emit(broken_pos, previous_id)
+		_update_raycast_target()
 
 
 func _try_place_block() -> void:
@@ -142,8 +158,11 @@ func _try_place_block() -> void:
 		if block_aabb.intersects(player_aabb):
 			return
 
-	_world_manager.set_block_world(place_block_pos, get_selected_block_id())
-	_update_raycast_target()
+	var placed_id: int = get_selected_block_id()
+	var placed_pos: Vector3i = place_block_pos
+	if _world_manager.set_block_world(placed_pos, placed_id):
+		block_placed.emit(placed_pos, placed_id)
+		_update_raycast_target()
 
 
 func _create_selection_wireframe() -> void:

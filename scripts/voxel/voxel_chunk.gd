@@ -117,6 +117,9 @@ static func sample_terrain_voxel(
 		var cave_val: float = cave_noise.get_noise_3d(float(wx), float(ly) * 1.4, float(wz))
 		if cave_val > 0.46:
 			return BlockRegistry.BlockId.AIR
+	# Low-lying basins and shorelines near/below sea level generate sandy beaches
+	if surface_y <= SEA_LEVEL - 2 and ly >= surface_y - 2:
+		return BlockRegistry.BlockId.SAND
 	if ly == surface_y:
 		return BlockRegistry.BlockId.GRASS
 	if ly >= surface_y - 3:

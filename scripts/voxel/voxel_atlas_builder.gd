@@ -69,6 +69,9 @@ static func _sample_tile_pixel(
 	var bark_base := Color(0.41, 0.27, 0.14)
 	var ring_base := Color(0.68, 0.53, 0.31)
 	var leaf_base := Color(0.24, 0.56, 0.20)
+	var sand_base := Color(0.86, 0.80, 0.54)
+	var cobble_base := Color(0.44, 0.46, 0.48)
+	var plank_base := Color(0.68, 0.52, 0.30)
 
 	match tile_idx:
 		0: # Grass Top
@@ -110,6 +113,24 @@ static func _sample_tile_pixel(
 		6: # Leaves
 			var dapple: float = -0.07 if (rng.randf() < 0.28) else 0.03
 			return _tint(leaf_base, jitter + dapple)
+
+		7: # Sand (Warm beach ripples and fine grain)
+			var ripple: float = 0.03 if ((x + y * 2) % 6 == 0) else -0.02
+			return _tint(sand_base, jitter * 0.65 + ripple)
+
+		8: # Cobblestone (Interlocking masonry mortar lines)
+			var mortar_row: bool = (y % 4 == 0)
+			var offset_col: int = (y / 4) * 2
+			var mortar_col: bool = ((x + offset_col) % 4 == 0)
+			var crack_shade: float = -0.12 if (mortar_row or mortar_col) else 0.04
+			return _tint(cobble_base, jitter + crack_shade)
+
+		9: # Wood Planks (Horizontal plank boards with staggered joints)
+			var board_seam: bool = (y % 4 == 3)
+			var joint_x: int = 7 if ((y / 4) % 2 == 0) else 13
+			var vertical_joint: bool = (x == joint_x)
+			var seam_shade: float = -0.10 if (board_seam or vertical_joint) else 0.02
+			return _tint(plank_base, jitter * 0.6 + seam_shade)
 
 		_:
 			return _tint(stone_base, jitter)
