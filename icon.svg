@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="16" fill="#1e222a"/>
+  <!-- Top Face (Grass) -->
+  <polygon points="64,20 108,42 64,64 20,42" fill="#5cb85c"/>
+  <!-- Left Face (Dirt with Grass Fringe) -->
+  <polygon points="20,42 64,64 64,110 20,88" fill="#8b5a2b"/>
+  <polygon points="20,42 64,64 64,74 20,52" fill="#4cae4c"/>
+  <!-- Right Face (Shadowed Dirt with Grass Fringe) -->
+  <polygon points="64,64 108,42 108,88 64,110" fill="#6e4720"/>
+  <polygon points="64,64 108,42 108,52 64,74" fill="#3d8b3d"/>
+</svg>
