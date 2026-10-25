@@ -28,6 +28,7 @@ var _highest_solid_y: int = 0
 var _sub_solid_meshes: Array[MeshInstance3D] = []
 var _sub_water_meshes: Array[MeshInstance3D] = []
 var _sub_colliders: Array[CollisionShape3D] = []
+var _block_lights: Dictionary = {} # Vector3i(lx, ly, lz) -> OmniLight3D
 
 
 func _ready() -> void:
@@ -318,6 +319,7 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 	var sub_chunks: Array = mesh_data.get("sub_chunks", [])
 	for sub_idx in range(mini(sub_chunks.size(), SUB_CHUNK_COUNT)):
 		_apply_single_sub_chunk(sub_idx, sub_chunks[sub_idx])
+	_sync_all_light_emitters()
 
 
 func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:
@@ -517,6 +519,8 @@ func _emit_face(
 		Vector2(u1, v1),
 		Vector2(u0, v1),
 	]
+	if BlockRegistry.is_light_emitter(block_id):
+		shade = 1.0
 	var face_color := Color(shade, shade, shade, 1.0)
 
 	# Triangle 1: 0 -> 1 -> 2
@@ -575,8 +579,40 @@ func set_block_local(lx: int, ly: int, lz: int, block_id: int, immediate_rebuild
 	is_dirty = true
 	if block_id != BlockRegistry.BlockId.AIR and ly > _highest_solid_y:
 		_highest_solid_y = ly
+	_update_light_emitter_at(Vector3i(lx, ly, lz), block_id)
 	if immediate_rebuild:
 		rebuild_at_local_y(ly)
+
+
+func _update_light_emitter_at(local_pos: Vector3i, block_id: int) -> void:
+	if BlockRegistry.is_light_emitter(block_id):
+		if not _block_lights.has(local_pos):
+			var omni := OmniLight3D.new()
+			omni.position = Vector3(local_pos) + Vector3(0.5, 0.5, 0.5)
+			omni.light_color = Color(1.0, 0.86, 0.52)
+			omni.light_energy = 1.85
+			omni.omni_range = 11.0
+			omni.omni_attenuation = 1.2
+			add_child(omni)
+			_block_lights[local_pos] = omni
+	else:
+		if _block_lights.has(local_pos):
+			var old_light: OmniLight3D = _block_lights[local_pos]
+			_block_lights.erase(local_pos)
+			if is_instance_valid(old_light):
+				old_light.queue_free()
+
+
+func _sync_all_light_emitters() -> void:
+	if not is_dirty or _voxels.is_empty():
+		return
+	var max_y: int = mini(_highest_solid_y + 1, CHUNK_SIZE_Y)
+	for ly in range(max_y):
+		for lx in range(CHUNK_SIZE_X):
+			for lz in range(CHUNK_SIZE_Z):
+				var id: int = get_block_local(lx, ly, lz)
+				if BlockRegistry.is_light_emitter(id):
+					_update_light_emitter_at(Vector3i(lx, ly, lz), id)
 
 
 func _set_voxel_raw(lx: int, ly: int, lz: int, block_id: int) -> void:

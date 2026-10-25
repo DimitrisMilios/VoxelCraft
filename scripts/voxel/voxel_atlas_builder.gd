@@ -153,6 +153,14 @@ static func _sample_tile_pixel(
 			var sparkle: float = 0.04 if ((x * 3 + y * 5) % 7 == 0) else -0.02
 			return _tint(snow_base, jitter * 0.45 + sparkle)
 
+		11: # Glowstone (Warm golden lantern frame + glowing core crystals)
+			var border: bool = (x == 0 or x == size - 1 or y == 0 or y == size - 1)
+			if border:
+				return _tint(Color(0.58, 0.42, 0.16), jitter * 0.5)
+			var core: bool = ((x + y) % 3 == 0) or (x >= 5 and x <= 10 and y >= 5 and y <= 10)
+			var glow_col: Color = Color(1.0, 0.94, 0.55) if core else Color(0.92, 0.72, 0.24)
+			return _tint(glow_col, jitter * 0.5)
+
 		_:
 			return _tint(stone_base, jitter)
 

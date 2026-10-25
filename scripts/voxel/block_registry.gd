@@ -14,6 +14,7 @@ enum BlockId {
 	WOOD_PLANKS = 8,
 	WATER = 9,
 	SNOW = 10,
+	GLOWSTONE = 11,
 }
 
 enum FaceDir {
@@ -25,7 +26,7 @@ enum FaceDir {
 	NORTH = 5,  # -Z
 }
 
-## Atlas grid layout (11 tiles wide x 1 tile tall, each tile 16x16 pixels):
+## Atlas grid layout (12 tiles wide x 1 tile tall, each tile 16x16 pixels):
 ## Tile 0: Grass Top
 ## Tile 1: Grass Side (Dirt with grass top fringe)
 ## Tile 2: Dirt
@@ -37,7 +38,8 @@ enum FaceDir {
 ## Tile 8: Cobblestone
 ## Tile 9: Wood Planks
 ## Tile 10: Snow
-const ATLAS_COLUMNS: int = 11
+## Tile 11: Glowstone (Luminous lantern crystal)
+const ATLAS_COLUMNS: int = 12
 const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 16
 
@@ -50,6 +52,11 @@ static func is_solid(block_id: int) -> bool:
 ## Returns true if the block is a swimmable liquid (e.g. Water).
 static func is_liquid(block_id: int) -> bool:
 	return block_id == BlockId.WATER
+
+
+## Returns true if the block emits point light in dark caves and at night.
+static func is_light_emitter(block_id: int) -> bool:
+	return block_id == BlockId.GLOWSTONE
 
 
 static func get_block_name(block_id: int) -> String:
@@ -76,6 +83,8 @@ static func get_block_name(block_id: int) -> String:
 			return "Water"
 		BlockId.SNOW:
 			return "Snow"
+		BlockId.GLOWSTONE:
+			return "Glow"
 		_:
 			return "Unknown"
 
@@ -102,6 +111,8 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.20, 0.52, 0.92)
 		BlockId.SNOW:
 			return Color(0.93, 0.96, 0.99)
+		BlockId.GLOWSTONE:
+			return Color(1.0, 0.84, 0.32)
 		_:
 			return Color.GRAY
 
@@ -134,6 +145,8 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 			return 9
 		BlockId.SNOW:
 			return 10
+		BlockId.GLOWSTONE:
+			return 11
 		_:
 			return 3
 

@@ -223,8 +223,9 @@ func _build_bottom_hud() -> void:
 		swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vbox.add_child(swatch)
 
+		var key_num: int = (i + 1) % 10
 		var label := Label.new()
-		label.text = "%d:%s" % [i + 1, BlockRegistry.get_block_name(block_id).substr(0, 6)]
+		label.text = "%d:%s" % [key_num, BlockRegistry.get_block_name(block_id).substr(0, 6)]
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.add_theme_font_size_override("font_size", 11)
 		vbox.add_child(label)
