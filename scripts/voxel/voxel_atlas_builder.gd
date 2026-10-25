@@ -70,6 +70,16 @@ static func get_atlas_texture() -> ImageTexture:
 	if _cached_texture != null:
 		return _cached_texture
 
+	# 1. Load Blender 5.2 baked 3D micro-relief Block Atlas (`res://assets/textures/block_atlas.png`)
+	var atlas_res_path: String = "res://assets/textures/block_atlas.png"
+	var abs_atlas_path: String = ProjectSettings.globalize_path(atlas_res_path)
+	if FileAccess.file_exists(abs_atlas_path):
+		var baked_img := Image.load_from_file(abs_atlas_path)
+		if baked_img != null and not baked_img.is_empty():
+			_cached_texture = ImageTexture.create_from_image(baked_img)
+			return _cached_texture
+
+	# 2. Fallback procedural pixel-art atlas if `block_atlas.png` is missing
 	var tile_size: int = BlockRegistry.TILE_PIXEL_SIZE
 	var width: int = BlockRegistry.ATLAS_COLUMNS * tile_size
 	var height: int = BlockRegistry.ATLAS_ROWS * tile_size

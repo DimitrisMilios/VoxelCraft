@@ -70,9 +70,9 @@ enum FaceDir {
 ## Tile 16: Crafting Table Top (Grid)
 ## Tile 17: Crafting Table Side (Workbench Tools)
 ## Tile 18: Furnace Front (Stone Oven Opening & Embers)
-const ATLAS_COLUMNS: int = 28
+const ATLAS_COLUMNS: int = 29
 const ATLAS_ROWS: int = 1
-const TILE_PIXEL_SIZE: int = 16
+const TILE_PIXEL_SIZE: int = 32
 
 
 static func is_solid(block_id: int) -> bool:
@@ -382,7 +382,7 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 		BlockId.SANDSTONE:
 			return 26
 		BlockId.CACTUS:
-			return 6
+			return 28
 		BlockId.MOSSY_COBBLE:
 			return 27
 		_:
