@@ -44,6 +44,8 @@ var neighbor_block_getter: Callable = Callable()
 ## Contiguous 1D byte buffer of size 16 * 256 * 16 (65,536 bytes).
 var _voxels: PackedByteArray = PackedByteArray()
 var _highest_solid_y: int = 0
+## 4-bit nibble buffer (32,768 bytes) for block metadata (stairs orientation, wool colors, slabs, crops).
+var _metadata: PackedByteArray = PackedByteArray()
 
 var _sub_solid_meshes: Array[MeshInstance3D] = []
 var _sub_water_meshes: Array[MeshInstance3D] = []
@@ -88,14 +90,57 @@ func _ensure_child_nodes() -> void:
 
 
 ## Restores voxel data directly from a saved persistence buffer.
-func load_from_buffer(saved_voxels: PackedByteArray, highest_y: int) -> void:
+func load_from_buffer(saved_voxels: PackedByteArray, highest_y: int, saved_metadata: PackedByteArray = PackedByteArray()) -> void:
 	_voxels = saved_voxels
 	_highest_solid_y = clampi(maxi(highest_y, WATER_LEVEL), 0, CHUNK_SIZE_Y - 1)
+	if not saved_metadata.is_empty():
+		_metadata = saved_metadata
+	else:
+		_metadata.clear()
 	is_dirty = true
 
 
 func get_voxels_buffer() -> PackedByteArray:
 	return _voxels
+
+
+func get_metadata_buffer() -> PackedByteArray:
+	return _metadata
+
+
+func get_metadata_local(lx: int, ly: int, lz: int) -> int:
+	if not is_in_bounds(lx, ly, lz) or _metadata.is_empty():
+		return 0
+	var i: int = _to_index(lx, ly, lz)
+	var byte_idx: int = i >> 1
+	if byte_idx >= _metadata.size():
+		return 0
+	var b: int = _metadata[byte_idx]
+	return (b & 0x0F) if ((i & 1) == 0) else ((b >> 4) & 0x0F)
+
+
+func set_metadata_local(lx: int, ly: int, lz: int, val: int, immediate_rebuild: bool = false) -> void:
+	if not is_in_bounds(lx, ly, lz):
+		return
+	_ensure_metadata_buffer()
+	var i: int = _to_index(lx, ly, lz)
+	var byte_idx: int = i >> 1
+	var b: int = _metadata[byte_idx]
+	if (i & 1) == 0:
+		b = (b & 0xF0) | (val & 0x0F)
+	else:
+		b = (b & 0x0F) | ((val & 0x0F) << 4)
+	_metadata[byte_idx] = b
+	is_dirty = true
+	if immediate_rebuild:
+		rebuild_at_local_y(ly)
+
+
+func _ensure_metadata_buffer() -> void:
+	var target_size: int = (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z) / 2
+	if _metadata.size() < target_size:
+		_metadata.resize(target_size)
+		_metadata.fill(0)
 
 
 func get_highest_solid_y() -> int:
@@ -107,6 +152,7 @@ func get_highest_solid_y() -> int:
 func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = null) -> void:
 	_voxels.resize(CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z)
 	_voxels.fill(BlockRegistry.BlockId.AIR)
+	_metadata.clear()
 	_highest_solid_y = WATER_LEVEL
 
 	var world_origin_x: int = chunk_coords.x * CHUNK_SIZE_X
@@ -973,6 +1019,8 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						water_faces += 1
 					continue
 
+				var meta: int = get_metadata_local(lx, ly, lz)
+
 				# Custom foliage blocks (Sugar Cane, Seagrass, Flowers, Mushrooms cross quads)
 				if (
 					block_id == BlockRegistry.BlockId.SUGAR_CANE
@@ -982,18 +1030,54 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 					or block_id == BlockRegistry.BlockId.BROWN_MUSHROOM
 					or block_id == BlockRegistry.BlockId.RED_MUSHROOM
 				):
-					_emit_cross_quad(st_solid, lx, ly, lz, block_id)
+					_emit_cross_quad(st_solid, lx, ly, lz, block_id, meta)
 					solid_faces += 4
 					continue
 
-				# Custom non-cube functional blocks (Torches, Beds, Doors, Ladders)
+				# L-shaped stairs geometry (Wood Stairs & Cobble Stairs)
+				if block_id == BlockRegistry.BlockId.WOOD_STAIRS or block_id == BlockRegistry.BlockId.COBBLE_STAIRS:
+					var base_min := Vector3(0.0, 0.0, 0.0)
+					var base_max := Vector3(1.0, 0.5, 1.0)
+					var step_min := Vector3(0.0, 0.5, 0.5)
+					var step_max := Vector3(1.0, 1.0, 1.0)
+					match meta:
+						0: # East (+X)
+							step_min = Vector3(0.5, 0.5, 0.0)
+							step_max = Vector3(1.0, 1.0, 1.0)
+						1: # West (-X)
+							step_min = Vector3(0.0, 0.5, 0.0)
+							step_max = Vector3(0.5, 1.0, 1.0)
+						2: # South (+Z)
+							step_min = Vector3(0.0, 0.5, 0.5)
+							step_max = Vector3(1.0, 1.0, 1.0)
+						3: # North (-Z)
+							step_min = Vector3(0.0, 0.5, 0.0)
+							step_max = Vector3(1.0, 1.0, 0.5)
+					_emit_custom_box(st_solid, lx, ly, lz, base_min, base_max, block_id, meta)
+					_emit_custom_box(st_solid, lx, ly, lz, step_min, step_max, block_id, meta)
+					solid_faces += 12
+					_emit_custom_box(st_col, lx, ly, lz, base_min, base_max, block_id, meta)
+					_emit_custom_box(st_col, lx, ly, lz, step_min, step_max, block_id, meta)
+					col_faces += 12
+					continue
+
+				# Custom non-cube functional blocks (Torches, Beds, Doors, Ladders, Slabs, Levers, Buttons)
 				if not BlockRegistry.is_opaque_full_cube(block_id):
 					var min_b := Vector3(0.0, 0.0, 0.0)
 					var max_b := Vector3(1.0, 1.0, 1.0)
 					match block_id:
-						BlockRegistry.BlockId.TORCH:
+						BlockRegistry.BlockId.TORCH, BlockRegistry.BlockId.REDSTONE_TORCH:
 							min_b = Vector3(0.40, 0.0, 0.40)
 							max_b = Vector3(0.60, 0.68, 0.60)
+						BlockRegistry.BlockId.SLAB:
+							min_b = Vector3(0.0, 0.0, 0.0)
+							max_b = Vector3(1.0, 0.5, 1.0)
+						BlockRegistry.BlockId.LEVER:
+							min_b = Vector3(0.35, 0.0, 0.35)
+							max_b = Vector3(0.65, 0.60, 0.65)
+						BlockRegistry.BlockId.BUTTON:
+							min_b = Vector3(0.35, 0.35, 0.0)
+							max_b = Vector3(0.65, 0.65, 0.15)
 						BlockRegistry.BlockId.BED, BlockRegistry.BlockId.BED_HEAD:
 							min_b = Vector3(0.0, 0.0, 0.0)
 							max_b = Vector3(1.0, 0.56, 1.0)
@@ -1018,49 +1102,49 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						BlockRegistry.BlockId.SUGAR_CANE, BlockRegistry.BlockId.SEAGRASS:
 							min_b = Vector3(0.10, 0.0, 0.10)
 							max_b = Vector3(0.90, 0.95, 0.90)
-					_emit_custom_box(st_solid, lx, ly, lz, min_b, max_b, block_id)
+					_emit_custom_box(st_solid, lx, ly, lz, min_b, max_b, block_id, meta)
 					solid_faces += 6
 					if not BlockRegistry.is_passable_block(block_id):
-						_emit_custom_box(st_col, lx, ly, lz, min_b, max_b, block_id)
+						_emit_custom_box(st_col, lx, ly, lz, min_b, max_b, block_id, meta)
 						col_faces += 6
 					continue
 
 				var is_passable: bool = BlockRegistry.is_passable_block(block_id)
 				if not _is_neighbor_solid(lx, ly + 1, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id, meta)
 					solid_faces += 1
 					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id, meta)
 						col_faces += 1
 				if not _is_neighbor_solid(lx, ly - 1, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id, meta)
 					solid_faces += 1
 					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id, meta)
 						col_faces += 1
 				if not _is_neighbor_solid(lx + 1, ly, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id, meta)
 					solid_faces += 1
 					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id, meta)
 						col_faces += 1
 				if not _is_neighbor_solid(lx - 1, ly, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id, meta)
 					solid_faces += 1
 					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id, meta)
 						col_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz + 1):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id, meta)
 					solid_faces += 1
 					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id, meta)
 						col_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz - 1):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id, meta)
 					solid_faces += 1
 					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id, meta)
 						col_faces += 1
 
 	if solid_faces > 0:
@@ -1240,10 +1324,11 @@ func _emit_cross_quad(
 	lx: int,
 	ly: int,
 	lz: int,
-	block_id: int
+	block_id: int,
+	meta: int = 0
 ) -> void:
 	var origin := Vector3(float(lx), float(ly), float(lz))
-	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, BlockRegistry.FaceDir.NORTH)
+	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, BlockRegistry.FaceDir.NORTH, meta)
 	var u0: float = uv_rect.position.x
 	var v0: float = uv_rect.position.y
 	var u1: float = uv_rect.position.x + uv_rect.size.x
@@ -1323,7 +1408,8 @@ func _emit_custom_box(
 	lz: int,
 	min_b: Vector3,
 	max_b: Vector3,
-	block_id: int
+	block_id: int,
+	meta: int = 0
 ) -> void:
 	var origin := Vector3(float(lx), float(ly), float(lz))
 	var p0: Vector3 = origin + min_b
@@ -1337,7 +1423,7 @@ func _emit_custom_box(
 		BlockRegistry.FaceDir.NORTH,
 	]
 	for face_dir in faces:
-		var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir)
+		var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir, meta)
 		var u0: float = uv_rect.position.x
 		var v0: float = uv_rect.position.y
 		var u1: float = uv_rect.position.x + uv_rect.size.x
@@ -1374,6 +1460,9 @@ func _emit_custom_box(
 		if BlockRegistry.is_light_emitter(block_id):
 			shade = 1.0
 		var col := Color(shade, shade, shade, 1.0)
+		if block_id == BlockRegistry.BlockId.WOOL and meta > 0 and meta < BlockRegistry.WOOL_COLORS.size():
+			var wc: Color = BlockRegistry.WOOL_COLORS[meta]
+			col = Color(shade * wc.r, shade * wc.g, shade * wc.b, 1.0)
 		var uvs: Array[Vector2] = [Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1), Vector2(u0, v1)]
 		var indices: Array[int] = [0, 1, 2, 0, 2, 3]
 		for idx in indices:
@@ -1501,10 +1590,11 @@ func _emit_face(
 	ly: int,
 	lz: int,
 	face_dir: int,
-	block_id: int
+	block_id: int,
+	meta: int = 0
 ) -> void:
 	var origin := Vector3(float(lx), float(ly), float(lz))
-	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir)
+	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir, meta)
 	var u0: float = uv_rect.position.x
 	var v0: float = uv_rect.position.y
 	var u1: float = uv_rect.position.x + uv_rect.size.x
@@ -1579,6 +1669,9 @@ func _emit_face(
 	if BlockRegistry.is_light_emitter(block_id):
 		shade = 1.0
 	var face_color := Color(shade, shade, shade, 1.0)
+	if block_id == BlockRegistry.BlockId.WOOL and meta > 0 and meta < BlockRegistry.WOOL_COLORS.size():
+		var wc: Color = BlockRegistry.WOOL_COLORS[meta]
+		face_color = Color(shade * wc.r, shade * wc.g, shade * wc.b, 1.0)
 
 	# Triangle 1: 0 -> 1 -> 2
 	st.set_normal(normal)
@@ -1650,6 +1743,10 @@ func _update_light_emitter_at(local_pos: Vector3i, block_id: int) -> void:
 				omni.light_color = Color(1.0, 0.40, 0.10)
 				omni.light_energy = 2.4
 				omni.omni_range = 14.0
+			elif block_id == BlockRegistry.BlockId.REDSTONE_TORCH:
+				omni.light_color = Color(1.0, 0.20, 0.15)
+				omni.light_energy = 0.9
+				omni.omni_range = 7.0
 			else:
 				omni.light_color = Color(1.0, 0.86, 0.52)
 				omni.light_energy = 1.85

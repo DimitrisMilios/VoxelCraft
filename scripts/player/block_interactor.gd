@@ -737,7 +737,19 @@ func _try_interact_or_place_block() -> void:
 			return
 
 	var placed_pos: Vector3i = place_block_pos
-	if _world_manager.set_block_world(placed_pos, selected_item):
+	var placed_meta: int = 0
+	if selected_item == BlockRegistry.BlockId.WOOD_STAIRS or selected_item == BlockRegistry.BlockId.COBBLE_STAIRS:
+		var facing: Vector3i = _get_player_horizontal_facing()
+		if facing == Vector3i(1, 0, 0):
+			placed_meta = 0 # East
+		elif facing == Vector3i(-1, 0, 0):
+			placed_meta = 1 # West
+		elif facing == Vector3i(0, 0, 1):
+			placed_meta = 2 # South
+		elif facing == Vector3i(0, 0, -1):
+			placed_meta = 3 # North
+
+	if _world_manager.set_block_world(placed_pos, selected_item, 2, placed_meta):
 		if not is_creative and _inventory != null:
 			_inventory.consume_from_hotbar_slot(selected_slot, 1)
 		block_placed.emit(placed_pos, selected_item)

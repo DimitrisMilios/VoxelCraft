@@ -254,6 +254,7 @@ func _update_chunk_targets(center_chunk: Vector2i) -> void:
 					coord,
 					chunk.get_voxels_buffer(),
 					chunk.get_highest_solid_y(),
+					chunk.get_metadata_buffer(),
 					true
 				)
 			chunk.queue_free()
@@ -304,7 +305,7 @@ func _worker_build_chunk(coord: Vector2i) -> void:
 	if _storage != null:
 		saved_data = _storage.load_chunk_data(coord)
 	if not saved_data.is_empty():
-		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]))
+		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]), saved_data.get("metadata", PackedByteArray()))
 	else:
 		chunk.generate_terrain(_surface_noise, _cave_noise)
 
@@ -375,7 +376,7 @@ func _spawn_chunk_immediate(coord: Vector2i) -> VoxelChunk:
 	if _storage != null:
 		saved_data = _storage.load_chunk_data(coord)
 	if not saved_data.is_empty():
-		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]))
+		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]), saved_data.get("metadata", PackedByteArray()))
 	else:
 		chunk.generate_terrain(_surface_noise, _cave_noise)
 
@@ -487,7 +488,7 @@ func is_position_illuminated_by_blocks(world_pos: Vector3, light_range: float = 
 	return false
 
 
-func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int = 2) -> bool:
+func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int = 2, meta: int = 0) -> bool:
 	if world_block_pos.y <= 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
 		return false
 
@@ -537,6 +538,7 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 		_active_crops.erase(world_block_pos)
 
 	chunk.set_block_local(lx, world_block_pos.y, lz, actual_block_id, false)
+	chunk.set_metadata_local(lx, world_block_pos.y, lz, meta, false)
 
 	_mirror_mutex.lock()
 	_chunk_voxel_mirror[chunk_coord] = chunk.get_voxels_buffer()
@@ -547,6 +549,7 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 			chunk_coord,
 			chunk.get_voxels_buffer(),
 			chunk.get_highest_solid_y(),
+			chunk.get_metadata_buffer(),
 			false
 		)
 
@@ -571,10 +574,40 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 
 	return true
 
-	# Enqueue 6-connected neighborhood for finite 8-level water flow & drainage
-	_enqueue_water_neighborhood(world_block_pos)
 
-	return true
+func get_metadata_world(world_block_pos: Vector3i) -> int:
+	if world_block_pos.y < 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
+		return 0
+	var cx: int = floori(float(world_block_pos.x) / float(VoxelChunk.CHUNK_SIZE_X))
+	var cz: int = floori(float(world_block_pos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
+	var chunk_coord := Vector2i(cx, cz)
+	if not _active_chunks.has(chunk_coord):
+		return 0
+	var lx: int = posmod(world_block_pos.x, VoxelChunk.CHUNK_SIZE_X)
+	var lz: int = posmod(world_block_pos.z, VoxelChunk.CHUNK_SIZE_Z)
+	return (_active_chunks[chunk_coord] as VoxelChunk).get_metadata_local(lx, world_block_pos.y, lz)
+
+
+func set_metadata_world(world_block_pos: Vector3i, val: int, rebuild: bool = true) -> void:
+	if world_block_pos.y < 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
+		return
+	var cx: int = floori(float(world_block_pos.x) / float(VoxelChunk.CHUNK_SIZE_X))
+	var cz: int = floori(float(world_block_pos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
+	var chunk_coord := Vector2i(cx, cz)
+	if not _active_chunks.has(chunk_coord):
+		return
+	var lx: int = posmod(world_block_pos.x, VoxelChunk.CHUNK_SIZE_X)
+	var lz: int = posmod(world_block_pos.z, VoxelChunk.CHUNK_SIZE_Z)
+	var chunk: VoxelChunk = _active_chunks[chunk_coord]
+	chunk.set_metadata_local(lx, world_block_pos.y, lz, val, rebuild)
+	if _storage != null:
+		_storage.store_modified_chunk(
+			chunk_coord,
+			chunk.get_voxels_buffer(),
+			chunk.get_highest_solid_y(),
+			chunk.get_metadata_buffer(),
+			false
+		)
 
 
 func _enqueue_water_pos(pos: Vector3i) -> void:
@@ -946,6 +979,7 @@ func save_all_modified_chunks() -> int:
 				coord,
 				chunk.get_voxels_buffer(),
 				chunk.get_highest_solid_y(),
+				chunk.get_metadata_buffer(),
 				false
 			)
 	return _storage.flush_all_to_disk()
@@ -1117,6 +1151,7 @@ func create_explosion(center: Vector3, radius: float = 3.2, is_tnt: bool = true,
 			c_coord,
 			v_buf,
 			chunk.get_highest_solid_y(),
+			chunk.get_metadata_buffer(),
 			false
 		)
 

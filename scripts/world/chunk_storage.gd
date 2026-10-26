@@ -35,17 +35,25 @@ func _ensure_save_directory() -> void:
 
 
 ## Records a modified chunk's voxel buffer in memory and marks it ready for disk persistence.
-func store_modified_chunk(coord: Vector2i, voxels: PackedByteArray, highest_y: int, flush_to_disk: bool = false) -> void:
+func store_modified_chunk(
+	coord: Vector2i,
+	voxels: PackedByteArray,
+	highest_y: int,
+	metadata: PackedByteArray = PackedByteArray(),
+	flush_to_disk: bool = false
+) -> void:
 	var copy_bytes: PackedByteArray = voxels.duplicate()
+	var copy_meta: PackedByteArray = metadata.duplicate()
 	_mutex.lock()
 	_modified_chunks[coord] = {
 		"voxels": copy_bytes,
 		"highest_y": highest_y,
+		"metadata": copy_meta,
 	}
 	_mutex.unlock()
 
 	if flush_to_disk:
-		save_chunk_to_disk(coord, copy_bytes, highest_y)
+		save_chunk_to_disk(coord, copy_bytes, highest_y, copy_meta)
 
 
 ## Checks if a chunk has saved modifications in memory or on disk.
@@ -63,9 +71,11 @@ func load_chunk_data(coord: Vector2i) -> Dictionary:
 	_mutex.lock()
 	if _modified_chunks.has(coord):
 		var cached: Dictionary = _modified_chunks[coord]
+		var cached_meta: PackedByteArray = cached.get("metadata", PackedByteArray())
 		var result := {
 			"voxels": (cached["voxels"] as PackedByteArray).duplicate(),
 			"highest_y": int(cached["highest_y"]),
+			"metadata": cached_meta.duplicate(),
 		}
 		_mutex.unlock()
 		return result
@@ -87,6 +97,13 @@ func load_chunk_data(coord: Vector2i) -> Dictionary:
 	var highest_y: int = file.get_16()
 	var byte_len: int = file.get_32()
 	var voxels: PackedByteArray = file.get_buffer(byte_len)
+
+	var metadata := PackedByteArray()
+	if file.get_position() < file.get_length():
+		var meta_len: int = file.get_32()
+		if meta_len > 0 and file.get_position() + meta_len <= file.get_length():
+			metadata = file.get_buffer(meta_len)
+
 	file.close()
 
 	if voxels.size() != VoxelChunk.CHUNK_SIZE_X * VoxelChunk.CHUNK_SIZE_Y * VoxelChunk.CHUNK_SIZE_Z:
@@ -96,17 +113,24 @@ func load_chunk_data(coord: Vector2i) -> Dictionary:
 	_modified_chunks[coord] = {
 		"voxels": voxels.duplicate(),
 		"highest_y": highest_y,
+		"metadata": metadata.duplicate(),
 	}
 	_mutex.unlock()
 
 	return {
 		"voxels": voxels,
 		"highest_y": highest_y,
+		"metadata": metadata,
 	}
 
 
 ## Writes a single modified chunk to disk using Zstandard compression.
-func save_chunk_to_disk(coord: Vector2i, voxels: PackedByteArray, highest_y: int) -> bool:
+func save_chunk_to_disk(
+	coord: Vector2i,
+	voxels: PackedByteArray,
+	highest_y: int,
+	metadata: PackedByteArray = PackedByteArray()
+) -> bool:
 	_ensure_save_directory()
 	var path: String = _get_chunk_file_path(coord)
 	var file := FileAccess.open_compressed(path, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
@@ -117,6 +141,11 @@ func save_chunk_to_disk(coord: Vector2i, voxels: PackedByteArray, highest_y: int
 	file.store_16(highest_y)
 	file.store_32(voxels.size())
 	file.store_buffer(voxels)
+	if not metadata.is_empty():
+		file.store_32(metadata.size())
+		file.store_buffer(metadata)
+	else:
+		file.store_32(0)
 	file.close()
 	return true
 
@@ -134,7 +163,8 @@ func flush_all_to_disk() -> int:
 		var entry: Dictionary = _modified_chunks.get(coord, {})
 		_mutex.unlock()
 		if not entry.is_empty():
-			if save_chunk_to_disk(coord, entry["voxels"], int(entry["highest_y"])):
+			var m_buf: PackedByteArray = entry.get("metadata", PackedByteArray())
+			if save_chunk_to_disk(coord, entry["voxels"], int(entry["highest_y"]), m_buf):
 				saved_count += 1
 	return saved_count
 

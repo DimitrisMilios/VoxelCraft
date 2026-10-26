@@ -311,20 +311,29 @@ func _on_station_opened(station_block_id: int) -> void:
 	if station_block_id == BlockRegistry.BlockId.CRAFTING_TABLE:
 		_modal_mode = ModalMode.CRAFTING_TABLE_3X3
 		if _inventory != null:
+			_inventory.is_chest_open = false
+			_inventory.is_furnace_open = false
 			_inventory.set_crafting_grid_dimension(3)
 		_modal_title_label.text = "CRAFTING TABLE (3x3 WORKBENCH)"
 		_modal_feedback_label.text = "Left-Click to pick/place stack | Right-Click to place 1 item per cell"
 	elif station_block_id == BlockRegistry.BlockId.FURNACE:
 		_modal_mode = ModalMode.FURNACE_OVEN
+		if _inventory != null:
+			_inventory.open_furnace()
 		_modal_title_label.text = "FURNACE (OVEN SMELTING)"
 		_modal_feedback_label.text = "Place Ore/Meat in Top Slot + Coal/Wood in Bottom Fuel Slot to smelt/cook!"
 	elif station_block_id == BlockRegistry.BlockId.CHEST:
 		_modal_mode = ModalMode.CHEST_27
+		if _inventory != null:
+			_inventory.is_chest_open = true
+			_inventory.is_furnace_open = false
 		_modal_title_label.text = "WOODEN CHEST (27-SLOT WORLD STORAGE)"
 		_modal_feedback_label.text = "Store items in this Chest! Contents stay at this block position."
 	else:
 		_modal_mode = ModalMode.PLAYER_INV_2X2
 		if _inventory != null:
+			_inventory.is_chest_open = false
+			_inventory.is_furnace_open = false
 			_inventory.set_crafting_grid_dimension(2)
 		_modal_title_label.text = "PLAYER INVENTORY (2x2 CRAFTING)"
 		_modal_feedback_label.text = "Punch Wood -> Place in 2x2 Grid -> Craft Planks, Sticks & Crafting Table!"
