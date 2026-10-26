@@ -100,6 +100,7 @@ var _damage_flash_alpha: float = 0.0
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_load_blender_ui_textures()
 	_build_screen_tints()
 	_build_crosshair_and_mining_bar()
@@ -149,9 +150,14 @@ func _make_blender_stylebox(tex: Texture2D, margin: float = 6.0, fallback_bg := 
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _modal_mode != ModalMode.NONE and event is InputEventKey and event.pressed and not event.echo:
-		if event.physical_keycode == KEY_E or event.physical_keycode == KEY_ESCAPE:
-			_close_modal()
+	if event is InputEventKey and event.pressed and not event.echo:
+		if _modal_mode != ModalMode.NONE:
+			if event.physical_keycode == KEY_E or event.physical_keycode == KEY_ESCAPE:
+				_close_modal()
+				get_viewport().set_input_as_handled()
+		elif get_tree().paused and event.physical_keycode == KEY_ESCAPE:
+			get_tree().paused = false
+			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 			get_viewport().set_input_as_handled()
 
 
@@ -179,7 +185,7 @@ func _process(delta: float) -> void:
 		_modal_overlay.visible = (_modal_mode != ModalMode.NONE)
 
 	if _pause_overlay != null:
-		_pause_overlay.visible = (Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED) and (_modal_mode == ModalMode.NONE)
+		_pause_overlay.visible = get_tree().paused and (_modal_mode == ModalMode.NONE)
 
 	# Update floating cursor stack position
 	if _cursor_float != null and _inventory != null:
@@ -1038,7 +1044,9 @@ func _rebuild_recipe_book_buttons() -> void:
 		["crafting_table", "Crafting Table (4 Planks)"],
 		["glowstone", "4x Torches (1 Coal + 1 Stick)"],
 		["chest", "[3x3] Chest (8 Planks Ring)"],
-		["bed", "[3x3] Bed (3 Leaves/Snow+3 Plank)"],
+		["bed", "[3x3] Bed (3 Wool+3 Planks)"],
+		["bread", "[3x3] Bread (3 Wheat)"],
+		["shears", "Shears (2 Iron Ingots)"],
 		["door", "[3x3] 2x Wood Door (6 Planks)"],
 		["ladder", "[3x3] 3x Ladder (7 Sticks H)"],
 		["tnt", "TNT (2 Gunpowder/Coal+2 Sand)"],
@@ -1341,6 +1349,7 @@ func _build_pause_menu() -> void:
 	resume_btn.custom_minimum_size = Vector2(0, 36)
 	_apply_faithful_button_style(resume_btn)
 	resume_btn.pressed.connect(func() -> void:
+		get_tree().paused = false
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	)
 	vbox.add_child(resume_btn)
@@ -1403,6 +1412,7 @@ func _build_pause_menu() -> void:
 	title_btn.custom_minimum_size = Vector2(0, 32)
 	_apply_faithful_button_style(title_btn)
 	title_btn.pressed.connect(func() -> void:
+		get_tree().paused = false
 		if _world_manager != null:
 			_world_manager.save_complete_world()
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
@@ -1415,6 +1425,7 @@ func _build_pause_menu() -> void:
 	quit_btn.custom_minimum_size = Vector2(0, 32)
 	_apply_faithful_button_style(quit_btn)
 	quit_btn.pressed.connect(func() -> void:
+		get_tree().paused = false
 		if _world_manager != null:
 			_world_manager.save_complete_world()
 		get_tree().quit()

@@ -429,7 +429,29 @@ func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
 	var lx: int = posmod(world_block_pos.x, VoxelChunk.CHUNK_SIZE_X)
 	var lz: int = posmod(world_block_pos.z, VoxelChunk.CHUNK_SIZE_Z)
 	var chunk: VoxelChunk = _active_chunks[chunk_coord]
-	chunk.set_block_local(lx, world_block_pos.y, lz, block_id, false)
+
+	var actual_block_id: int = block_id
+	if block_id == BlockRegistry.BlockId.LAVA:
+		var has_water_nb: bool = false
+		for d in [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0), Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]:
+			if BlockRegistry.is_liquid(get_block_world(world_block_pos + d)):
+				has_water_nb = true
+				break
+		if has_water_nb:
+			actual_block_id = BlockRegistry.BlockId.OBSIDIAN
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
+			if sfx != null and sfx.has_method("play_sfx_at_pos"):
+				sfx.play_sfx_at_pos("lava_cool", Vector3(world_block_pos) + Vector3(0.5, 0.5, 0.5), 1.0)
+	elif BlockRegistry.is_liquid(block_id):
+		for d in [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0), Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]:
+			var nb_pos: Vector3i = world_block_pos + d
+			if get_block_world(nb_pos) == BlockRegistry.BlockId.LAVA:
+				set_block_world(nb_pos, BlockRegistry.BlockId.COBBLESTONE)
+				var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
+				if sfx != null and sfx.has_method("play_sfx_at_pos"):
+					sfx.play_sfx_at_pos("lava_cool", Vector3(nb_pos) + Vector3(0.5, 0.5, 0.5), 1.0)
+
+	chunk.set_block_local(lx, world_block_pos.y, lz, actual_block_id, false)
 
 	_mirror_mutex.lock()
 	_chunk_voxel_mirror[chunk_coord] = chunk.get_voxels_buffer()
@@ -566,6 +588,25 @@ func _compute_target_water_id(pos: Vector3i, cur_id: int) -> int:
 		Vector3i(0, 0, 1),
 		Vector3i(0, 0, -1),
 	]
+
+	# If this position is LAVA and receiving water, it cools into Obsidian!
+	if cur_id == BlockRegistry.BlockId.LAVA:
+		for d in dirs:
+			if BlockRegistry.is_liquid(get_block_world(pos + d)):
+				var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
+				if sfx != null and sfx.has_method("play_sfx_at_pos"):
+					sfx.play_sfx_at_pos("lava_cool", Vector3(pos) + Vector3(0.5, 0.5, 0.5), 1.0)
+				return BlockRegistry.BlockId.OBSIDIAN
+		return BlockRegistry.BlockId.LAVA
+
+	# Check if flowing water touches adjacent lava and cools it into Cobblestone
+	for d in dirs:
+		var nb_pos: Vector3i = pos + d
+		if get_block_world(nb_pos) == BlockRegistry.BlockId.LAVA:
+			set_block_world(nb_pos, BlockRegistry.BlockId.COBBLESTONE)
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
+			if sfx != null and sfx.has_method("play_sfx_at_pos"):
+				sfx.play_sfx_at_pos("lava_cool", Vector3(nb_pos) + Vector3(0.5, 0.5, 0.5), 1.0)
 
 	# 1. Minecraft 2x2 Infinite Water Spring Rule: 2+ orthogonal WATER sources over a solid/source floor -> WATER source
 	var source_neighbors: int = 0

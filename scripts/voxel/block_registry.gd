@@ -31,6 +31,9 @@ enum BlockId {
 	SANDSTONE = 25,
 	CACTUS = 26,
 	MOSSY_COBBLE = 27,
+	WOOL = 28,
+	FARMLAND = 29,
+	WHEAT_CROPS = 30,
 	WATER_FLOW_1 = 31,
 	WATER_FLOW_2 = 32,
 	WATER_FLOW_3 = 33,
@@ -39,6 +42,8 @@ enum BlockId {
 	WATER_FLOW_6 = 36,
 	WATER_FLOW_7 = 37,
 	WATER_FALLING = 38,
+	LAVA = 41,
+	POTATO_CROPS = 42,
 }
 
 enum FaceDir {
@@ -100,6 +105,8 @@ static func is_passable_block(block_id: int) -> bool:
 		block_id == BlockId.TORCH
 		or block_id == BlockId.DOOR_OPEN
 		or block_id == BlockId.LADDER
+		or block_id == BlockId.WHEAT_CROPS
+		or block_id == BlockId.POTATO_CROPS
 	)
 
 
@@ -112,6 +119,9 @@ static func is_opaque_full_cube(block_id: int) -> bool:
 		or block_id == BlockId.DOOR_CLOSED
 		or block_id == BlockId.DOOR_OPEN
 		or block_id == BlockId.LADDER
+		or block_id == BlockId.FARMLAND
+		or block_id == BlockId.WHEAT_CROPS
+		or block_id == BlockId.POTATO_CROPS
 	):
 		return false
 	return true
@@ -121,44 +131,21 @@ static func is_liquid(block_id: int) -> bool:
 	return (
 		block_id == BlockId.WATER
 		or (block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FALLING)
+		or block_id == BlockId.LAVA
 	)
 
 
-static func is_water_source(block_id: int) -> bool:
-	return block_id == BlockId.WATER
-
-
-## Returns water level from 0 (not water) to 8 (full Source or Falling waterfall).
-static func get_water_level(block_id: int) -> int:
-	if block_id == BlockId.WATER or block_id == BlockId.WATER_FALLING:
-		return 8
-	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FLOW_7:
-		return block_id - BlockId.WATER_FLOW_1 + 1
-	return 0
-
-
-static func make_flowing_water_id(level: int) -> int:
-	if level <= 0:
-		return BlockId.AIR
-	if level >= 8:
-		return BlockId.WATER_FALLING
-	return BlockId.WATER_FLOW_1 + clampi(level, 1, 7) - 1
-
-
-## Returns normalized visual/physical height (0.0 to 1.0) of a water block at its center.
-static func get_water_height_ratio(block_id: int) -> float:
-	if block_id == BlockId.WATER_FALLING:
-		return 1.0
-	if block_id == BlockId.WATER:
-		return 0.875
-	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FLOW_7:
-		var lvl: int = block_id - BlockId.WATER_FLOW_1 + 1
-		return clampf(float(lvl) / 9.0, 0.11, 0.78)
-	return 0.0
+static func is_lava(block_id: int) -> bool:
+	return block_id == BlockId.LAVA
 
 
 static func is_light_emitter(block_id: int) -> bool:
-	return block_id == BlockId.GLOWSTONE or block_id == BlockId.FURNACE or block_id == BlockId.TORCH
+	return (
+		block_id == BlockId.GLOWSTONE
+		or block_id == BlockId.FURNACE
+		or block_id == BlockId.TORCH
+		or block_id == BlockId.LAVA
+	)
 
 
 static func is_interactive_station(block_id: int) -> bool:
@@ -188,8 +175,12 @@ static func get_block_hardness(block_id: int) -> float:
 	if is_liquid(block_id) or block_id == BlockId.AIR:
 		return 0.0
 	match block_id:
-		BlockId.TORCH, BlockId.TNT:
-			return 0.12
+		BlockId.TORCH, BlockId.TNT, BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS:
+			return 0.10
+		BlockId.WOOL:
+			return 0.35
+		BlockId.FARMLAND:
+			return 0.38
 		BlockId.LEAVES, BlockId.SNOW, BlockId.CACTUS, BlockId.BED:
 			return 0.24
 		BlockId.GRASS, BlockId.DIRT, BlockId.SAND, BlockId.LADDER:
@@ -266,6 +257,16 @@ static func get_block_name(block_id: int) -> String:
 			return "Cactus"
 		BlockId.MOSSY_COBBLE:
 			return "Mossy Stone"
+		BlockId.WOOL:
+			return "White Wool"
+		BlockId.FARMLAND:
+			return "Farmland"
+		BlockId.WHEAT_CROPS:
+			return "Wheat"
+		BlockId.POTATO_CROPS:
+			return "Potatoes"
+		BlockId.LAVA:
+			return "Lava"
 		_:
 			return "Unknown"
 
@@ -324,6 +325,16 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.18, 0.58, 0.22)
 		BlockId.MOSSY_COBBLE:
 			return Color(0.34, 0.52, 0.32)
+		BlockId.WOOL:
+			return Color(0.95, 0.95, 0.95)
+		BlockId.FARMLAND:
+			return Color(0.40, 0.26, 0.14)
+		BlockId.WHEAT_CROPS:
+			return Color(0.85, 0.78, 0.25)
+		BlockId.POTATO_CROPS:
+			return Color(0.35, 0.65, 0.25)
+		BlockId.LAVA:
+			return Color(1.0, 0.38, 0.08)
 		_:
 			return Color.GRAY
 
@@ -414,6 +425,19 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 				return 28
 		BlockId.MOSSY_COBBLE:
 			return 27
+		BlockId.WOOL:
+			return 36
+		BlockId.FARMLAND:
+			if face_dir == FaceDir.TOP:
+				return 37
+			else:
+				return 2
+		BlockId.WHEAT_CROPS:
+			return 38
+		BlockId.POTATO_CROPS:
+			return 39
+		BlockId.LAVA:
+			return 40
 		_:
 			return 3
 

@@ -79,7 +79,13 @@ func _try_spawn_mob() -> void:
 	else:
 		if ground_block != BlockRegistry.BlockId.GRASS:
 			return
-		mob.variant = PassiveMob.MobVariant.PIG if (randf() < 0.55) else PassiveMob.MobVariant.COW
+		var p_roll: float = randf()
+		if p_roll < 0.38:
+			mob.variant = PassiveMob.MobVariant.SHEEP
+		elif p_roll < 0.70:
+			mob.variant = PassiveMob.MobVariant.COW
+		else:
+			mob.variant = PassiveMob.MobVariant.PIG
 
 	add_child(mob)
 	mob.global_position = Vector3(float(wx) + 0.5, float(surface_y) + 1.2, float(wz) + 0.5)

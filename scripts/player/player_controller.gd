@@ -73,6 +73,7 @@ var _max_fall_speed: float = 0.0
 var _was_on_floor: bool = true
 var _regen_timer: float = 0.0
 var _exhaustion: float = 0.0
+var _lava_burn_timer: float = 0.0
 var _starve_timer: float = 0.0
 var _oxygen_timer: float = 0.0
 var _hurt_roll: float = 0.0
@@ -97,9 +98,18 @@ func _resolve_world_manager() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Toggle mouse capture (Pause Menu) with Escape
+	# Toggle Pause Menu with Escape
 	if event.is_action_pressed("ui_cancel"):
-		if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		var hud: VoxelHUD = get_tree().get_first_node_in_group("hud") as VoxelHUD
+		if hud != null and hud.is_modal_open():
+			hud.close_modals()
+			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+			get_tree().paused = false
+			return
+
+		var next_paused: bool = not get_tree().paused
+		get_tree().paused = next_paused
+		if next_paused:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		else:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -288,6 +298,22 @@ func _update_hunger_and_oxygen(delta: float) -> void:
 			if _world_manager.get_block_world(check_p) == BlockRegistry.BlockId.CACTUS:
 				take_damage(1)
 				break
+
+	# 5. Lava Submersion / Contact Burn Damage
+	if _world_manager != null:
+		var feet_p := Vector3i(floori(global_position.x), floori(global_position.y + 0.15), floori(global_position.z))
+		var waist_p := Vector3i(floori(global_position.x), floori(global_position.y + 0.95), floori(global_position.z))
+		if (
+			_world_manager.get_block_world(feet_p) == BlockRegistry.BlockId.LAVA
+			or _world_manager.get_block_world(waist_p) == BlockRegistry.BlockId.LAVA
+		):
+			_lava_burn_timer += delta
+			if _lava_burn_timer >= 0.45:
+				_lava_burn_timer = 0.0
+				take_damage(4)
+				velocity *= 0.52
+		else:
+			_lava_burn_timer = 0.0
 
 
 func _update_health_regen(delta: float) -> void:

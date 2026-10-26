@@ -21,6 +21,8 @@ enum MobVariant {
 	SKELETON = 3,
 	CREEPER = 4,
 	SPIDER = 5,
+	SHEEP = 6,
+	VILLAGER = 7,
 }
 
 @export var move_speed: float = 2.1
@@ -31,6 +33,7 @@ enum MobVariant {
 
 var health: int = 10
 var max_health: int = 10
+var is_sheared: bool = false
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _state: MobState = MobState.IDLE
@@ -56,7 +59,12 @@ var _day_night: DayNightCycle = null
 
 
 func is_hostile() -> bool:
-	return int(variant) >= int(MobVariant.ZOMBIE)
+	return (
+		variant == MobVariant.ZOMBIE
+		or variant == MobVariant.SKELETON
+		or variant == MobVariant.CREEPER
+		or variant == MobVariant.SPIDER
+	)
 
 
 func _ready() -> void:
@@ -259,6 +267,8 @@ func on_hit_by_player(attacker_pos: Vector3, damage: int = 2) -> void:
 				MobVariant.COW: hurt_sfx = "cow_hurt"
 				MobVariant.PIG: hurt_sfx = "pig_hurt"
 				MobVariant.SPIDER: hurt_sfx = "spider_hurt"
+				MobVariant.SHEEP: hurt_sfx = "sheep_hurt"
+				MobVariant.VILLAGER: hurt_sfx = "villager_hurt"
 			if not hurt_sfx.is_empty():
 				sfx.play_sfx_at_pos(hurt_sfx, current_pos, 1.0)
 
@@ -277,6 +287,8 @@ func _die_and_drop_loot() -> void:
 				MobVariant.PIG: death_sfx = "pig_hurt"
 				MobVariant.COW: death_sfx = "cow_hurt"
 				MobVariant.SPIDER: death_sfx = "spider_hurt"
+				MobVariant.SHEEP: death_sfx = "sheep_hurt"
+				MobVariant.VILLAGER: death_sfx = "villager_hurt"
 			if not death_sfx.is_empty():
 				sfx.play_sfx_at_pos(death_sfx, global_position if is_inside_tree() else position, 2.0)
 
@@ -296,6 +308,10 @@ func _die_and_drop_loot() -> void:
 				drop_id = InventoryManager.ItemId.GUNPOWDER
 			MobVariant.SPIDER:
 				drop_id = InventoryManager.ItemId.STICK
+			MobVariant.SHEEP:
+				drop_id = InventoryManager.ItemId.WOOL if not is_sheared else InventoryManager.ItemId.RAW_PORKCHOP
+			MobVariant.VILLAGER:
+				drop_id = InventoryManager.ItemId.BREAD
 
 		if drop_id > 0:
 			DroppedItem.spawn_drop(
@@ -320,6 +336,8 @@ func _play_ambient_vocal() -> void:
 		MobVariant.COW: sfx_name = "cow_ambient"
 		MobVariant.PIG: sfx_name = "pig_ambient"
 		MobVariant.SPIDER: sfx_name = "spider_ambient"
+		MobVariant.SHEEP: sfx_name = "sheep_ambient"
+		MobVariant.VILLAGER: sfx_name = "villager_ambient"
 	if not sfx_name.is_empty():
 		sfx.play_sfx_at_pos(sfx_name, global_position if is_inside_tree() else position, -1.5, 1.0, 24.0)
 
@@ -339,6 +357,59 @@ func on_fed_by_player(feeder_pos: Vector3) -> void:
 	_state = MobState.IDLE
 	_state_timer = 2.5
 	_spawn_love_particles()
+
+
+## Called when player interacts (right click) with an item on this mob.
+func on_interact_with_item(player: PlayerController, item_id: int) -> bool:
+	if is_hostile():
+		return false
+
+	var feeder_pos: Vector3 = player.global_position if player != null else global_position
+
+	if variant == MobVariant.SHEEP:
+		if item_id == InventoryManager.ItemId.SHEARS:
+			if not is_sheared:
+				is_sheared = true
+				if get_tree() != null:
+					var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+					if sfx != null and sfx.has_method("play_sfx_at_pos"):
+						sfx.play_sfx_at_pos("shears", global_position, 1.0)
+				if _world_manager != null:
+					DroppedItem.spawn_drop(
+						_world_manager,
+						global_position + Vector3(0.0, 0.5, 0.0),
+						InventoryManager.ItemId.WOOL,
+						randi_range(2, 3)
+					)
+				_spawn_love_particles()
+				return true
+			return false
+		elif item_id == InventoryManager.ItemId.WHEAT:
+			is_sheared = false
+			on_fed_by_player(feeder_pos)
+			return true
+
+	elif variant == MobVariant.VILLAGER:
+		if get_tree() != null:
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+			if sfx != null and sfx.has_method("play_sfx_at_pos"):
+				sfx.play_sfx_at_pos("villager_ambient", global_position, 1.0)
+		on_fed_by_player(feeder_pos)
+		if item_id == InventoryManager.ItemId.WHEAT or item_id == InventoryManager.ItemId.POTATO:
+			if _world_manager != null:
+				DroppedItem.spawn_drop(
+					_world_manager,
+					global_position + Vector3(0.0, 0.6, 0.0),
+					InventoryManager.ItemId.BREAD,
+					1
+				)
+		return true
+
+	elif item_id == InventoryManager.ItemId.WHEAT or item_id == InventoryManager.ItemId.POTATO:
+		on_fed_by_player(feeder_pos)
+		return true
+
+	return false
 
 
 func _spawn_love_particles() -> void:
@@ -406,7 +477,12 @@ func _animate_limbs(delta: float) -> void:
 				_legs[1].rotation.x = -swing
 				_legs[2].rotation.x = -swing
 				_legs[3].rotation.x = swing
-		elif variant == MobVariant.COW or variant == MobVariant.PIG:
+		elif variant == MobVariant.VILLAGER:
+			# 2 Legs swing in opposite phase
+			if _legs.size() >= 2:
+				_legs[0].rotation.x = swing
+				_legs[1].rotation.x = -swing
+		elif variant == MobVariant.COW or variant == MobVariant.PIG or variant == MobVariant.SHEEP:
 			# Quadruped walk cycle
 			if _legs.size() >= 4:
 				_legs[0].rotation.x = swing
@@ -430,7 +506,7 @@ func _animate_limbs(delta: float) -> void:
 func _build_collision_and_rays() -> void:
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.68, 1.75, 0.68) if (variant == MobVariant.ZOMBIE or variant == MobVariant.SKELETON or variant == MobVariant.CREEPER) else Vector3(0.78, 0.95, 0.95)
+	box.size = Vector3(0.68, 1.75, 0.68) if (variant == MobVariant.ZOMBIE or variant == MobVariant.SKELETON or variant == MobVariant.CREEPER or variant == MobVariant.VILLAGER) else Vector3(0.78, 0.95, 0.95)
 	col.shape = box
 	col.position = Vector3(0.0, box.size.y * 0.5, 0.0)
 	add_child(col)
@@ -473,6 +549,12 @@ func _build_voxel_model() -> void:
 		MobVariant.PIG:
 			mob_tex_path = "res://assets/textures/entity/pig.png"
 			_primary_color = Color(0.94, 0.64, 0.68)
+		MobVariant.SHEEP:
+			mob_tex_path = "res://assets/textures/entity/sheep.png"
+			_primary_color = Color(0.92, 0.92, 0.92)
+		MobVariant.VILLAGER:
+			mob_tex_path = "res://assets/textures/entity/villager.png"
+			_primary_color = Color(0.65, 0.45, 0.32)
 
 	_mob_mat = StandardMaterial3D.new()
 	_mob_mat.roughness = 1.0
@@ -507,6 +589,10 @@ func _build_voxel_model() -> void:
 			_build_pig_model(sheet_w, sheet_h)
 		MobVariant.SPIDER:
 			_build_spider_model(sheet_w, sheet_h)
+		MobVariant.SHEEP:
+			_build_sheep_model(sheet_w, sheet_h)
+		MobVariant.VILLAGER:
+			_build_villager_model(sheet_w, sheet_h)
 
 
 func _create_part(
@@ -767,3 +853,71 @@ func _build_spider_model(sheet_w: float, sheet_h: float) -> void:
 		l_pivot.add_child(l_mesh)
 		_visual_root.add_child(l_pivot)
 		_legs.append(l_pivot)
+
+
+func _build_sheep_model(sheet_w: float, sheet_h: float) -> void:
+	# Head (6x6x8 at 0, 0)
+	var head := _create_part(Vector3(0.40, 0.40, 0.48), 0, 0, 6, 6, 8, sheet_w, sheet_h)
+	head.position = Vector3(0.0, 0.78, -0.48)
+	_visual_root.add_child(head)
+
+	# Body (12x18x8 at 28, 8)
+	var body := _create_part(Vector3(0.68, 0.58, 0.98), 28, 8, 12, 18, 8, sheet_w, sheet_h)
+	body.position = Vector3(0.0, 0.62, 0.0)
+	_visual_root.add_child(body)
+
+	# 4 Legs (4x12x4 at 0, 16)
+	var leg_coords: Array[Vector3] = [
+		Vector3(-0.18, 0.52, -0.32),
+		Vector3(0.18, 0.52, -0.32),
+		Vector3(-0.18, 0.52, 0.32),
+		Vector3(0.18, 0.52, 0.32)
+	]
+	for lc in leg_coords:
+		var pivot := Node3D.new()
+		pivot.position = lc
+		var leg := _create_part(Vector3(0.20, 0.52, 0.20), 0, 16, 4, 12, 4, sheet_w, sheet_h)
+		leg.position = Vector3(0.0, -0.26, 0.0)
+		pivot.add_child(leg)
+		_visual_root.add_child(pivot)
+		_legs.append(pivot)
+
+
+func _build_villager_model(sheet_w: float, sheet_h: float) -> void:
+	# Head (8x10x8 at 0, 0)
+	var head := _create_part(Vector3(0.50, 0.58, 0.50), 0, 0, 8, 10, 8, sheet_w, sheet_h)
+	head.position = Vector3(0.0, 1.45, 0.0)
+	_visual_root.add_child(head)
+
+	# Nose (2x4x2 at 24, 0)
+	var nose := _create_part(Vector3(0.12, 0.24, 0.12), 24, 0, 2, 4, 2, sheet_w, sheet_h)
+	nose.position = Vector3(0.0, 1.32, -0.31)
+	_visual_root.add_child(nose)
+
+	# Body / Robe (8x12x6 at 16, 20)
+	var body := _create_part(Vector3(0.52, 0.74, 0.36), 16, 20, 8, 12, 6, sheet_w, sheet_h)
+	body.position = Vector3(0.0, 0.82, 0.0)
+	_visual_root.add_child(body)
+
+	# Crossed Arms (10x8x4 at 40, 38)
+	var arms := _create_part(Vector3(0.60, 0.36, 0.30), 40, 38, 10, 8, 4, sheet_w, sheet_h)
+	arms.position = Vector3(0.0, 0.85, -0.16)
+	_visual_root.add_child(arms)
+
+	# Right Leg (4x12x4 at 0, 22)
+	var r_leg_pivot := Node3D.new()
+	r_leg_pivot.position = Vector3(0.13, 0.45, 0.0)
+	var r_leg := _create_part(Vector3(0.22, 0.65, 0.22), 0, 22, 4, 12, 4, sheet_w, sheet_h)
+	r_leg.position = Vector3(0.0, -0.25, 0.0)
+	r_leg_pivot.add_child(r_leg)
+	_visual_root.add_child(r_leg_pivot)
+	_legs.append(r_leg_pivot)
+
+	# Left Leg (4x12x4 at 0, 22, mirrored)
+	var l_leg_pivot := Node3D.new()
+	l_leg_pivot.position = Vector3(-0.13, 0.45, 0.0)
+	var l_leg := _create_part(Vector3(0.22, 0.65, 0.22), 0, 22, 4, 12, 4, sheet_w, sheet_h, true)
+	l_leg.position = Vector3(0.0, -0.25, 0.0)
+	l_leg_pivot.add_child(l_leg)
+	_visual_root.add_child(l_leg_pivot)
+	_legs.append(l_leg_pivot)

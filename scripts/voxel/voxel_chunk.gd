@@ -27,6 +27,9 @@ var is_dirty: bool = false
 ## World positions of any Loot Chests generated in this chunk's structures.
 var generated_loot_chests: Array[Vector3i] = []
 
+## World positions of any Villagers to spawn when this chunk is added to tree.
+var generated_villager_spawns: Array[Vector3] = []
+
 ## Optional thread-safe callback `(world_pos: Vector3i) -> int` provided by WorldManager
 ## for seamless cross-chunk border face culling.
 var neighbor_block_getter: Callable = Callable()
@@ -260,6 +263,8 @@ static func sample_terrain_voxel(
 		return BlockRegistry.BlockId.STONE
 
 	if _is_carved_cave_or_ravine(surface_y, wx, ly, wz, cave_noise):
+		if ly <= 10:
+			return BlockRegistry.BlockId.LAVA
 		return BlockRegistry.BlockId.AIR
 
 	# Rare glowing crystal clusters hanging from deep cavern ceilings
@@ -446,16 +451,21 @@ func _generate_chunk_structures(surface_noise: FastNoiseLite) -> void:
 		var d_y: int = 20 + (chunk_hash % 5)
 		_build_underground_dungeon(5, d_y, 5, chunk_hash)
 
-	# 2. Surface Structures (Plains Village Cottage or Desert Sandstone Pyramid)
+	# 2. Surface Lava Pool (spawns in ~4% of chunks on stable terrain)
 	var center_wx: int = cx * CHUNK_SIZE_X + 8
 	var center_wz: int = cz * CHUNK_SIZE_Z + 8
 	var center_y: int = sample_surface_height(surface_noise, center_wx, center_wz)
+	if chunk_hash % 23 == 0 and center_y > WATER_LEVEL + 2 and center_y <= SEA_LEVEL + 5:
+		_build_surface_lava_pool(5, center_y, 5, chunk_hash)
+
+	# 3. Surface Structures (Plains Village House & Farm or Desert Sandstone Pyramid)
 	if center_y <= WATER_LEVEL + 1 or center_y >= SEA_LEVEL + 7:
 		return
 
 	var biome: int = sample_biome(center_wx, center_wz)
-	if biome == Biome.PLAINS and chunk_hash % 9 == 0:
-		_build_village_house(4, center_y, 4, chunk_hash)
+	if biome == Biome.PLAINS and chunk_hash % 7 == 0:
+		_build_village_house(2, center_y, 2, chunk_hash)
+		_build_village_farm(9, center_y, 9, chunk_hash)
 	elif biome == Biome.DESERT and chunk_hash % 8 == 0:
 		_build_desert_pyramid(3, center_y, 3, chunk_hash)
 
@@ -540,9 +550,63 @@ func _build_village_house(ox: int, base_y: int, oz: int, _seed_val: int) -> void
 	_set_voxel_raw(ox + 5, base_y + 1, oz + 5, BlockRegistry.BlockId.BED)
 	_set_voxel_raw(ox + 1, base_y + 1, oz + 1, BlockRegistry.BlockId.CHEST)
 	generated_loot_chests.append(Vector3i(world_origin_x + ox + 1, base_y + 1, world_origin_z + oz + 1))
+	generated_villager_spawns.append(Vector3(float(world_origin_x + ox + 3) + 0.5, float(base_y + 1) + 0.2, float(world_origin_z + oz + 3) + 0.5))
 
 	if base_y + 6 > _highest_solid_y:
 		_highest_solid_y = base_y + 6
+
+
+func _build_village_farm(ox: int, base_y: int, oz: int, _seed_val: int) -> void:
+	var world_origin_x: int = chunk_coords.x * CHUNK_SIZE_X
+	var world_origin_z: int = chunk_coords.y * CHUNK_SIZE_Z
+	if base_y + 4 >= CHUNK_SIZE_Y:
+		return
+
+	# 6x6 fenced farm with central water canal, Farmland blocks, and Wheat & Potato crops
+	for dx in range(6):
+		for dz in range(6):
+			var lx: int = ox + dx
+			var lz: int = oz + dz
+			if not is_in_bounds(lx, base_y, lz):
+				continue
+			var is_border: bool = (dx == 0 or dx == 5 or dz == 0 or dz == 5)
+			var is_water_canal: bool = (dx == 2 and dz >= 1 and dz <= 4)
+
+			if is_border:
+				_set_voxel_raw(lx, base_y, lz, BlockRegistry.BlockId.WOOD_LOG)
+				_set_voxel_raw(lx, base_y + 1, lz, BlockRegistry.BlockId.AIR)
+			elif is_water_canal:
+				_set_voxel_raw(lx, base_y, lz, BlockRegistry.BlockId.WATER)
+				_set_voxel_raw(lx, base_y + 1, lz, BlockRegistry.BlockId.AIR)
+			else:
+				_set_voxel_raw(lx, base_y, lz, BlockRegistry.BlockId.FARMLAND)
+				var crop_id: int = BlockRegistry.BlockId.WHEAT_CROPS if (dx % 2 == 1) else BlockRegistry.BlockId.POTATO_CROPS
+				_set_voxel_raw(lx, base_y + 1, lz, crop_id)
+				_set_voxel_raw(lx, base_y + 2, lz, BlockRegistry.BlockId.AIR)
+
+	if is_in_bounds(ox, base_y + 1, oz):
+		_set_voxel_raw(ox, base_y + 1, oz, BlockRegistry.BlockId.TORCH)
+	if is_in_bounds(ox + 5, base_y + 1, oz + 5):
+		_set_voxel_raw(ox + 5, base_y + 1, oz + 5, BlockRegistry.BlockId.TORCH)
+
+	generated_villager_spawns.append(Vector3(float(world_origin_x + ox + 3) + 0.5, float(base_y + 1) + 0.2, float(world_origin_z + oz + 3) + 0.5))
+
+
+func _build_surface_lava_pool(ox: int, base_y: int, oz: int, _seed_val: int) -> void:
+	for dx in range(5):
+		for dz in range(5):
+			var lx: int = ox + dx
+			var lz: int = oz + dz
+			if not is_in_bounds(lx, base_y - 1, lz):
+				continue
+			var is_edge: bool = (dx == 0 or dx == 4 or dz == 0 or dz == 4)
+			_set_voxel_raw(lx, base_y - 2, lz, BlockRegistry.BlockId.STONE)
+			if is_edge:
+				_set_voxel_raw(lx, base_y - 1, lz, BlockRegistry.BlockId.COBBLESTONE)
+				_set_voxel_raw(lx, base_y, lz, BlockRegistry.BlockId.AIR)
+			else:
+				_set_voxel_raw(lx, base_y - 1, lz, BlockRegistry.BlockId.LAVA)
+				_set_voxel_raw(lx, base_y, lz, BlockRegistry.BlockId.AIR)
 
 
 func _build_desert_pyramid(ox: int, base_y: int, oz: int, _seed_val: int) -> void:
@@ -671,6 +735,12 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						BlockRegistry.BlockId.LADDER:
 							min_b = Vector3(0.0, 0.0, 0.42)
 							max_b = Vector3(1.0, 1.0, 0.58)
+						BlockRegistry.BlockId.FARMLAND:
+							min_b = Vector3(0.0, 0.0, 0.0)
+							max_b = Vector3(1.0, 0.9375, 1.0)
+						BlockRegistry.BlockId.WHEAT_CROPS, BlockRegistry.BlockId.POTATO_CROPS:
+							min_b = Vector3(0.06, 0.0, 0.06)
+							max_b = Vector3(0.94, 0.88, 0.94)
 					_emit_custom_box(st_solid, lx, ly, lz, min_b, max_b, block_id)
 					solid_faces += 6
 					if not BlockRegistry.is_passable_block(block_id):
@@ -735,6 +805,16 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 				var seed_val: int = absi((chest_pos.x * 73856093) ^ (chest_pos.y * 19349663) ^ (chest_pos.z * 83492791))
 				inv.populate_loot_chest_at(chest_pos, seed_val)
 			generated_loot_chests.clear()
+
+	if not generated_villager_spawns.is_empty() and is_inside_tree():
+		var parent_node: Node = get_parent()
+		if parent_node != null:
+			for spawn_pos in generated_villager_spawns:
+				var villager := PassiveMob.new()
+				villager.variant = PassiveMob.MobVariant.VILLAGER
+				parent_node.add_child(villager)
+				villager.global_position = spawn_pos
+		generated_villager_spawns.clear()
 
 
 func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:
@@ -1112,9 +1192,14 @@ func _update_light_emitter_at(local_pos: Vector3i, block_id: int) -> void:
 		if not _block_lights.has(local_pos):
 			var omni := OmniLight3D.new()
 			omni.position = Vector3(local_pos) + Vector3(0.5, 0.5, 0.5)
-			omni.light_color = Color(1.0, 0.86, 0.52)
-			omni.light_energy = 1.85
-			omni.omni_range = 11.0
+			if block_id == BlockRegistry.BlockId.LAVA:
+				omni.light_color = Color(1.0, 0.40, 0.10)
+				omni.light_energy = 2.4
+				omni.omni_range = 14.0
+			else:
+				omni.light_color = Color(1.0, 0.86, 0.52)
+				omni.light_energy = 1.85
+				omni.omni_range = 11.0
 			omni.omni_attenuation = 1.2
 			add_child(omni)
 			_block_lights[local_pos] = omni

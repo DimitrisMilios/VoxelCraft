@@ -89,6 +89,15 @@ var _sound_groups: Dictionary = {
 
 	"spider_ambient": ["sounds_cricket.ogg"],
 	"spider_hurt": ["sounds_entity_hit.ogg"],
+
+	"sheep_ambient": ["sounds_sheep_baa.ogg"],
+	"sheep_hurt": ["sounds_sheep_baa.ogg"],
+
+	"villager_ambient": ["sounds_giraffe_hum.ogg"],
+	"villager_hurt": ["sounds_giraffe_hum.ogg"],
+
+	"shears": ["sounds_shears_01.ogg", "sounds_shears_02.ogg"],
+	"lava_cool": ["sounds_lava_cool.1.ogg", "sounds_lava_cool.2.ogg", "sounds_lava_cool.3.ogg"],
 }
 
 

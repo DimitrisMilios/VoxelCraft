@@ -270,6 +270,11 @@ func _build_block_atlas() -> void:
 		_load_tile_64("block/tnt_bottom.png"),               # 33: TNT Bottom
 		_load_tile_64("block/sandstone_top.png"),            # 34: Sandstone Top
 		_force_opaque(_load_tile_64("block/cactus_top.png"), Color(0.08, 0.28, 0.09, 1.0)),  # 35: Cactus Top
+		_load_tile_64("block/white_wool.png"),               # 36: White Wool
+		_load_tile_64("block/farmland_moist.png"),           # 37: Farmland Moist
+		_load_tile_64("block/wheat_stage7.png"),             # 38: Wheat Crops
+		_load_tile_64("block/potatoes_stage3.png"),          # 39: Potato Crops
+		_load_tile_64("block/lava_still.png"),               # 40: Lava
 	]
 
 	for idx in range(tiles.size()):
@@ -371,6 +376,11 @@ func _build_isometric_block_icons(tiles: Array[Image]) -> void:
 		25: [34, 26, 26, 1.0], # Sandstone (Top, Side, Side)
 		26: [35, 28, 28, 1.0], # Cactus (Top, Side, Side)
 		27: [27, 27, 27, 1.0], # Mossy Cobblestone
+		28: [36, 36, 36, 1.0], # White Wool Block
+		29: [37, 2, 2, 0.94],  # Farmland Block
+		30: [38, 38, 38, 1.0], # Wheat Crop Block
+		40: [39, 39, 39, 1.0], # Potato Crop Block
+		41: [40, 40, 40, 0.88], # Lava Block
 	}
 
 	for block_id in block_icon_specs.keys():

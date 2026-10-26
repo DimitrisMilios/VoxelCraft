@@ -32,6 +32,14 @@ enum ItemId {
 	APPLE = 114,
 	ROTTEN_FLESH = 115,
 	GUNPOWDER = 116,
+	WOOL = 117,
+	WHEAT_SEEDS = 118,
+	WHEAT = 119,
+	BREAD = 120,
+	POTATO = 121,
+	BAKED_POTATO = 122,
+	LAVA_BUCKET = 123,
+	SHEARS = 124,
 
 	# Pickaxes (201..204)
 	WOOD_PICKAXE = 201,
@@ -257,19 +265,28 @@ static func is_tool_item(item_id: int) -> bool:
 
 
 static func is_food_item(item_id: int) -> bool:
-	return item_id >= ItemId.RAW_PORKCHOP and item_id <= ItemId.ROTTEN_FLESH
+	return (
+		(item_id >= ItemId.RAW_PORKCHOP and item_id <= ItemId.ROTTEN_FLESH)
+		or item_id == ItemId.BREAD
+		or item_id == ItemId.POTATO
+		or item_id == ItemId.BAKED_POTATO
+	)
 
 
 static func get_food_nutrition(item_id: int) -> int:
 	match item_id:
 		ItemId.COOKED_PORKCHOP, ItemId.STEAK:
 			return 8
+		ItemId.BREAD, ItemId.BAKED_POTATO:
+			return 5
 		ItemId.APPLE:
 			return 4
 		ItemId.RAW_PORKCHOP, ItemId.RAW_BEEF:
 			return 3
 		ItemId.ROTTEN_FLESH:
 			return 2
+		ItemId.POTATO:
+			return 1
 		_:
 			return 0
 
@@ -347,6 +364,14 @@ static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: i
 			return ItemId.RAW_GOLD
 		BlockRegistry.BlockId.DIAMOND_ORE:
 			return ItemId.DIAMOND
+		BlockRegistry.BlockId.WOOL:
+			return ItemId.WOOL
+		BlockRegistry.BlockId.FARMLAND:
+			return BlockRegistry.BlockId.DIRT
+		BlockRegistry.BlockId.WHEAT_CROPS:
+			return ItemId.WHEAT
+		BlockRegistry.BlockId.POTATO_CROPS:
+			return ItemId.POTATO
 		_:
 			return broken_block_id
 
@@ -447,6 +472,22 @@ static func get_item_name(item_id: int) -> String:
 			return "Rotten Flesh"
 		ItemId.GUNPOWDER:
 			return "Gunpowder"
+		ItemId.WOOL:
+			return "White Wool"
+		ItemId.WHEAT_SEEDS:
+			return "Wheat Seeds"
+		ItemId.WHEAT:
+			return "Wheat"
+		ItemId.BREAD:
+			return "Bread"
+		ItemId.POTATO:
+			return "Potato"
+		ItemId.BAKED_POTATO:
+			return "Baked Potato"
+		ItemId.LAVA_BUCKET:
+			return "Lava Bucket"
+		ItemId.SHEARS:
+			return "Shears"
 		ItemId.WOOD_PICKAXE:
 			return "Wooden Pickaxe"
 		ItemId.STONE_PICKAXE:
@@ -1111,6 +1152,9 @@ func _match_crafting_grid() -> Dictionary:
 		# 4 Wood Planks in 2x2 -> 1 Crafting Table
 		if pattern == [P, P, P, P]:
 			return {"id": BlockRegistry.BlockId.CRAFTING_TABLE, "count": 1}
+		# Shears (2 Iron Ingot diagonal)
+		if pattern == [0, FE, FE, 0] or pattern == [FE, 0, 0, FE]:
+			return {"id": ItemId.SHEARS, "count": 1}
 		# 2 Sand + 2 Gunpowder/Coal -> 1 TNT
 		var SAND_ID: int = BlockRegistry.BlockId.SAND
 		if pattern == [ItemId.GUNPOWDER, SAND_ID, SAND_ID, ItemId.GUNPOWDER] or pattern == [COAL_ID, SAND_ID, SAND_ID, COAL_ID]:
@@ -1174,10 +1218,22 @@ func _match_crafting_grid() -> Dictionary:
 	if box_w == 3 and box_h == 2:
 		if pattern == [FE, 0, FE, 0, FE, 0]:
 			return {"id": ItemId.BUCKET, "count": 1}
+		var W: int = ItemId.WOOL
+		var WB: int = BlockRegistry.BlockId.WOOL
 		var L: int = BlockRegistry.BlockId.LEAVES
 		var SN: int = BlockRegistry.BlockId.SNOW
-		if pattern == [L, L, L, P, P, P] or pattern == [SN, SN, SN, P, P, P]:
+		if (
+			pattern == [W, W, W, P, P, P]
+			or pattern == [WB, WB, WB, P, P, P]
+			or pattern == [L, L, L, P, P, P]
+			or pattern == [SN, SN, SN, P, P, P]
+		):
 			return {"id": BlockRegistry.BlockId.BED, "count": 1}
+
+	# 8. Bread: 3x1 Horizontal (3 Wheat)
+	if box_w == 3 and box_h == 1:
+		if pattern == [ItemId.WHEAT, ItemId.WHEAT, ItemId.WHEAT]:
+			return {"id": ItemId.BREAD, "count": 1}
 
 	return {"id": 0, "count": 0}
 
@@ -1257,8 +1313,16 @@ func autofill_recipe_pattern(recipe_key: String) -> String:
 			target_grid = [P, P, P, P, 0, P, P, P, P]
 		"bed":
 			requires_3x3 = true
-			var wool_id: int = BlockRegistry.BlockId.LEAVES if get_total_count(BlockRegistry.BlockId.LEAVES) >= 3 else BlockRegistry.BlockId.SNOW
+			var wool_id: int = ItemId.WOOL if get_total_count(ItemId.WOOL) >= 3 else (BlockRegistry.BlockId.WOOL if get_total_count(BlockRegistry.BlockId.WOOL) >= 3 else BlockRegistry.BlockId.LEAVES)
 			target_grid = [wool_id, wool_id, wool_id, P, P, P, 0, 0, 0]
+		"bread":
+			requires_3x3 = true
+			target_grid = [ItemId.WHEAT, ItemId.WHEAT, ItemId.WHEAT, 0, 0, 0, 0, 0, 0]
+		"shears":
+			if craft_grid_size == 2:
+				target_grid = [0, FE, FE, 0]
+			else:
+				target_grid = [0, FE, 0, FE, 0, 0, 0, 0, 0]
 		"door":
 			requires_3x3 = true
 			target_grid = [P, P, 0, P, P, 0, P, P, 0]
@@ -1362,6 +1426,8 @@ static func _get_smelt_result(input_id: int) -> int:
 			return ItemId.COOKED_PORKCHOP
 		ItemId.RAW_BEEF:
 			return ItemId.STEAK
+		ItemId.POTATO:
+			return ItemId.BAKED_POTATO
 		BlockRegistry.BlockId.COBBLESTONE:
 			return BlockRegistry.BlockId.STONE
 		BlockRegistry.BlockId.WOOD_LOG:
@@ -1374,6 +1440,8 @@ static func _get_smelt_result(input_id: int) -> int:
 
 static func _get_fuel_burn_duration(fuel_id: int) -> float:
 	match fuel_id:
+		ItemId.LAVA_BUCKET:
+			return 100.0 # Extreme smelting heat (100 items!)
 		ItemId.COAL:
 			return 16.0
 		BlockRegistry.BlockId.WOOD_LOG:

@@ -290,6 +290,27 @@ func _complete_break_block() -> void:
 					InventoryManager.ItemId.APPLE,
 					1
 				)
+			elif previous_id == BlockRegistry.BlockId.GRASS and randf() < 0.22:
+				DroppedItem.spawn_drop(
+					_world_manager,
+					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
+					InventoryManager.ItemId.WHEAT_SEEDS,
+					1
+				)
+			elif previous_id == BlockRegistry.BlockId.WHEAT_CROPS:
+				DroppedItem.spawn_drop(
+					_world_manager,
+					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
+					InventoryManager.ItemId.WHEAT_SEEDS,
+					randi_range(1, 2)
+				)
+			elif previous_id == BlockRegistry.BlockId.POTATO_CROPS:
+				DroppedItem.spawn_drop(
+					_world_manager,
+					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
+					InventoryManager.ItemId.POTATO,
+					randi_range(1, 2)
+				)
 		else:
 			loot_notification.emit("Broken! (Requires proper Pickaxe tier to harvest)")
 
@@ -329,7 +350,19 @@ func _toss_selected_item() -> void:
 
 
 func _try_interact_or_place_block() -> void:
+	var selected_item: int = get_selected_item_id()
+	var is_creative: bool = _player_body != null and _player_body.is_flying
+
 	if _targeted_mob != null and is_instance_valid(_targeted_mob):
+		if _targeted_mob.has_method("on_interact_with_item"):
+			var handled: bool = _targeted_mob.on_interact_with_item(_player_body, selected_item)
+			if handled:
+				if selected_item == InventoryManager.ItemId.SHEARS and _inventory != null and not is_creative:
+					_inventory.damage_hotbar_tool(selected_slot, 1)
+				elif (selected_item == InventoryManager.ItemId.WHEAT or selected_item == InventoryManager.ItemId.POTATO) and _inventory != null and not is_creative:
+					_inventory.consume_from_hotbar_slot(selected_slot, 1)
+				mob_interacted.emit(false, int(_targeted_mob.variant))
+				return
 		var feeder_pos: Vector3 = _player_body.global_position if _player_body != null else global_position
 		_targeted_mob.on_fed_by_player(feeder_pos)
 		mob_interacted.emit(false, int(_targeted_mob.variant))
@@ -337,9 +370,6 @@ func _try_interact_or_place_block() -> void:
 
 	if _world_manager == null:
 		return
-
-	var selected_item: int = get_selected_item_id()
-	var is_creative: bool = _player_body != null and _player_body.is_flying
 
 	# Eating Food Item on Right-Click
 	if InventoryManager.is_food_item(selected_item) and _player_body != null and _inventory != null:
@@ -355,7 +385,7 @@ func _try_interact_or_place_block() -> void:
 			loot_notification.emit("Hunger & Health are already full!")
 		return
 
-	# Empty Bucket: Ray-step along look direction to scoop up a Water Source block
+	# Empty Bucket: Ray-step along look direction to scoop up a Water or Lava Source block
 	if selected_item == InventoryManager.ItemId.BUCKET and _raycast != null:
 		var ray_origin: Vector3 = _raycast.global_position
 		var ray_dir: Vector3 = -_raycast.global_transform.basis.z.normalized()
@@ -369,6 +399,13 @@ func _try_interact_or_place_block() -> void:
 						_inventory.convert_hotbar_bucket(selected_slot, InventoryManager.ItemId.WATER_BUCKET)
 					loot_notification.emit("Scooped up Water Source!")
 					block_placed.emit(bpos, BlockRegistry.BlockId.WATER)
+				return
+			elif bid == BlockRegistry.BlockId.LAVA:
+				if _world_manager.set_block_world(bpos, BlockRegistry.BlockId.AIR):
+					if _inventory != null:
+						_inventory.convert_hotbar_bucket(selected_slot, InventoryManager.ItemId.LAVA_BUCKET)
+					loot_notification.emit("Scooped up Lava Source!")
+					block_placed.emit(bpos, BlockRegistry.BlockId.LAVA)
 				return
 			elif BlockRegistry.is_solid(bid):
 				break
@@ -389,14 +426,68 @@ func _try_interact_or_place_block() -> void:
 	if targeted_id == BlockRegistry.BlockId.BED:
 		if _player_body != null:
 			_player_body.set_respawn_bed_position(Vector3(target_block_pos))
-			_player_body.eat_food(4)
+
+		var monsters_nearby: bool = false
+		var mobs: Array = get_tree().get_nodes_in_group("mobs") if get_tree() != null else []
+		for m in mobs:
+			if is_instance_valid(m) and m is PassiveMob:
+				var mob_inst := m as PassiveMob
+				if mob_inst.is_hostile():
+					var m_pos: Vector3 = mob_inst.global_position if mob_inst.is_inside_tree() else mob_inst.position
+					if m_pos.distance_to(Vector3(target_block_pos)) <= 8.5:
+						monsters_nearby = true
+						break
+		if monsters_nearby:
+			loot_notification.emit("You may not rest now, there are monsters nearby!")
+			return
+
 		var dn := get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle
-		if dn != null and (dn.time_of_day < 0.25 or dn.time_of_day > 0.72):
-			dn.time_of_day = 0.28
+		if dn != null and (dn.time_of_day < 0.23 or dn.time_of_day > 0.73):
+			dn.time_of_day = 0.26
+			if _player_body != null:
+				_player_body.eat_food(6)
+				_player_body.current_health = _player_body.max_health
+				_player_body.health_changed.emit(_player_body.current_health, _player_body.max_health)
 			loot_notification.emit("Slept through the night! Good morning & Respawn set.")
 		else:
-			loot_notification.emit("Respawn point set at Bed! (Sleep at night)")
+			loot_notification.emit("Respawn point set at Bed! (You can only sleep at night)")
 		return
+
+	# Right-clicking Grass or Dirt with a Shovel or Stick tills it into Farmland
+	var is_hoe_or_shovel: bool = (
+		InventoryManager.get_tool_category(selected_item) == InventoryManager.ToolCategory.SHOVEL
+		or selected_item == InventoryManager.ItemId.STICK
+	)
+	if is_hoe_or_shovel and (targeted_id == BlockRegistry.BlockId.GRASS or targeted_id == BlockRegistry.BlockId.DIRT):
+		if _world_manager.set_block_world(target_block_pos, BlockRegistry.BlockId.FARMLAND):
+			if not is_creative and _inventory != null and InventoryManager.get_max_durability(selected_item) > 0:
+				_inventory.damage_hotbar_tool(selected_slot, 1)
+			loot_notification.emit("Tilled soil into Farmland!")
+			block_placed.emit(target_block_pos, BlockRegistry.BlockId.FARMLAND)
+			_update_raycast_target()
+		return
+
+	# Right-clicking Farmland with Wheat Seeds or Potato plants crops above
+	if targeted_id == BlockRegistry.BlockId.FARMLAND:
+		var above_crop_pos: Vector3i = target_block_pos + Vector3i(0, 1, 0)
+		var above_id: int = _world_manager.get_block_world(above_crop_pos)
+		if above_id == BlockRegistry.BlockId.AIR:
+			if selected_item == InventoryManager.ItemId.WHEAT_SEEDS:
+				if _world_manager.set_block_world(above_crop_pos, BlockRegistry.BlockId.WHEAT_CROPS):
+					if not is_creative and _inventory != null:
+						_inventory.consume_from_hotbar_slot(selected_slot, 1)
+					loot_notification.emit("Planted Wheat Seeds!")
+					block_placed.emit(above_crop_pos, BlockRegistry.BlockId.WHEAT_CROPS)
+					_update_raycast_target()
+				return
+			elif selected_item == InventoryManager.ItemId.POTATO:
+				if _world_manager.set_block_world(above_crop_pos, BlockRegistry.BlockId.POTATO_CROPS):
+					if not is_creative and _inventory != null:
+						_inventory.consume_from_hotbar_slot(selected_slot, 1)
+					loot_notification.emit("Planted Potato!")
+					block_placed.emit(above_crop_pos, BlockRegistry.BlockId.POTATO_CROPS)
+					_update_raycast_target()
+				return
 
 	# Right-clicking a Wooden Door swings it open/closed
 	if targeted_id == BlockRegistry.BlockId.DOOR_CLOSED or targeted_id == BlockRegistry.BlockId.DOOR_OPEN:
@@ -424,6 +515,16 @@ func _try_interact_or_place_block() -> void:
 				_inventory.convert_hotbar_bucket(selected_slot, InventoryManager.ItemId.BUCKET)
 			loot_notification.emit("Placed Water Source!")
 			block_placed.emit(place_block_pos, BlockRegistry.BlockId.WATER)
+			_update_raycast_target()
+		return
+
+	# Lava Bucket: Pour a new Lava Source block at place_block_pos
+	if selected_item == InventoryManager.ItemId.LAVA_BUCKET:
+		if _world_manager.set_block_world(place_block_pos, BlockRegistry.BlockId.LAVA):
+			if not is_creative and _inventory != null:
+				_inventory.convert_hotbar_bucket(selected_slot, InventoryManager.ItemId.BUCKET)
+			loot_notification.emit("Placed Lava Source!")
+			block_placed.emit(place_block_pos, BlockRegistry.BlockId.LAVA)
 			_update_raycast_target()
 		return
 
