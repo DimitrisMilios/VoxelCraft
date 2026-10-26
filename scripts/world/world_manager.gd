@@ -11,9 +11,9 @@ const MAX_WATER_SPREAD_PER_TICK: int = 48
 
 @export_group("World Generation")
 @export var world_seed: int = 2027
-@export var render_distance: int = 10
+@export var render_distance: int = 6
 @export var max_concurrent_tasks: int = 4
-@export var max_main_thread_applies_per_frame: int = 3
+@export var max_main_thread_applies_per_frame: int = 1
 
 @export_group("References")
 @export var player_path: NodePath = NodePath("../Player")

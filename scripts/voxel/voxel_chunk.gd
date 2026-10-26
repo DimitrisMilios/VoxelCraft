@@ -61,6 +61,7 @@ func _ensure_child_nodes() -> void:
 		var solid_mi := MeshInstance3D.new()
 		solid_mi.name = "SubMesh_%d" % sub_idx
 		solid_mi.material_override = solid_mat
+		solid_mi.visible = false
 		add_child(solid_mi)
 		_sub_solid_meshes.append(solid_mi)
 
@@ -68,11 +69,13 @@ func _ensure_child_nodes() -> void:
 		water_mi.name = "SubWater_%d" % sub_idx
 		water_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		water_mi.material_override = water_mat
+		water_mi.visible = false
 		add_child(water_mi)
 		_sub_water_meshes.append(water_mi)
 
 		var col := CollisionShape3D.new()
 		col.name = "SubCol_%d" % sub_idx
+		col.disabled = true
 		add_child(col)
 		_sub_colliders.append(col)
 
@@ -844,9 +847,17 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 
 
 func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:
-	_sub_solid_meshes[sub_idx].mesh = sub_data.get("mesh", null) as ArrayMesh
-	_sub_water_meshes[sub_idx].mesh = sub_data.get("water_mesh", null) as ArrayMesh
-	_sub_colliders[sub_idx].shape = sub_data.get("shape", null) as Shape3D
+	var m: ArrayMesh = sub_data.get("mesh", null) as ArrayMesh
+	_sub_solid_meshes[sub_idx].mesh = m
+	_sub_solid_meshes[sub_idx].visible = (m != null)
+
+	var wm: ArrayMesh = sub_data.get("water_mesh", null) as ArrayMesh
+	_sub_water_meshes[sub_idx].mesh = wm
+	_sub_water_meshes[sub_idx].visible = (wm != null)
+
+	var s: Shape3D = sub_data.get("shape", null) as Shape3D
+	_sub_colliders[sub_idx].shape = s
+	_sub_colliders[sub_idx].disabled = (s == null)
 
 
 ## Rebuilds only the 16x16x16 vertical sub-chunk containing `ly` (and vertical neighbor if on a 16-block seam).

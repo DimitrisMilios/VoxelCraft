@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode depth_draw_always, cull_disabled, specular_schlick_ggx;
+render_mode depth_draw_always, cull_back, specular_schlick_ggx;
 
 uniform vec4 shallow_color : source_color = vec4(0.24, 0.74, 0.82, 0.40);
 uniform vec4 deep_color : source_color = vec4(0.04, 0.30, 0.56, 0.90);
@@ -41,7 +41,7 @@ void fragment() {
 	vec3 wave_view = (VIEW_MATRIX * vec4(wave_perturb.x, 0.0, wave_perturb.y, 0.0)).xyz;
 	NORMAL = normalize(NORMAL + wave_view * normal_strength);
 
-	// Linear depth reconstruction
+	// Fast linear depth reconstruction for water absorption
 	float depth_raw = texture(depth_texture, SCREEN_UV).r;
 	vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, depth_raw);
 	vec4 view_pos = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
@@ -52,15 +52,8 @@ void fragment() {
 	float depth_factor = clamp(water_depth / depth_distance, 0.0, 1.0);
 	depth_factor = pow(depth_factor, beer_factor);
 
-	// Refraction of underwater terrain
-	vec2 refr_offset = wave_perturb * refraction_strength * (1.0 - depth_factor * 0.5);
-	float refr_depth_raw = texture(depth_texture, SCREEN_UV + refr_offset).r;
-	vec3 refr_ndc = vec3((SCREEN_UV + refr_offset) * 2.0 - 1.0, refr_depth_raw);
-	vec4 refr_view = INV_PROJECTION_MATRIX * vec4(refr_ndc, 1.0);
-	refr_view.xyz /= refr_view.w;
-	if (-refr_view.z < -VERTEX.z) {
-		refr_offset = vec2(0.0);
-	}
+	// Underwater terrain refraction with depth-attenuation
+	vec2 refr_offset = wave_perturb * refraction_strength * clamp(water_depth * 0.35, 0.0, 1.0);
 	vec3 refracted_screen = texture(screen_texture, SCREEN_UV + refr_offset).rgb;
 
 	// Fresnel reflection for glancing sun / sky highlights
