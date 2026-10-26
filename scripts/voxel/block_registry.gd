@@ -50,6 +50,21 @@ enum BlockId {
 	BED_HEAD = 46,
 	WHEAT_SPROUT = 47,
 	POTATO_SPROUT = 48,
+	GRAVEL = 49,
+	CLAY = 50,
+	ICE = 51,
+	DANDELION = 52,
+	ROSE = 53,
+	BROWN_MUSHROOM = 54,
+	RED_MUSHROOM = 55,
+	PINE_LOG = 56,
+	PINE_LEAVES = 57,
+	BIRCH_LOG = 58,
+	BIRCH_LEAVES = 59,
+	MONSTER_SPAWNER = 60,
+	BEDROCK = 61,
+	REDSTONE_ORE = 62,
+	LAPIS_ORE = 63,
 }
 
 enum FaceDir {
@@ -105,11 +120,26 @@ const EXTENDED_TILE_FALLBACK: Dictionary = {
 	39: 0,  # Potato -> Grass
 	44: 0,  # Wheat Sprout -> Grass
 	45: 0,  # Potato Sprout -> Grass
+	46: 8,  # Gravel -> Cobblestone
+	47: 2,  # Clay -> Dirt
+	48: 10, # Ice -> Snow
+	49: 0,  # Dandelion -> Grass
+	50: 0,  # Rose -> Grass
+	51: 2,  # Brown Mushroom -> Dirt
+	52: 0,  # Red Mushroom -> Grass
+	53: 4,  # Pine Log Side -> Wood Log Side
+	54: 6,  # Pine Leaves -> Leaves
+	55: 4,  # Birch Log Side -> Wood Log Side
+	56: 6,  # Birch Leaves -> Leaves
+	57: 8,  # Monster Spawner -> Cobblestone
+	58: 3,  # Bedrock -> Stone
+	59: 13, # Redstone Ore -> Iron Ore
+	60: 15, # Lapis Ore -> Diamond Ore
 }
 
 
 static func is_solid(block_id: int) -> bool:
-	return block_id != BlockId.AIR and not is_water(block_id)
+	return block_id != BlockId.AIR and not is_water(block_id) and not is_passable_block(block_id)
 
 
 static func is_passable_block(block_id: int) -> bool:
@@ -123,6 +153,10 @@ static func is_passable_block(block_id: int) -> bool:
 		or block_id == BlockId.SUGAR_CANE
 		or block_id == BlockId.SEAGRASS
 		or block_id == BlockId.LAVA
+		or block_id == BlockId.DANDELION
+		or block_id == BlockId.ROSE
+		or block_id == BlockId.BROWN_MUSHROOM
+		or block_id == BlockId.RED_MUSHROOM
 	)
 
 
@@ -152,6 +186,15 @@ static func is_opaque_full_cube(block_id: int) -> bool:
 		or block_id == BlockId.POTATO_SPROUT
 		or block_id == BlockId.SUGAR_CANE
 		or block_id == BlockId.SEAGRASS
+		or block_id == BlockId.DANDELION
+		or block_id == BlockId.ROSE
+		or block_id == BlockId.BROWN_MUSHROOM
+		or block_id == BlockId.RED_MUSHROOM
+		or block_id == BlockId.ICE
+		or block_id == BlockId.LEAVES
+		or block_id == BlockId.PINE_LEAVES
+		or block_id == BlockId.BIRCH_LEAVES
+		or block_id == BlockId.MONSTER_SPAWNER
 	):
 		return false
 	return true
@@ -239,6 +282,10 @@ static func is_stone_Or_ore(block_id: int) -> bool:
 		or block_id == BlockId.DIAMOND_ORE
 		or block_id == BlockId.FURNACE
 		or block_id == BlockId.OBSIDIAN
+		or block_id == BlockId.REDSTONE_ORE
+		or block_id == BlockId.LAPIS_ORE
+		or block_id == BlockId.MONSTER_SPAWNER
+		or block_id == BlockId.BEDROCK
 	)
 
 
@@ -247,28 +294,36 @@ static func get_block_hardness(block_id: int) -> float:
 	if is_liquid(block_id) or block_id == BlockId.AIR:
 		return 0.0
 	match block_id:
+		BlockId.BEDROCK:
+			return -1.0 # Indestructible in survival
+		BlockId.DANDELION, BlockId.ROSE, BlockId.BROWN_MUSHROOM, BlockId.RED_MUSHROOM:
+			return 0.05
 		BlockId.TORCH, BlockId.TNT, BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS, BlockId.SUGAR_CANE, BlockId.SEAGRASS:
 			return 0.10
 		BlockId.WHEAT_SPROUT, BlockId.POTATO_SPROUT:
 			return 0.05
 		BlockId.WOOL:
 			return 0.35
-		BlockId.FARMLAND:
+		BlockId.FARMLAND, BlockId.GRAVEL, BlockId.CLAY:
 			return 0.38
-		BlockId.LEAVES, BlockId.SNOW, BlockId.CACTUS, BlockId.BED, BlockId.BED_HEAD:
+		BlockId.ICE:
+			return 0.30
+		BlockId.LEAVES, BlockId.PINE_LEAVES, BlockId.BIRCH_LEAVES, BlockId.SNOW, BlockId.CACTUS, BlockId.BED, BlockId.BED_HEAD:
 			return 0.24
 		BlockId.GRASS, BlockId.DIRT, BlockId.SAND, BlockId.LADDER:
 			return 0.38
-		BlockId.WOOD_LOG, BlockId.WOOD_PLANKS, BlockId.CRAFTING_TABLE, BlockId.CHEST, BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.GLOWSTONE:
+		BlockId.WOOD_LOG, BlockId.PINE_LOG, BlockId.BIRCH_LOG, BlockId.WOOD_PLANKS, BlockId.CRAFTING_TABLE, BlockId.CHEST, BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.GLOWSTONE:
 			return 0.65
 		BlockId.STONE, BlockId.COBBLESTONE, BlockId.MOSSY_COBBLE, BlockId.SANDSTONE, BlockId.COAL_ORE, BlockId.FURNACE:
 			return 1.15
-		BlockId.IRON_ORE:
+		BlockId.IRON_ORE, BlockId.REDSTONE_ORE, BlockId.LAPIS_ORE:
 			return 1.45
 		BlockId.GOLD_ORE:
 			return 1.75
 		BlockId.DIAMOND_ORE:
 			return 2.10
+		BlockId.MONSTER_SPAWNER:
+			return 2.50
 		BlockId.OBSIDIAN:
 			return 4.50
 		_:
@@ -353,6 +408,36 @@ static func get_block_name(block_id: int) -> String:
 			return "Sugar Cane"
 		BlockId.SEAGRASS:
 			return "Seagrass"
+		BlockId.GRAVEL:
+			return "Gravel"
+		BlockId.CLAY:
+			return "Clay"
+		BlockId.ICE:
+			return "Ice"
+		BlockId.DANDELION:
+			return "Dandelion"
+		BlockId.ROSE:
+			return "Rose"
+		BlockId.BROWN_MUSHROOM:
+			return "Brown Mushroom"
+		BlockId.RED_MUSHROOM:
+			return "Red Mushroom"
+		BlockId.PINE_LOG:
+			return "Pine Log"
+		BlockId.PINE_LEAVES:
+			return "Pine Leaves"
+		BlockId.BIRCH_LOG:
+			return "Birch Log"
+		BlockId.BIRCH_LEAVES:
+			return "Birch Leaves"
+		BlockId.MONSTER_SPAWNER:
+			return "Monster Spawner"
+		BlockId.BEDROCK:
+			return "Bedrock"
+		BlockId.REDSTONE_ORE:
+			return "Redstone Ore"
+		BlockId.LAPIS_ORE:
+			return "Lapis Lazuli Ore"
 		_:
 			return "Unknown"
 
@@ -431,6 +516,36 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.58, 0.82, 0.35)
 		BlockId.SEAGRASS:
 			return Color(0.28, 0.72, 0.25)
+		BlockId.GRAVEL:
+			return Color(0.55, 0.52, 0.50)
+		BlockId.CLAY:
+			return Color(0.62, 0.65, 0.72)
+		BlockId.ICE:
+			return Color(0.60, 0.80, 0.95)
+		BlockId.DANDELION:
+			return Color(0.95, 0.88, 0.15)
+		BlockId.ROSE:
+			return Color(0.85, 0.12, 0.16)
+		BlockId.BROWN_MUSHROOM:
+			return Color(0.58, 0.44, 0.32)
+		BlockId.RED_MUSHROOM:
+			return Color(0.88, 0.20, 0.22)
+		BlockId.PINE_LOG:
+			return Color(0.28, 0.18, 0.10)
+		BlockId.PINE_LEAVES:
+			return Color(0.18, 0.38, 0.22)
+		BlockId.BIRCH_LOG:
+			return Color(0.88, 0.88, 0.84)
+		BlockId.BIRCH_LEAVES:
+			return Color(0.40, 0.68, 0.26)
+		BlockId.MONSTER_SPAWNER:
+			return Color(0.15, 0.28, 0.35)
+		BlockId.BEDROCK:
+			return Color(0.18, 0.18, 0.18)
+		BlockId.REDSTONE_ORE:
+			return Color(0.72, 0.15, 0.15)
+		BlockId.LAPIS_ORE:
+			return Color(0.15, 0.25, 0.70)
 		_:
 			return Color.GRAY
 
@@ -544,6 +659,42 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 			return 42
 		BlockId.SEAGRASS:
 			return 43
+		BlockId.GRAVEL:
+			return 46
+		BlockId.CLAY:
+			return 47
+		BlockId.ICE:
+			return 48
+		BlockId.DANDELION:
+			return 49
+		BlockId.ROSE:
+			return 50
+		BlockId.BROWN_MUSHROOM:
+			return 51
+		BlockId.RED_MUSHROOM:
+			return 52
+		BlockId.PINE_LOG:
+			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
+				return 5
+			else:
+				return 53
+		BlockId.PINE_LEAVES:
+			return 54
+		BlockId.BIRCH_LOG:
+			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
+				return 5
+			else:
+				return 55
+		BlockId.BIRCH_LEAVES:
+			return 56
+		BlockId.MONSTER_SPAWNER:
+			return 57
+		BlockId.BEDROCK:
+			return 58
+		BlockId.REDSTONE_ORE:
+			return 59
+		BlockId.LAPIS_ORE:
+			return 60
 		_:
 			return 3
 

@@ -40,6 +40,10 @@ enum ItemId {
 	BAKED_POTATO = 122,
 	LAVA_BUCKET = 123,
 	SHEARS = 124,
+	FLINT = 125,
+	CLAY_BALL = 126,
+	REDSTONE = 127,
+	LAPIS = 128,
 
 	# Pickaxes (201..204)
 	WOOD_PICKAXE = 201,
@@ -366,6 +370,8 @@ static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: i
 	if not can_harvest_block(equipped_item_id, broken_block_id):
 		return 0
 	match broken_block_id:
+		BlockRegistry.BlockId.BEDROCK:
+			return 0
 		BlockRegistry.BlockId.STONE:
 			return BlockRegistry.BlockId.COBBLESTONE
 		BlockRegistry.BlockId.GRASS:
@@ -378,6 +384,12 @@ static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: i
 			return ItemId.RAW_GOLD
 		BlockRegistry.BlockId.DIAMOND_ORE:
 			return ItemId.DIAMOND
+		BlockRegistry.BlockId.REDSTONE_ORE:
+			return ItemId.REDSTONE
+		BlockRegistry.BlockId.LAPIS_ORE:
+			return ItemId.LAPIS
+		BlockRegistry.BlockId.CLAY:
+			return ItemId.CLAY_BALL
 		BlockRegistry.BlockId.WOOL:
 			return ItemId.WOOL
 		BlockRegistry.BlockId.FARMLAND:
@@ -390,22 +402,33 @@ static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: i
 			return ItemId.WHEAT_SEEDS
 		BlockRegistry.BlockId.POTATO_SPROUT:
 			return ItemId.POTATO
+		BlockRegistry.BlockId.ICE:
+			return 0
+		BlockRegistry.BlockId.MONSTER_SPAWNER:
+			return 0
+		BlockRegistry.BlockId.PINE_LEAVES, BlockRegistry.BlockId.BIRCH_LEAVES:
+			return 0
 		_:
 			return broken_block_id
 
 
 ## Checks whether the equipped item can harvest drops from `block_id` (Minecraft harvest rules).
 static func can_harvest_block(equipped_item_id: int, block_id: int) -> bool:
+	if block_id == BlockRegistry.BlockId.BEDROCK:
+		return false
+
 	var cat: int = get_tool_category(equipped_item_id)
 	var tier: int = get_tool_tier(equipped_item_id)
 
 	match block_id:
-		BlockRegistry.BlockId.STONE, BlockRegistry.BlockId.COBBLESTONE, BlockRegistry.BlockId.COAL_ORE, BlockRegistry.BlockId.FURNACE:
+		BlockRegistry.BlockId.STONE, BlockRegistry.BlockId.COBBLESTONE, BlockRegistry.BlockId.COAL_ORE, BlockRegistry.BlockId.FURNACE, BlockRegistry.BlockId.LAPIS_ORE:
 			return cat == ToolCategory.PICKAXE and tier >= 1
-		BlockRegistry.BlockId.IRON_ORE:
+		BlockRegistry.BlockId.IRON_ORE, BlockRegistry.BlockId.REDSTONE_ORE:
 			return cat == ToolCategory.PICKAXE and tier >= 2
-		BlockRegistry.BlockId.GOLD_ORE, BlockRegistry.BlockId.DIAMOND_ORE:
+		BlockRegistry.BlockId.GOLD_ORE, BlockRegistry.BlockId.DIAMOND_ORE, BlockRegistry.BlockId.OBSIDIAN:
 			return cat == ToolCategory.PICKAXE and tier >= 3
+		BlockRegistry.BlockId.MONSTER_SPAWNER:
+			return cat == ToolCategory.PICKAXE and tier >= 1
 		_:
 			# Wood, dirt, grass, sand, leaves, snow, crafting table, glowstone can be harvested by hand
 			return true
@@ -506,6 +529,14 @@ static func get_item_name(item_id: int) -> String:
 			return "Lava Bucket"
 		ItemId.SHEARS:
 			return "Shears"
+		ItemId.FLINT:
+			return "Flint"
+		ItemId.CLAY_BALL:
+			return "Clay Ball"
+		ItemId.REDSTONE:
+			return "Redstone"
+		ItemId.LAPIS:
+			return "Lapis Lazuli"
 		ItemId.WOOD_PICKAXE:
 			return "Wooden Pickaxe"
 		ItemId.STONE_PICKAXE:
@@ -807,6 +838,14 @@ func award_block_drop(broken_block_id: int, equipped_item_id: int) -> String:
 		return "Broken! (Requires proper Pickaxe tier to harvest)"
 
 	match broken_block_id:
+		BlockRegistry.BlockId.BEDROCK:
+			return "Bedrock is unbreakable!"
+		BlockRegistry.BlockId.MONSTER_SPAWNER:
+			return "Monster Spawner destroyed!"
+		BlockRegistry.BlockId.ICE:
+			return "Ice shattered"
+		BlockRegistry.BlockId.PINE_LEAVES, BlockRegistry.BlockId.BIRCH_LEAVES:
+			return ""
 		BlockRegistry.BlockId.STONE:
 			add_item(BlockRegistry.BlockId.COBBLESTONE, 1)
 			return "+1 Cobblestone"
@@ -825,6 +864,24 @@ func award_block_drop(broken_block_id: int, equipped_item_id: int) -> String:
 		BlockRegistry.BlockId.DIAMOND_ORE:
 			add_item(ItemId.DIAMOND, 1)
 			return "+1 Diamond!"
+		BlockRegistry.BlockId.REDSTONE_ORE:
+			var r_cnt: int = randi_range(4, 5)
+			add_item(ItemId.REDSTONE, r_cnt)
+			return "+%d Redstone" % r_cnt
+		BlockRegistry.BlockId.LAPIS_ORE:
+			var l_cnt: int = randi_range(4, 8)
+			add_item(ItemId.LAPIS, l_cnt)
+			return "+%d Lapis Lazuli" % l_cnt
+		BlockRegistry.BlockId.CLAY:
+			add_item(ItemId.CLAY_BALL, 4)
+			return "+4 Clay Balls"
+		BlockRegistry.BlockId.GRAVEL:
+			if randf() < 0.10:
+				add_item(ItemId.FLINT, 1)
+				return "+1 Flint"
+			else:
+				add_item(BlockRegistry.BlockId.GRAVEL, 1)
+				return "+1 Gravel"
 		_:
 			add_item(broken_block_id, 1)
 			return "+1 %s" % get_item_name(broken_block_id)
@@ -1040,6 +1097,10 @@ func populate_loot_chest_at(chest_pos: Vector3i, rng_seed: int) -> void:
 		[ItemId.BUCKET, 1],
 		[BlockRegistry.BlockId.TORCH, 8],
 		[BlockRegistry.BlockId.TNT, 2],
+		[ItemId.REDSTONE, 4],
+		[ItemId.BREAD, 2],
+		[ItemId.WHEAT, 4],
+		[ItemId.GUNPOWDER, 3],
 	]
 	for n in range(5):
 		var pick: Array = loot_pool[rng.randi_range(0, loot_pool.size() - 1)]

@@ -128,25 +128,42 @@ static func get_atlas_texture() -> ImageTexture:
 	if _cached_texture != null:
 		return _cached_texture
 
-	# 1. Load the block atlas: a local texture pack override (e.g. Faithful 64x, 36 tiles)
-	#    if installed, otherwise the repo's Blender-baked atlas (29 tiles).
+	var target_cols: int = 61
+	var tile_size: int = BlockRegistry.TILE_PIXEL_SIZE
+
+	# 1. Load the block atlas: a local texture pack override (e.g. Faithful 64x)
+	#    if installed, otherwise the repo's Blender-baked atlas.
 	var baked_img: Image = TexturePack.load_image("res://assets/textures/block_atlas.png")
 	if baked_img != null:
-		BlockRegistry.atlas_columns = maxi(1, baked_img.get_width() / maxi(1, baked_img.get_height()))
-		_cached_texture = ImageTexture.create_from_image(baked_img)
+		var b_tile_size: int = maxi(1, baked_img.get_height())
+		var existing_cols: int = maxi(1, baked_img.get_width() / b_tile_size)
+		if existing_cols >= target_cols:
+			BlockRegistry.atlas_columns = existing_cols
+			_cached_texture = ImageTexture.create_from_image(baked_img)
+			return _cached_texture
+
+		# Dynamically append tiles existing_cols..target_cols so new Beta blocks get distinct textures
+		var ext_img := Image.create(target_cols * b_tile_size, b_tile_size, false, Image.FORMAT_RGBA8)
+		ext_img.blit_rect(baked_img, Rect2i(0, 0, baked_img.get_width(), b_tile_size), Vector2i.ZERO)
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 1337
+		for tile_idx in range(existing_cols, target_cols):
+			_paint_tile(ext_img, tile_idx, tile_idx * b_tile_size, 0, b_tile_size, rng)
+
+		BlockRegistry.atlas_columns = target_cols
+		_cached_texture = ImageTexture.create_from_image(ext_img)
 		return _cached_texture
 
 	# 2. Fallback procedural pixel-art atlas if `block_atlas.png` is missing
-	BlockRegistry.atlas_columns = BlockRegistry.ATLAS_COLUMNS
-	var tile_size: int = BlockRegistry.TILE_PIXEL_SIZE
-	var width: int = BlockRegistry.ATLAS_COLUMNS * tile_size
+	BlockRegistry.atlas_columns = target_cols
+	var width: int = target_cols * tile_size
 	var height: int = BlockRegistry.ATLAS_ROWS * tile_size
 	var img := Image.create(width, height, false, Image.FORMAT_RGBA8)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1337
 
-	for tile_idx in range(BlockRegistry.ATLAS_COLUMNS):
+	for tile_idx in range(target_cols):
 		var offset_x: int = tile_idx * tile_size
 		_paint_tile(img, tile_idx, offset_x, 0, tile_size, rng)
 
@@ -408,6 +425,104 @@ static func _sample_tile_pixel(
 			if is_sprout:
 				return _tint(Color(0.34, 0.72, 0.20), jitter * 0.3)
 			return _tint(Color(0.30, 0.18, 0.08), jitter * 0.3)
+
+		46: # Gravel (Stone pebbles with dark flint specks)
+			var is_flint: bool = ((x * 7 + y * 13) % 11 == 0)
+			var is_pebble: bool = ((x * 3 + y * 5) % 7 == 0)
+			if is_flint:
+				return _tint(Color(0.24, 0.22, 0.26), jitter * 0.2)
+			elif is_pebble:
+				return _tint(Color(0.72, 0.70, 0.66), jitter * 0.3)
+			return _tint(Color(0.55, 0.52, 0.50), jitter)
+
+		47: # Clay (Smooth grey-blue silt)
+			var band: float = -0.03 if (y % 5 == 0) else 0.02
+			return _tint(Color(0.62, 0.65, 0.72), jitter * 0.4 + band)
+
+		48: # Ice (Translucent crystal blue with frost cracks)
+			var is_crack: bool = ((x - y) % 7 == 0 or (x + y * 2) % 11 == 0)
+			if is_crack:
+				return Color(0.92, 0.96, 1.0, 1.0)
+			return Color(0.62, 0.82, 0.96, 0.90)
+
+		49: # Dandelion (Yellow flower head with green stalk)
+			var center_x: int = size / 2
+			var dx_f: int = absi(x - center_x)
+			if y >= int(float(size) * 0.55) and dx_f <= 3 and y <= int(float(size) * 0.85):
+				return _tint(Color(0.96, 0.88, 0.16), jitter * 0.2)
+			if (dx_f == 0 or (dx_f == 1 and y % 3 == 0)) and y >= 2 and y < int(float(size) * 0.60):
+				return _tint(Color(0.32, 0.68, 0.22), jitter * 0.2)
+			return Color(0, 0, 0, 0)
+
+		50: # Rose (Red blossom with dark green stalk and leaf)
+			var center_x_r: int = size / 2
+			var dx_r: int = absi(x - center_x_r)
+			if y >= int(float(size) * 0.50) and dx_r <= 3 and y <= int(float(size) * 0.85):
+				var petal_dark: bool = (dx_r == 3 or y == int(float(size) * 0.85))
+				return _tint(Color(0.68, 0.10, 0.14) if petal_dark else Color(0.88, 0.16, 0.20), jitter * 0.2)
+			if (dx_r == 0 or (dx_r == 1 and (y == 4 or y == 5))) and y >= 2 and y < int(float(size) * 0.55):
+				return _tint(Color(0.24, 0.52, 0.18), jitter * 0.2)
+			return Color(0, 0, 0, 0)
+
+		51: # Brown Mushroom (Dark brown cap with pale stalk)
+			var center_m: int = size / 2
+			var dx_m: int = absi(x - center_m)
+			if y >= int(float(size) * 0.45) and dx_m <= 4 and y <= int(float(size) * 0.70):
+				return _tint(Color(0.54, 0.40, 0.28), jitter * 0.2)
+			if dx_m <= 1 and y >= 2 and y < int(float(size) * 0.50):
+				return _tint(Color(0.86, 0.82, 0.74), jitter * 0.1)
+			return Color(0, 0, 0, 0)
+
+		52: # Red Mushroom (Red spotted dome cap with pale stalk)
+			var center_rm: int = size / 2
+			var dx_rm: int = absi(x - center_rm)
+			if y >= int(float(size) * 0.45) and dx_rm <= 4 and y <= int(float(size) * 0.75):
+				var is_spot: bool = (dx_rm == 2 and (y == int(float(size) * 0.55) or y == int(float(size) * 0.68))) or (dx_rm == 0 and y == int(float(size) * 0.62))
+				if is_spot:
+					return Color(0.96, 0.96, 0.96, 1.0)
+				return _tint(Color(0.88, 0.18, 0.20), jitter * 0.2)
+			if dx_rm <= 1 and y >= 2 and y < int(float(size) * 0.50):
+				return _tint(Color(0.86, 0.82, 0.74), jitter * 0.1)
+			return Color(0, 0, 0, 0)
+
+		53: # Pine Log Side (Dark reddish-brown coarse vertical bark)
+			var pine_ridge: float = -0.07 if (x % 3 == 0) else 0.02
+			return _tint(Color(0.28, 0.18, 0.10), jitter * 0.6 + pine_ridge)
+
+		54: # Pine Leaves (Dark evergreen conifer needles)
+			var pine_dapple: float = -0.06 if (rng.randf() < 0.32) else 0.03
+			return _tint(Color(0.18, 0.36, 0.20), jitter * 0.5 + pine_dapple)
+
+		55: # Birch Log Side (White bark with dark horizontal lenticels)
+			var is_lenticel: bool = (y % 4 == 0) and ((x >= 2 and x <= 5) or (x >= 9 and x <= 13))
+			if is_lenticel:
+				return _tint(Color(0.20, 0.20, 0.20), jitter * 0.2)
+			return _tint(Color(0.90, 0.90, 0.86), jitter * 0.3)
+
+		56: # Birch Leaves (Bright vibrant yellow-green deciduous leaves)
+			var birch_dapple: float = -0.05 if (rng.randf() < 0.28) else 0.04
+			return _tint(Color(0.42, 0.68, 0.28), jitter * 0.5 + birch_dapple)
+
+		57: # Monster Spawner (Dark charred iron cage grill)
+			var is_bar: bool = (x == 0 or x == size - 1 or y == 0 or y == size - 1 or x % 4 == 0 or y % 4 == 0)
+			if is_bar:
+				return _tint(Color(0.22, 0.24, 0.28), jitter * 0.3)
+			return Color(0.08, 0.12, 0.16, 0.85)
+
+		58: # Bedrock (High-contrast indestructible black/grey mottled stone)
+			var b_pattern: float = sin(float(x * 5) * 0.8) * cos(float(y * 7) * 0.6)
+			var b_shade: float = 0.15 if b_pattern > 0.2 else (-0.12 if b_pattern < -0.2 else 0.0)
+			return _tint(Color(0.18, 0.18, 0.18), jitter * 0.5 + b_shade)
+
+		59: # Redstone Ore (Stone with glowing ruby-red flecks)
+			if _is_ore_fleck(x, y):
+				return _tint(Color(0.92, 0.18, 0.18), jitter * 0.2)
+			return _tint(stone_base, jitter)
+
+		60: # Lapis Ore (Stone with royal cobalt-blue flecks)
+			if _is_ore_fleck(x, y):
+				return _tint(Color(0.16, 0.32, 0.84), jitter * 0.2)
+			return _tint(stone_base, jitter)
 
 		_:
 			return _tint(stone_base, jitter)

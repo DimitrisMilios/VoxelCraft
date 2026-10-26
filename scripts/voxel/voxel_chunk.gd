@@ -13,9 +13,16 @@ const WATER_LEVEL: int = 45
 
 enum Biome {
 	PLAINS = 0,
-	FOREST = 1,
-	DESERT = 2,
-	SNOWY_TAIGA = 3,
+	DESERT = 1,
+	FOREST = 2,
+	RAINFOREST = 3,
+	SEASONAL_FOREST = 4,
+	SAVANNA = 5,
+	SHRUBLAND = 6,
+	SWAMPLAND = 7,
+	TAIGA = 10,
+	TUNDRA = 11,
+	SNOWY_TAIGA = 10, # Backward-compatibility alias
 }
 
 ## Coordinate of this chunk in chunk-grid space (e.g., Vector2i(0, 0), Vector2i(1, -2)).
@@ -121,20 +128,57 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			if top_y > _highest_solid_y:
 				_highest_solid_y = top_y
 
-			# Deterministic tree, cactus, boulder, or mountain waterfall spring placement
-			if surface_y > WATER_LEVEL + 1 and lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
+			# Deterministic trees, plants, flowers, cacti, and boulders
+			if surface_y > WATER_LEVEL + 1 and surface_y + 1 < CHUNK_SIZE_Y:
 				var surface_id: int = get_block_local(lx, surface_y, lz)
 				var biome: int = sample_biome(wx, wz, surface_noise.seed if surface_noise != null else 0)
-				if biome == Biome.DESERT and surface_id == BlockRegistry.BlockId.SAND:
-					if _should_spawn_tree(wx, wz, biome):
-						_place_cactus(lx, surface_y + 1, lz)
-				elif _should_spawn_tree(wx, wz, biome) and (surface_id == BlockRegistry.BlockId.GRASS or surface_id == BlockRegistry.BlockId.SNOW):
-					if biome == Biome.SNOWY_TAIGA or surface_y >= SEA_LEVEL + 10:
-						_place_pine_tree(lx, surface_y + 1, lz)
-					else:
-						_place_tree(lx, surface_y + 1, lz)
-				elif (biome == Biome.FOREST or biome == Biome.SNOWY_TAIGA) and _should_spawn_boulder(wx, wz) and surface_id != BlockRegistry.BlockId.AIR:
-					_place_mossy_boulder(lx, surface_y, lz)
+
+				# 1. Trees (only in safe inner margins so canopies do not clip chunk borders)
+				if lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
+					if biome == Biome.DESERT and surface_id == BlockRegistry.BlockId.SAND:
+						if _should_spawn_tree(wx, wz, biome):
+							_place_cactus(lx, surface_y + 1, lz)
+					elif _should_spawn_tree(wx, wz, biome) and (surface_id == BlockRegistry.BlockId.GRASS or surface_id == BlockRegistry.BlockId.SNOW):
+						if biome == Biome.TAIGA or biome == Biome.TUNDRA or surface_y >= SEA_LEVEL + 12:
+							_place_pine_tree(lx, surface_y + 1, lz)
+						elif biome == Biome.RAINFOREST:
+							var rf_tree_type: int = absi((wx * 17) ^ (wz * 31)) % 10
+							if rf_tree_type < 5:
+								_place_birch_tree(lx, surface_y + 1, lz)
+							else:
+								_place_balloon_tree(lx, surface_y + 1, lz)
+						elif biome == Biome.SEASONAL_FOREST:
+							var sf_tree_type: int = absi((wx * 13) ^ (wz * 29)) % 10
+							if sf_tree_type < 6:
+								_place_balloon_tree(lx, surface_y + 1, lz)
+							else:
+								_place_tree(lx, surface_y + 1, lz)
+						elif biome == Biome.FOREST:
+							var f_tree_type: int = absi((wx * 19) ^ (wz * 37)) % 10
+							if f_tree_type < 4:
+								_place_birch_tree(lx, surface_y + 1, lz)
+							else:
+								_place_tree(lx, surface_y + 1, lz)
+						else:
+							_place_tree(lx, surface_y + 1, lz)
+					elif (biome == Biome.FOREST or biome == Biome.TAIGA or biome == Biome.SEASONAL_FOREST) and _should_spawn_boulder(wx, wz) and surface_id != BlockRegistry.BlockId.AIR:
+						_place_mossy_boulder(lx, surface_y, lz)
+
+				# 2. Flowers, Wild Plants, and Mushrooms
+				if get_block_local(lx, surface_y + 1, lz) == BlockRegistry.BlockId.AIR:
+					var plant_hash: int = absi((wx * 48271) ^ (wz * 95083)) % 1000
+					if surface_id == BlockRegistry.BlockId.GRASS:
+						if biome == Biome.PLAINS and plant_hash < 85:
+							var flower_id: int = BlockRegistry.BlockId.DANDELION if (plant_hash % 2 == 0) else BlockRegistry.BlockId.ROSE
+							_set_voxel_raw(lx, surface_y + 1, lz, flower_id)
+						elif (biome == Biome.FOREST or biome == Biome.SEASONAL_FOREST or biome == Biome.RAINFOREST) and plant_hash < 40:
+							if plant_hash < 25:
+								_set_voxel_raw(lx, surface_y + 1, lz, BlockRegistry.BlockId.ROSE if (plant_hash % 2 == 0) else BlockRegistry.BlockId.DANDELION)
+							else:
+								_set_voxel_raw(lx, surface_y + 1, lz, BlockRegistry.BlockId.BROWN_MUSHROOM)
+						elif biome == Biome.SWAMPLAND and plant_hash < 65:
+							var shroom_id: int = BlockRegistry.BlockId.BROWN_MUSHROOM if (plant_hash % 2 == 0) else BlockRegistry.BlockId.RED_MUSHROOM
+							_set_voxel_raw(lx, surface_y + 1, lz, shroom_id)
 
 			# Shoreline Sugar Cane reeds along water banks (matching realistic lake shores)
 			if (surface_y == WATER_LEVEL or surface_y == WATER_LEVEL + 1) and (surface_y + 3 < CHUNK_SIZE_Y):
@@ -157,24 +201,62 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 	_generate_chunk_structures(surface_noise)
 
 
-## Deterministic 2D climate biome sampler (Plains, Forest, Desert, Snowy Taiga).
-## Seeded per world so every seed produces unique, diverse climate and biome distributions.
-static func sample_biome(wx: int, wz: int, world_seed: int = 0) -> int:
+## Continuous multi-scale Temperature map [0.0..1.0] matching Minecraft Beta 1.7.3.
+static func sample_temperature(wx: int, wz: int, world_seed: int = 0) -> float:
 	var seed_x: float = float(int(world_seed * 1664525 + 1013904223) % 40000)
 	var seed_z: float = float(int(world_seed * 214013 + 2531011) % 40000)
 	var fx: float = float(wx) + seed_x
 	var fz: float = float(wz) + seed_z
 	var warp_x: float = fx + sin(fz * 0.008) * 32.0
 	var warp_z: float = fz + cos(fx * 0.008) * 32.0
-	var temp: float = sin(warp_x * 0.0042 + cos(warp_z * 0.0035) * 1.4) + cos(warp_z * 0.0038)
-	var humid: float = cos(warp_x * 0.0040 - warp_z * 0.0045) + sin(warp_x * 0.008) * 0.40
-	if temp > 0.65:
-		return Biome.DESERT
-	if temp < -0.65:
-		return Biome.SNOWY_TAIGA
-	if humid > 0.12:
-		return Biome.FOREST
-	return Biome.PLAINS
+	var t1: float = sin(warp_x * 0.0045 + cos(warp_z * 0.0035) * 1.5)
+	var t2: float = cos(warp_z * 0.0085 + sin(warp_x * 0.0065)) * 0.5
+	return clampf((t1 + t2 + 1.5) / 3.0, 0.0, 1.0)
+
+
+## Continuous multi-scale Rainfall map [0.0..1.0] matching Minecraft Beta 1.7.3.
+static func sample_rainfall(wx: int, wz: int, world_seed: int = 0) -> float:
+	var seed_x: float = float(int((world_seed + 98765) * 22695477 + 1) % 40000)
+	var seed_z: float = float(int((world_seed + 54321) * 3141592 + 101) % 40000)
+	var fx: float = float(wx) + seed_x
+	var fz: float = float(wz) + seed_z
+	var warp_x: float = fx + cos(fz * 0.008) * 32.0
+	var warp_z: float = fz + sin(fx * 0.008) * 32.0
+	var r1: float = cos(warp_x * 0.0055 - warp_z * 0.0042)
+	var r2: float = sin(warp_z * 0.0092 + cos(warp_x * 0.0070)) * 0.5
+	return clampf((r1 + r2 + 1.5) / 3.0, 0.0, 1.0)
+
+
+## Deterministic 2D climate biome sampler mapping (T, R) onto the 10 Beta biomes.
+## Seeded per world so every seed produces unique, diverse climate and biome distributions.
+static func sample_biome(wx: int, wz: int, world_seed: int = 0) -> int:
+	var temp: float = sample_temperature(wx, wz, world_seed)
+	var rain: float = sample_rainfall(wx, wz, world_seed)
+
+	const BIOME_CENTROIDS: Array[Dictionary] = [
+		{"biome": Biome.DESERT, "t": 0.90, "r": 0.10},
+		{"biome": Biome.SAVANNA, "t": 0.80, "r": 0.22},
+		{"biome": Biome.SHRUBLAND, "t": 0.65, "r": 0.25},
+		{"biome": Biome.PLAINS, "t": 0.55, "r": 0.40},
+		{"biome": Biome.FOREST, "t": 0.65, "r": 0.65},
+		{"biome": Biome.SEASONAL_FOREST, "t": 0.50, "r": 0.75},
+		{"biome": Biome.SWAMPLAND, "t": 0.38, "r": 0.82},
+		{"biome": Biome.RAINFOREST, "t": 0.82, "r": 0.85},
+		{"biome": Biome.TAIGA, "t": 0.20, "r": 0.65},
+		{"biome": Biome.TUNDRA, "t": 0.18, "r": 0.25},
+	]
+
+	var closest_biome: int = Biome.PLAINS
+	var min_dist_sq: float = 999999.0
+	for entry in BIOME_CENTROIDS:
+		var dt: float = temp - float(entry["t"])
+		var dr: float = rain - float(entry["r"])
+		var dist_sq: float = dt * dt + dr * dr
+		if dist_sq < min_dist_sq:
+			min_dist_sq = dist_sq
+			closest_biome = int(entry["biome"])
+
+	return closest_biome
 
 
 ## Multi-Scale Continental + Ridged Mountain + Winding River Valley Heightmap.
@@ -279,14 +361,28 @@ static func sample_terrain_voxel(
 ) -> int:
 	if ly < 0:
 		return BlockRegistry.BlockId.AIR
+
+	# Authentic Minecraft Beta 1.7.3 Bedrock Floor at bottom of world (y = 0..3)
+	if ly == 0:
+		return BlockRegistry.BlockId.BEDROCK
+	if ly <= 3:
+		var bedrock_hash: int = absi((wx * 310561) ^ (ly * 7919) ^ (wz * 15485863)) % 100
+		if (ly == 1 and bedrock_hash < 75) or (ly == 2 and bedrock_hash < 50) or (ly == 3 and bedrock_hash < 25):
+			return BlockRegistry.BlockId.BEDROCK
+
 	if ly > surface_y:
 		if ly <= WATER_LEVEL:
+			# Water surface in cold biomes (Taiga, Tundra) freezes into solid Ice
+			if ly == WATER_LEVEL:
+				var world_seed: int = (cave_noise.seed - 7919) if cave_noise != null else 0
+				var b_at_surf: int = sample_biome(wx, wz, world_seed)
+				if b_at_surf == Biome.TUNDRA or b_at_surf == Biome.TAIGA:
+					return BlockRegistry.BlockId.ICE
 			return BlockRegistry.BlockId.WATER
 		return BlockRegistry.BlockId.AIR
-	if ly == 0:
-		return BlockRegistry.BlockId.STONE
 
-	if _is_carved_cave_or_ravine(surface_y, wx, ly, wz, cave_noise):
+	# Subterranean 3D Caves (cannot breach Bedrock at ly <= 3)
+	if ly > 3 and _is_carved_cave_or_ravine(surface_y, wx, ly, wz, cave_noise):
 		if ly <= 10:
 			return BlockRegistry.BlockId.LAVA
 		return BlockRegistry.BlockId.AIR
@@ -304,21 +400,45 @@ static func sample_terrain_voxel(
 
 	var world_seed: int = (cave_noise.seed - 7919) if cave_noise != null else 0
 	var biome: int = sample_biome(wx, wz, world_seed)
+
+	# 1. Desert: Sand surface (2 blocks) + Sandstone filler (4 blocks)
 	if biome == Biome.DESERT and surface_y > WATER_LEVEL:
 		if ly == surface_y or ly == surface_y - 1:
 			return BlockRegistry.BlockId.SAND
 		if ly >= surface_y - 5:
 			return BlockRegistry.BlockId.SANDSTONE
 
-	# High alpine mountain peaks & steep cliffs:
-	# Snowline at `SEA_LEVEL + 18`, rocky crags & bare stone cliffs at `SEA_LEVEL + 11..17`
-	if surface_y >= SEA_LEVEL + 18 or (biome == Biome.SNOWY_TAIGA and surface_y > WATER_LEVEL + 1):
+	# 2. Tundra & Taiga: Snow surface layer + Dirt filler
+	elif biome == Biome.TUNDRA or (biome == Biome.TAIGA and surface_y >= SEA_LEVEL + 4):
+		if ly == surface_y:
+			return BlockRegistry.BlockId.SNOW
+		if ly >= surface_y - 3:
+			return BlockRegistry.BlockId.DIRT
+
+	# 3. Swampland: Clay deposits in shallow water basins, muddy grass on surface
+	elif biome == Biome.SWAMPLAND:
+		if surface_y <= WATER_LEVEL + 1 and ly >= surface_y - 2:
+			return BlockRegistry.BlockId.CLAY
+		if ly == surface_y:
+			return BlockRegistry.BlockId.GRASS
+		if ly >= surface_y - 3:
+			return BlockRegistry.BlockId.DIRT
+
+	# 4. Shrubland: Grass with subterranean and surface gravel patches
+	elif biome == Biome.SHRUBLAND:
+		var gravel_surf: int = absi((wx * 19349663) ^ (wz * 83492791)) % 100
+		if ly == surface_y:
+			return BlockRegistry.BlockId.GRAVEL if gravel_surf < 18 else BlockRegistry.BlockId.GRASS
+		if ly >= surface_y - 3:
+			return BlockRegistry.BlockId.DIRT
+
+	# 5. High alpine mountain peaks & steep cliffs
+	if surface_y >= SEA_LEVEL + 18:
 		if ly == surface_y:
 			return BlockRegistry.BlockId.SNOW
 		if ly >= surface_y - 3 and surface_y >= SEA_LEVEL + 14:
 			return BlockRegistry.BlockId.STONE
 	elif surface_y >= SEA_LEVEL + 12:
-		# Steep rocky mountain slopes expose bare Stone & Cobblestone crags
 		var crag_hash: int = absi((wx * 374761) ^ (wz * 668265)) % 100
 		if crag_hash < 68 or surface_y >= SEA_LEVEL + 15:
 			if ly >= surface_y - 3:
@@ -331,26 +451,46 @@ static func sample_terrain_voxel(
 	return _sample_underground_stone_or_ore(wx, ly, wz)
 
 
-## Deterministically places Coal, Iron, Gold, and Diamond ore clusters inside underground Stone strata.
+## Deterministically places Coal, Iron, Gold, Redstone, Lapis, Diamond, and Gravel ore clusters inside Stone strata.
 static func _sample_underground_stone_or_ore(wx: int, ly: int, wz: int) -> int:
-	# Group coordinates into 2x2x2 vein cells so ores spawn in natural multi-block clusters
 	var vx: int = wx >> 1
 	var vy: int = ly >> 1
 	var vz: int = wz >> 1
 	var cell_hash: int = absi((vx * 73856093) ^ (vy * 19349663) ^ (vz * 83492791)) % 1000
 	var sub_hash: int = absi((wx * 374761393) + (ly * 668265263) + (wz * 2147483647)) % 100
 
-	# Sub-block irregular shape (roughly 65% of the 2x2x2 vein cell becomes ore)
+	# Sub-block irregular shape (roughly 68% of the 2x2x2 vein cell becomes ore)
 	if sub_hash >= 68:
 		return BlockRegistry.BlockId.STONE
 
+	# Diamond Ore (y <= 16, ~0.8% of stone cells)
 	if ly <= 16 and cell_hash < 8:
 		return BlockRegistry.BlockId.DIAMOND_ORE
-	if ly <= 28 and cell_hash >= 10 and cell_hash < 26:
+
+	# Redstone Ore (y <= 16, ~2.5% of stone cells)
+	if ly <= 16 and cell_hash >= 8 and cell_hash < 33:
+		return BlockRegistry.BlockId.REDSTONE_ORE
+
+	# Lapis Lazuli Ore (peaks around y=14, spans y=4..30)
+	if ly >= 4 and ly <= 30:
+		var lapis_dist: int = absi(ly - 14)
+		if lapis_dist <= 8 and cell_hash >= 33 and cell_hash < (33 + maxi(1, 10 - lapis_dist)):
+			return BlockRegistry.BlockId.LAPIS_ORE
+
+	# Gold Ore (y <= 32, ~1.8% of stone cells)
+	if ly <= 32 and cell_hash >= 45 and cell_hash < 63:
 		return BlockRegistry.BlockId.GOLD_ORE
-	if ly <= 48 and cell_hash >= 30 and cell_hash < 74:
+
+	# Subterranean Gravel deposits (y <= 80, ~2.2% of cells)
+	if ly <= 80 and cell_hash >= 65 and cell_hash < 87:
+		return BlockRegistry.BlockId.GRAVEL
+
+	# Iron Ore (y <= 64, ~4.5% of stone cells)
+	if ly <= 64 and cell_hash >= 90 and cell_hash < 135:
 		return BlockRegistry.BlockId.IRON_ORE
-	if ly <= 62 and cell_hash >= 75 and cell_hash < 142:
+
+	# Coal Ore (y <= 128, ~7.0% of stone cells)
+	if ly <= 128 and cell_hash >= 135 and cell_hash < 205:
 		return BlockRegistry.BlockId.COAL_ORE
 
 	return BlockRegistry.BlockId.STONE
@@ -359,12 +499,18 @@ static func _sample_underground_stone_or_ore(wx: int, ly: int, wz: int) -> int:
 func _should_spawn_tree(wx: int, wz: int, biome: int = Biome.PLAINS) -> bool:
 	var hash_val: int = absi((wx * 73428767) ^ (wz * 912931)) % 1000
 	match biome:
-		Biome.FOREST:
-			return hash_val < 20
-		Biome.SNOWY_TAIGA:
-			return hash_val < 14
+		Biome.RAINFOREST:
+			return hash_val < 32
+		Biome.FOREST, Biome.SEASONAL_FOREST:
+			return hash_val < 22
+		Biome.TAIGA:
+			return hash_val < 18
+		Biome.SWAMPLAND:
+			return hash_val < 10
 		Biome.DESERT:
 			return hash_val < 7
+		Biome.TUNDRA:
+			return hash_val < 3
 		_:
 			return hash_val < 5
 
@@ -420,12 +566,12 @@ func _place_tree(lx: int, base_y: int, lz: int) -> void:
 
 
 func _place_pine_tree(lx: int, base_y: int, lz: int) -> void:
-	var trunk_height: int = 6
+	var trunk_height: int = 7
 	if base_y + trunk_height + 2 >= CHUNK_SIZE_Y:
 		return
 
 	for ty in range(base_y, base_y + trunk_height):
-		_set_voxel_raw(lx, ty, lz, BlockRegistry.BlockId.WOOD_LOG)
+		_set_voxel_raw(lx, ty, lz, BlockRegistry.BlockId.PINE_LOG)
 
 	# Conical tiered pine needles
 	var tiers: Array[Vector2i] = [
@@ -445,14 +591,66 @@ func _place_pine_tree(lx: int, base_y: int, lz: int) -> void:
 				if rad == 2 and absi(cx - lx) == 2 and absi(cz - lz) == 2:
 					continue
 				if is_in_bounds(cx, cy, cz):
-					_set_voxel_raw(cx, cy, cz, BlockRegistry.BlockId.LEAVES)
+					_set_voxel_raw(cx, cy, cz, BlockRegistry.BlockId.PINE_LEAVES)
 
-	# Snow cap on top of the pine tree spire
+	# Spire on top of the pine tree
 	var spire_y: int = base_y + 7
 	if is_in_bounds(lx, spire_y, lz):
-		_set_voxel_raw(lx, spire_y, lz, BlockRegistry.BlockId.SNOW)
+		_set_voxel_raw(lx, spire_y, lz, BlockRegistry.BlockId.PINE_LEAVES)
 	if spire_y > _highest_solid_y:
 		_highest_solid_y = spire_y
+
+
+func _place_birch_tree(lx: int, base_y: int, lz: int) -> void:
+	var trunk_height: int = 5 + ((absi(lx * 7 + lz * 13)) % 2)
+	if base_y + trunk_height + 2 >= CHUNK_SIZE_Y:
+		return
+
+	for ty in range(base_y, base_y + trunk_height):
+		_set_voxel_raw(lx, ty, lz, BlockRegistry.BlockId.BIRCH_LOG)
+
+	var canopy_base: int = base_y + trunk_height - 2
+	var canopy_top: int = base_y + trunk_height + 1
+	for cy in range(canopy_base, canopy_top + 1):
+		var radius: int = 1 if cy == canopy_top else 2
+		for cx in range(lx - radius, lx + radius + 1):
+			for cz in range(lz - radius, lz + radius + 1):
+				if cx == lx and cz == lz and cy < base_y + trunk_height:
+					continue
+				if absi(cx - lx) == radius and absi(cz - lz) == radius and cy == canopy_top:
+					continue
+				if is_in_bounds(cx, cy, cz):
+					_set_voxel_raw(cx, cy, cz, BlockRegistry.BlockId.BIRCH_LEAVES)
+
+	if canopy_top > _highest_solid_y:
+		_highest_solid_y = canopy_top
+
+
+func _place_balloon_tree(lx: int, base_y: int, lz: int) -> void:
+	var trunk_height: int = 6 + ((absi(lx * 11 + lz * 23)) % 3)
+	if base_y + trunk_height + 3 >= CHUNK_SIZE_Y:
+		return
+
+	for ty in range(base_y, base_y + trunk_height):
+		_set_voxel_raw(lx, ty, lz, BlockRegistry.BlockId.WOOD_LOG)
+
+	# Spherical balloon canopy of radius 2 centered at trunk top (TrueCraft BalloonOakTree)
+	var center_cy: int = base_y + trunk_height
+	for cy in range(center_cy - 2, center_cy + 3):
+		for cx in range(lx - 2, lx + 3):
+			for cz in range(lz - 2, lz + 3):
+				var dx: float = float(cx - lx)
+				var dy: float = float(cy - center_cy)
+				var dz: float = float(cz - lz)
+				var d_sq: float = dx * dx + dy * dy + dz * dz
+				if d_sq <= 5.8:
+					if cx == lx and cz == lz and cy < base_y + trunk_height:
+						continue
+					if is_in_bounds(cx, cy, cz):
+						_set_voxel_raw(cx, cy, cz, BlockRegistry.BlockId.LEAVES)
+
+	if center_cy + 2 > _highest_solid_y:
+		_highest_solid_y = center_cy + 2
 
 
 func _place_cactus(lx: int, base_y: int, lz: int) -> void:
@@ -519,12 +717,15 @@ func _build_underground_dungeon(ox: int, oy: int, oz: int, seed_val: int) -> voi
 				else:
 					_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.AIR)
 
-	# Central torch & loot chest inside dungeon
+	# Central Monster Spawner & authentic Beta dungeon loot chests inside dungeon
 	if is_in_bounds(ox + 3, oy + 1, oz + 3):
-		_set_voxel_raw(ox + 3, oy + 1, oz + 3, BlockRegistry.BlockId.TORCH)
+		_set_voxel_raw(ox + 3, oy + 1, oz + 3, BlockRegistry.BlockId.MONSTER_SPAWNER)
 	if is_in_bounds(ox + 1, oy + 1, oz + 3):
 		_set_voxel_raw(ox + 1, oy + 1, oz + 3, BlockRegistry.BlockId.CHEST)
 		generated_loot_chests.append(Vector3i(world_origin_x + ox + 1, oy + 1, world_origin_z + oz + 3))
+	if is_in_bounds(ox + 5, oy + 1, oz + 3) and (seed_val % 2 == 0):
+		_set_voxel_raw(ox + 5, oy + 1, oz + 3, BlockRegistry.BlockId.CHEST)
+		generated_loot_chests.append(Vector3i(world_origin_x + ox + 5, oy + 1, world_origin_z + oz + 3))
 
 
 func _build_village_house(ox: int, base_y: int, oz: int, _seed_val: int) -> void:
@@ -772,8 +973,15 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						water_faces += 1
 					continue
 
-				# Custom foliage blocks (Sugar Cane, Seagrass cross quads)
-				if block_id == BlockRegistry.BlockId.SUGAR_CANE or block_id == BlockRegistry.BlockId.SEAGRASS:
+				# Custom foliage blocks (Sugar Cane, Seagrass, Flowers, Mushrooms cross quads)
+				if (
+					block_id == BlockRegistry.BlockId.SUGAR_CANE
+					or block_id == BlockRegistry.BlockId.SEAGRASS
+					or block_id == BlockRegistry.BlockId.DANDELION
+					or block_id == BlockRegistry.BlockId.ROSE
+					or block_id == BlockRegistry.BlockId.BROWN_MUSHROOM
+					or block_id == BlockRegistry.BlockId.RED_MUSHROOM
+				):
 					_emit_cross_quad(st_solid, lx, ly, lz, block_id)
 					solid_faces += 4
 					continue
