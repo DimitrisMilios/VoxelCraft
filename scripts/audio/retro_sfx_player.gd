@@ -95,6 +95,9 @@ var _sound_groups: Dictionary = {
 	"sheep_ambient": ["sounds_sheep_baa.ogg"],
 	"sheep_hurt": ["sounds_sheep_baa.ogg"],
 
+	"chicken_ambient": ["sounds_chicken_01.ogg", "sounds_chicken_02.ogg"],
+	"chicken_hurt": ["sounds_chicken_01.ogg"],
+
 	"villager_ambient": ["sounds_giraffe_hum.ogg"],
 	"villager_hurt": ["sounds_giraffe_hum.ogg"],
 

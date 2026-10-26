@@ -498,6 +498,11 @@ func _try_interact_or_place_block() -> void:
 			if handled:
 				if selected_item == InventoryManager.ItemId.SHEARS and _inventory != null and not is_creative:
 					_inventory.damage_hotbar_tool(selected_slot, 1)
+				elif selected_item == InventoryManager.ItemId.BUCKET and _targeted_mob.variant == PassiveMob.MobVariant.COW and _inventory != null:
+					if not is_creative:
+						_inventory.consume_from_hotbar_slot(selected_slot, 1)
+						_inventory.add_item(InventoryManager.ItemId.MILK_BUCKET, 1)
+					loot_notification.emit("Milked Cow (Milk Bucket)")
 				elif (selected_item == InventoryManager.ItemId.WHEAT or selected_item == InventoryManager.ItemId.POTATO) and _inventory != null and not is_creative:
 					_inventory.consume_from_hotbar_slot(selected_slot, 1)
 				mob_interacted.emit(false, int(_targeted_mob.variant))
@@ -518,11 +523,22 @@ func _try_interact_or_place_block() -> void:
 		and (selected_item == InventoryManager.ItemId.POTATO or selected_item == InventoryManager.ItemId.WHEAT_SEEDS)
 	)
 	if not is_planting_on_farmland and InventoryManager.is_food_item(selected_item) and _player_body != null and _inventory != null:
+		if selected_item == InventoryManager.ItemId.MILK_BUCKET:
+			_inventory.consume_from_hotbar_slot(selected_slot, 1)
+			_inventory.add_item(InventoryManager.ItemId.BUCKET, 1)
+			_player_body.heal_damage(2)
+			loot_notification.emit("Drank Milk Bucket")
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() and get_tree() != null else null
+			if sfx != null and sfx.has_method("play_sfx"):
+				sfx.play_sfx("eat", -2.0)
+			mob_interacted.emit(false, 0)
+			return
+
 		var nutrition: int = InventoryManager.get_food_nutrition(selected_item)
 		if _player_body.eat_food(nutrition):
 			_inventory.consume_from_hotbar_slot(selected_slot, 1)
 			loot_notification.emit("Ate %s (+%d Hunger)" % [InventoryManager.get_item_name(selected_item), nutrition])
-			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() and get_tree() != null else null
 			if sfx != null and sfx.has_method("play_sfx"):
 				sfx.play_sfx("eat", -2.0)
 			mob_interacted.emit(false, 0)
@@ -652,7 +668,7 @@ func _try_interact_or_place_block() -> void:
 			if not is_creative and _inventory != null and selected_item == InventoryManager.ItemId.WHEAT_SEEDS:
 				_inventory.consume_from_hotbar_slot(selected_slot, 1)
 			loot_notification.emit("Fertilized crop to full maturity!")
-			var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() else null
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() and get_tree() != null else null if is_inside_tree() else null
 			if sfx != null and sfx.has_method("play_sfx_at_pos"):
 				sfx.play_sfx_at_pos("place_soft", Vector3(target_block_pos) + Vector3(0.5, 0.5, 0.5), 0.0)
 			block_placed.emit(target_block_pos, mature_id)

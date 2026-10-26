@@ -145,6 +145,22 @@ func _check_mob_collision(start_pos: Vector3, end_pos: Vector3) -> bool:
 					hit_dist = d
 					hit_mob = mob
 
+	# Check player collision if shooter was not the player
+	if _player != null and is_instance_valid(_player) and shooter != _player:
+		var p_pos: Vector3 = _player.global_position if _player.is_inside_tree() else _player.position
+		var p_aabb := AABB(p_pos + Vector3(-0.4, 0.0, -0.4), Vector3(0.8, 1.8, 0.8))
+		var p_isect: Variant = p_aabb.intersects_segment(start_pos, end_pos)
+		if p_isect != null:
+			var pd: float = start_pos.distance_to(p_isect)
+			if pd < hit_dist:
+				var p_dmg: int = int(round(lerpf(float(DAMAGE_MIN), float(DAMAGE_MAX), charge)))
+				_player.take_damage(p_dmg)
+				var kb: Vector3 = velocity.normalized() * 4.2 + Vector3(0.0, 2.5, 0.0)
+				_player.velocity += kb
+				_play_sfx("bow_hit", p_pos)
+				queue_free()
+				return true
+
 	if hit_mob != null:
 		var dmg: int = int(round(lerpf(float(DAMAGE_MIN), float(DAMAGE_MAX), charge)))
 		if charge >= 0.9:

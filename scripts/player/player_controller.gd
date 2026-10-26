@@ -198,6 +198,13 @@ func eat_food(nutrition: int) -> bool:
 	return true
 
 
+func heal_damage(amount: int) -> void:
+	if amount <= 0:
+		return
+	current_health = mini(max_health, current_health + amount)
+	health_changed.emit(current_health, max_health)
+
+
 func set_respawn_bed_position(bed_world_pos: Vector3) -> void:
 	custom_respawn_pos = bed_world_pos
 	has_custom_respawn = true

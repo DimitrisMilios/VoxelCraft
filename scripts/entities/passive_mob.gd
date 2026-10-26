@@ -1,17 +1,21 @@
 class_name PassiveMob
 extends CharacterBody3D
-## Autonomous voxel mob supporting both Passive animals (Pig, Cow) and
+## Autonomous voxel mob supporting both Passive animals (Pig, Cow, Sheep, Chicken) and
 ## Hostile night/cave monsters (Zombie, Skeleton, Creeper, Spider) with
-## authentic Faithful 64x UV-mapped cuboid models, health, weapon damage,
-## 3D loot drops, melee/explosion combat, and water buoyancy.
+## authentic Faithful 64x UV-mapped cuboid models, 3D A* pathfinding intelligence,
+## health, weapon damage, 3D loot drops, melee/ballistics/explosion combat, and water buoyancy.
 
 const CuboidMeshBuilder = preload("res://scripts/entities/cuboid_mesh_builder.gd")
+const AStarPathFinder = preload("res://scripts/entities/astar_pathfinder.gd")
+const ArrowProjectile = preload("res://scripts/entities/arrow_projectile.gd")
 
 enum MobState {
 	IDLE,
 	WANDER,
 	PANIC,
 	CHASE,
+	GRAZE,
+	STRAFE,
 }
 
 enum MobVariant {
@@ -23,17 +27,21 @@ enum MobVariant {
 	SPIDER = 5,
 	SHEEP = 6,
 	VILLAGER = 7,
+	CHICKEN = 8,
 }
 
 @export var move_speed: float = 2.1
 @export var panic_speed: float = 5.2
 @export var hop_velocity: float = 6.5
 @export var gravity_multiplier: float = 1.8
-@export var variant: MobVariant = MobVariant.PIG
+@export var variant: MobVariant = MobVariant.PIG:
+	set(val):
+		variant = val
 
 var health: int = 10
 var max_health: int = 10
 var is_sheared: bool = false
+var is_provoked: bool = false
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _state: MobState = MobState.IDLE
@@ -46,9 +54,24 @@ var _creeper_fuse: float = 0.0
 var _sun_burn_timer: float = 0.0
 var _ambient_sound_timer: float = randf_range(3.0, 8.0)
 
+var _skeleton_shoot_timer: float = randf_range(1.6, 2.4)
+var _spider_leap_timer: float = 0.0
+var _graze_timer: float = randf_range(12.0, 24.0)
+var _graze_active_time: float = 0.0
+var _egg_timer: float = randf_range(240.0, 480.0)
+
+var _path: Array[Vector3i] = []
+var _path_index: int = 0
+var _repath_timer: float = 0.0
+
 var _visual_root: Node3D = null
+var _head_node: Node3D = null
+var _wool_mesh: MeshInstance3D = null
 var _legs: Array[Node3D] = []
 var _arms: Array[Node3D] = []
+var _wings: Array[Node3D] = []
+var _bow_mesh: MeshInstance3D = null
+var _col_shape: CollisionShape3D = null
 var _ledge_ray: RayCast3D = null
 var _step_ray: RayCast3D = null
 var _mob_mat: StandardMaterial3D = null
@@ -67,26 +90,47 @@ func is_hostile() -> bool:
 	)
 
 
+func set_mob_variant(new_variant: MobVariant) -> void:
+	variant = new_variant
+	if is_hostile():
+		max_health = 16 if variant == MobVariant.SPIDER else 20
+		move_speed = 3.6 if variant == MobVariant.SPIDER else (3.2 if variant == MobVariant.ZOMBIE else 2.8)
+	elif variant == MobVariant.CHICKEN:
+		max_health = 4
+		move_speed = 2.0
+	else:
+		max_health = 10
+		move_speed = 2.1
+	health = max_health
+
+	if _visual_root != null:
+		_visual_root.queue_free()
+		_visual_root = null
+		_legs.clear()
+		_arms.clear()
+		_wings.clear()
+		_head_node = null
+		_wool_mesh = null
+		_bow_mesh = null
+
+	_build_collision_and_rays()
+	_build_voxel_model()
+
+
 func _ready() -> void:
 	add_to_group("mobs")
 	collision_layer = 4
 	collision_mask = 1
-	max_health = 20 if is_hostile() else 10
-	if variant == MobVariant.SPIDER:
-		max_health = 16
-		move_speed = 3.8
-	elif is_hostile():
-		move_speed = 3.1
-	health = max_health
 
-	_build_collision_and_rays()
-	_build_voxel_model()
+	if _visual_root == null:
+		set_mob_variant(variant)
+
 	_pick_next_state()
 	call_deferred("_resolve_refs")
 
 
 func _resolve_refs() -> void:
-	if get_tree() == null:
+	if not is_inside_tree() or get_tree() == null:
 		return
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
 	_player = get_tree().get_first_node_in_group("player") as PlayerController
@@ -102,52 +146,79 @@ func _physics_process(delta: float) -> void:
 	if _attack_cooldown > 0.0:
 		_attack_cooldown = maxf(0.0, _attack_cooldown - delta)
 
+	var cur_pos: Vector3 = global_position if is_inside_tree() else position
+
 	# Water buoyancy for mobs so animals and monsters swim and drift in currents
 	var in_water: bool = false
+	var depth: float = 0.0
 	if _world_manager != null:
-		var depth: float = _world_manager.get_water_submersion_depth(global_position)
+		depth = _world_manager.get_water_submersion_depth(cur_pos)
 		if depth > 0.25:
 			in_water = true
 			velocity.y = move_toward(velocity.y, 1.8, 10.0 * delta)
-			var flow: Vector3 = _world_manager.get_water_flow_vector(global_position)
+			var flow: Vector3 = _world_manager.get_water_flow_vector(cur_pos)
 			velocity.x += flow.x * 1.8 * delta
 			velocity.z += flow.z * 1.8 * delta
 
+	# Gravity & Chicken Flutter descent
 	if not in_water and not is_on_floor():
-		velocity.y -= _gravity * gravity_multiplier * delta
+		if variant == MobVariant.CHICKEN:
+			# Chicken flutters gently down to prevent fall damage
+			velocity.y -= _gravity * 0.45 * delta
+			velocity.y = maxf(velocity.y, -2.2)
+		else:
+			velocity.y -= _gravity * gravity_multiplier * delta
 
-	if is_hostile():
-		_process_hostile_ai(delta)
-	else:
-		_state_timer -= delta
-		if _state_timer <= 0.0:
-			_pick_next_state()
-
+	# Ambient vocalizations
 	_ambient_sound_timer -= delta
 	if _ambient_sound_timer <= 0.0:
 		_ambient_sound_timer = randf_range(5.0, 12.0)
 		_play_ambient_vocal()
 
-	if _state == MobState.WANDER or _state == MobState.PANIC or _state == MobState.CHASE:
+	if is_hostile():
+		_process_hostile_ai(delta, in_water)
+	else:
+		_process_passive_ai(delta)
+
+	# Movement execution
+	if _state == MobState.WANDER or _state == MobState.PANIC or _state == MobState.CHASE or _state == MobState.STRAFE:
 		var active_speed: float = move_speed
 		if _state == MobState.PANIC:
 			active_speed = panic_speed
 		elif _state == MobState.CHASE:
-			active_speed = move_speed * 1.18
+			active_speed = move_speed * 1.15
+		elif _state == MobState.STRAFE:
+			active_speed = move_speed * 0.85
 
-		var turn_rate: float = 10.0 if (_state == MobState.PANIC or _state == MobState.CHASE) else 6.0
+		# Waypoint path navigation
+		var has_waypoint: bool = false
+		if _path_index < _path.size():
+			var wp: Vector3i = _path[_path_index]
+			var wp_target := Vector3(float(wp.x) + 0.5, float(wp.y), float(wp.z) + 0.5)
+			var to_wp: Vector3 = wp_target - cur_pos
+			to_wp.y = 0.0
+
+			if to_wp.length() < 0.45:
+				_path_index += 1
+			else:
+				has_waypoint = true
+				_target_yaw = atan2(-to_wp.x, -to_wp.z)
+				if wp.y > floori(cur_pos.y) and is_on_floor():
+					velocity.y = hop_velocity
+
+		var turn_rate: float = 12.0 if (_state == MobState.PANIC or _state == MobState.CHASE) else 6.0
 		rotation.y = lerp_angle(rotation.y, _target_yaw, turn_rate * delta)
 
-		var forward: Vector3 = -global_transform.basis.z
-		forward.y = 0.0
-		forward = forward.normalized()
+		var fwd: Vector3 = -global_transform.basis.z if is_inside_tree() else -transform.basis.z
+		fwd.y = 0.0
+		fwd = fwd.normalized()
 
 		# Ledge avoidance for passive wandering
 		if _state == MobState.WANDER and is_on_floor() and _ledge_ray != null and not _ledge_ray.is_colliding():
 			_target_yaw += PI * 0.75
 		else:
-			velocity.x = move_toward(velocity.x, forward.x * active_speed, 14.0 * delta)
-			velocity.z = move_toward(velocity.z, forward.z * active_speed, 14.0 * delta)
+			velocity.x = move_toward(velocity.x, fwd.x * active_speed, 14.0 * delta)
+			velocity.z = move_toward(velocity.z, fwd.z * active_speed, 14.0 * delta)
 
 		# Spiders climb walls; other mobs hop up 1-block steps
 		if variant == MobVariant.SPIDER and is_on_wall():
@@ -155,23 +226,36 @@ func _physics_process(delta: float) -> void:
 		elif is_on_floor() and _step_ray != null and _step_ray.is_colliding():
 			velocity.y = hop_velocity
 	else:
-		velocity.x = move_toward(velocity.x, 0.0, 8.0 * delta)
-		velocity.z = move_toward(velocity.z, 0.0, 8.0 * delta)
+		velocity.x = move_toward(velocity.x, 0.0, 10.0 * delta)
+		velocity.z = move_toward(velocity.z, 0.0, 10.0 * delta)
 
-	move_and_slide()
+	if is_inside_tree():
+		move_and_slide()
+	else:
+		position += velocity * delta
+
 	_animate_limbs(delta)
 
 
-func _process_hostile_ai(delta: float) -> void:
-	# Zombies and Skeletons burn in bright daylight
-	if (variant == MobVariant.ZOMBIE or variant == MobVariant.SKELETON) and _day_night != null:
-		if _day_night.time_of_day > 0.27 and _day_night.time_of_day < 0.73:
-			_sun_burn_timer += delta
-			if _sun_burn_timer >= 1.5:
-				_sun_burn_timer = 0.0
-				on_hit_by_player(global_position + Vector3(0.0, 1.0, 0.0), 3)
-				if health <= 0:
-					return
+func _process_hostile_ai(delta: float, in_water: bool) -> void:
+	var my_pos: Vector3 = global_position if is_inside_tree() else position
+
+	# Zombies and Skeletons burn in direct sunlight when exposed to daylight sky
+	if (variant == MobVariant.ZOMBIE or variant == MobVariant.SKELETON) and _day_night != null and not in_water:
+		if _day_night.time_of_day > 0.24 and _day_night.time_of_day < 0.76:
+			var exposed: bool = true
+			if _world_manager != null:
+				var surface_y: int = _world_manager.get_surface_height_at(floori(my_pos.x), floori(my_pos.z))
+				exposed = (my_pos.y >= float(surface_y) - 0.5)
+			if exposed:
+				_sun_burn_timer += delta
+				if _sun_burn_timer >= 1.0:
+					_sun_burn_timer = 0.0
+					on_hit_by_player(my_pos + Vector3(0.0, 1.0, 0.0), 1)
+					if _mob_mat != null:
+						_mob_mat.albedo_color = Color(1.8, 0.8, 0.2)
+					if health <= 0:
+						return
 
 	if _player == null or not is_instance_valid(_player) or _player.is_flying:
 		_state_timer -= delta
@@ -179,57 +263,234 @@ func _process_hostile_ai(delta: float) -> void:
 			_pick_next_state()
 		return
 
-	var to_player: Vector3 = _player.global_position - global_position
+	var p_pos: Vector3 = _player.global_position if _player.is_inside_tree() else _player.position
+	var to_player: Vector3 = p_pos - my_pos
 	var dist: float = to_player.length()
 
-	if dist <= 16.5:
-		_state = MobState.CHASE
-		_target_yaw = atan2(-to_player.x, -to_player.z)
-
-		if variant == MobVariant.CREEPER:
-			if dist <= 2.8:
-				if _creeper_fuse == 0.0:
-					var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
-					if sfx != null and sfx.has_method("play_sfx_at_pos"):
-						sfx.play_sfx_at_pos("creeper_fuse", global_position, 0.0)
-				_creeper_fuse += delta
-				var flash: bool = (int(_creeper_fuse * 10.0) % 2 == 0)
-				if _mob_mat != null:
-					_mob_mat.albedo_color = Color(2.0, 2.0, 2.0) if flash else Color.WHITE
-				var swell: float = 1.0 + (_creeper_fuse / 1.5) * 0.24
-				_visual_root.scale = Vector3(swell, swell, swell)
-				if _creeper_fuse >= 1.45:
-					_trigger_creeper_explosion()
-					return
-			elif _creeper_fuse > 0.0:
-				_creeper_fuse = maxf(0.0, _creeper_fuse - delta * 1.5)
-				_visual_root.scale = Vector3.ONE
-				if _mob_mat != null:
-					_mob_mat.albedo_color = Color.WHITE
-		else:
-			var attack_reach: float = 2.6 if variant == MobVariant.SKELETON else 1.45
-			if dist <= attack_reach and _attack_cooldown <= 0.0:
-				_attack_cooldown = 1.15
-				var dmg: int = 3 if variant != MobVariant.SPIDER else 2
-				_player.take_damage(dmg)
-				var kb: Vector3 = to_player.normalized() * 4.5 + Vector3(0.0, 2.8, 0.0)
-				_player.velocity += kb
-	else:
+	if dist > 16.5:
 		_creeper_fuse = 0.0
-		_visual_root.scale = Vector3.ONE
+		if _visual_root != null:
+			_visual_root.scale = Vector3.ONE
 		if _mob_mat != null and _hurt_flash_timer <= 0.0:
 			_mob_mat.albedo_color = Color.WHITE
 		_state_timer -= delta
 		if _state_timer <= 0.0:
 			_pick_next_state()
+		return
+
+	# Recalculate A* path periodically
+	_repath_timer -= delta
+	if _repath_timer <= 0.0:
+		_repath_timer = randf_range(1.0, 1.5)
+		if _world_manager != null and dist > 2.0:
+			var start_vox := Vector3i(floori(my_pos.x), floori(my_pos.y), floori(my_pos.z))
+			var goal_vox := Vector3i(floori(p_pos.x), floori(p_pos.y), floori(p_pos.z))
+			var clearance: int = 1 if variant == MobVariant.SPIDER else 2
+			_path = AStarPathFinder.find_path(_world_manager, start_vox, goal_vox, clearance, 200)
+			_path_index = 0
+			if _path.size() > 1 and _path[0] == start_vox:
+				_path_index = 1
+
+	match variant:
+		MobVariant.CREEPER:
+			_process_creeper_ai(delta, dist, to_player)
+		MobVariant.SKELETON:
+			_process_skeleton_ai(delta, dist, to_player)
+		MobVariant.SPIDER:
+			_process_spider_ai(delta, dist, to_player)
+		MobVariant.ZOMBIE:
+			_process_zombie_ai(delta, dist, to_player)
+
+
+func _process_creeper_ai(delta: float, dist: float, to_player: Vector3) -> void:
+	if dist <= 3.0:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if _creeper_fuse == 0.0:
+			if is_inside_tree() and get_tree() != null:
+				var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+				if sfx != null and sfx.has_method("play_sfx_at_pos"):
+					sfx.play_sfx_at_pos("creeper_fuse", global_position if is_inside_tree() else position, 0.0)
+		_creeper_fuse += delta
+		var flash: bool = (int(_creeper_fuse * 10.0) % 2 == 0)
+		if _mob_mat != null:
+			_mob_mat.albedo_color = Color(2.0, 2.0, 2.0) if flash else Color.WHITE
+		var swell: float = 1.0 + (_creeper_fuse / 1.5) * 0.35
+		if _visual_root != null:
+			_visual_root.scale = Vector3(swell, swell, swell)
+		if _creeper_fuse >= 1.5:
+			_trigger_creeper_explosion()
+			return
+	else:
+		if _creeper_fuse > 0.0:
+			_creeper_fuse = maxf(0.0, _creeper_fuse - delta * 1.5)
+			if _creeper_fuse <= 0.0:
+				if _visual_root != null:
+					_visual_root.scale = Vector3.ONE
+				if _mob_mat != null:
+					_mob_mat.albedo_color = Color.WHITE
+		_target_yaw = atan2(-to_player.x, -to_player.z)
+		_state = MobState.CHASE
+
+
+func _process_skeleton_ai(delta: float, dist: float, to_player: Vector3) -> void:
+	_skeleton_shoot_timer -= delta
+	if _skeleton_shoot_timer <= 0.0 and dist <= 16.0:
+		_skeleton_shoot_timer = randf_range(1.7, 2.4)
+		_shoot_arrow_at_player(to_player)
+
+	# Skeleton maintains 8..13m distance (strafes or retreats)
+	if dist < 7.0:
+		_target_yaw = atan2(to_player.x, to_player.z)
+		_state = MobState.CHASE
+	elif dist > 13.0:
+		_target_yaw = atan2(-to_player.x, -to_player.z)
+		_state = MobState.CHASE
+	else:
+		_target_yaw = atan2(-to_player.x, -to_player.z) + PI * 0.5
+		_state = MobState.STRAFE
+
+
+func _shoot_arrow_at_player(to_player: Vector3) -> void:
+	if _player == null:
+		return
+	var shoot_origin: Vector3 = (global_position if is_inside_tree() else position) + Vector3(0.0, 1.25, 0.0)
+	var aim_target: Vector3 = (_player.global_position if _player.is_inside_tree() else _player.position) + Vector3(0.0, 1.1, 0.0)
+	var shoot_dir: Vector3 = (aim_target - shoot_origin).normalized()
+	shoot_dir += Vector3(randf_range(-0.04, 0.04), randf_range(-0.02, 0.04), randf_range(-0.04, 0.04))
+	shoot_dir = shoot_dir.normalized()
+
+	var p_node: Node = get_parent() if is_inside_tree() else self
+	ArrowProjectile.spawn_arrow(p_node, shoot_origin, shoot_dir * 18.0, 0.85, self, true)
+
+	if is_inside_tree() and get_tree() != null:
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			sfx.play_sfx_at_pos("bow_shoot", shoot_origin, 1.0)
+
+
+func _process_spider_ai(delta: float, dist: float, to_player: Vector3) -> void:
+	# Daylight neutrality: neutral in bright daylight unless provoked
+	var is_day: bool = false
+	if _day_night != null:
+		is_day = (_day_night.time_of_day > 0.24 and _day_night.time_of_day < 0.76)
+	if is_day and not is_provoked:
+		_state_timer -= delta
+		if _state_timer <= 0.0:
+			_pick_next_state()
+		return
+
+	_target_yaw = atan2(-to_player.x, -to_player.z)
+	_state = MobState.CHASE
+
+	# Leap attack
+	if _spider_leap_timer > 0.0:
+		_spider_leap_timer = maxf(0.0, _spider_leap_timer - delta)
+
+	if dist >= 2.2 and dist <= 5.2 and (is_on_floor() or not is_inside_tree()) and _spider_leap_timer <= 0.0:
+		try_leap_pounce(to_player)
+
+	# Melee bite on contact
+	if dist <= 1.5 and _attack_cooldown <= 0.0:
+		_attack_cooldown = 1.0
+		_player.take_damage(2)
+		var kb: Vector3 = to_player.normalized() * 3.8 + Vector3(0.0, 2.4, 0.0)
+		_player.velocity += kb
+
+
+func try_leap_pounce(to_player: Vector3) -> bool:
+	_spider_leap_timer = randf_range(3.0, 4.5)
+	var pounce_dir: Vector3 = to_player.normalized()
+	velocity = pounce_dir * 7.5 + Vector3(0.0, 4.8, 0.0)
+	if is_inside_tree() and get_tree() != null:
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			sfx.play_sfx_at_pos("spider_ambient", global_position if is_inside_tree() else position, 1.5)
+	return true
+
+
+func _process_zombie_ai(delta: float, dist: float, to_player: Vector3) -> void:
+	_target_yaw = atan2(-to_player.x, -to_player.z)
+	_state = MobState.CHASE
+
+	if dist <= 1.45 and _attack_cooldown <= 0.0:
+		_attack_cooldown = 1.15
+		_player.take_damage(3)
+		var kb: Vector3 = to_player.normalized() * 4.5 + Vector3(0.0, 2.8, 0.0)
+		_player.velocity += kb
+
+
+func _process_passive_ai(delta: float) -> void:
+	if variant == MobVariant.CHICKEN:
+		_egg_timer -= delta
+		if _egg_timer <= 0.0:
+			_egg_timer = randf_range(240.0, 480.0)
+			lay_egg()
+
+	# Sheep grazing
+	if variant == MobVariant.SHEEP:
+		if _state == MobState.GRAZE:
+			_graze_active_time -= delta
+			if _head_node != null:
+				_head_node.rotation.x = deg_to_rad(38.0)
+			if _graze_active_time <= 0.0:
+				_perform_graze()
+				if _head_node != null:
+					_head_node.rotation.x = 0.0
+				_state = MobState.IDLE
+				_state_timer = 2.0
+			return
+
+		_graze_timer -= delta
+		if _graze_timer <= 0.0:
+			_graze_timer = randf_range(14.0, 26.0)
+			_state = MobState.GRAZE
+			_graze_active_time = 1.6
+			return
+
+	_state_timer -= delta
+	if _state_timer <= 0.0:
+		_pick_next_state()
+
+
+func _perform_graze() -> void:
+	if _world_manager == null:
+		return
+	var my_pos: Vector3 = global_position if is_inside_tree() else position
+	var under_pos := Vector3i(floori(my_pos.x), floori(my_pos.y - 0.2), floori(my_pos.z))
+	var block_id: int = _world_manager.get_block_world(under_pos)
+	if block_id == BlockRegistry.BlockId.GRASS:
+		_world_manager.set_block_world(under_pos, BlockRegistry.BlockId.DIRT)
+		if is_inside_tree() and get_tree() != null:
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+			if sfx != null and sfx.has_method("play_sfx_at_pos"):
+				sfx.play_sfx_at_pos("bow_hit", my_pos, 0.5)
+		if is_sheared:
+			is_sheared = false
+			if _wool_mesh != null:
+				_wool_mesh.visible = true
+
+
+func lay_egg() -> void:
+	if _world_manager != null:
+		DroppedItem.spawn_drop(
+			_world_manager,
+			(global_position if is_inside_tree() else position) + Vector3(0.0, 0.25, 0.0),
+			InventoryManager.ItemId.EGG,
+			1
+		)
+		if is_inside_tree() and get_tree() != null:
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+			if sfx != null and sfx.has_method("play_sfx_at_pos"):
+				sfx.play_sfx_at_pos("chicken_ambient", global_position if is_inside_tree() else position, 1.0)
 
 
 func _trigger_creeper_explosion() -> void:
 	var boom_pos: Vector3 = global_position if is_inside_tree() else position
 	if _world_manager != null and _world_manager.has_method("create_explosion"):
-		_world_manager.create_explosion(boom_pos + Vector3(0.0, 0.4, 0.0), 2.4, false, true)
+		_world_manager.create_explosion(boom_pos + Vector3(0.0, 0.4, 0.0), 3.5, true, true)
 	else:
-		if get_tree() != null:
+		if is_inside_tree() and get_tree() != null:
 			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
 			if sfx != null and sfx.has_method("play_sfx_at_pos"):
 				sfx.play_sfx_at_pos("creeper_explode", boom_pos, 4.0, 1.0, 48.0)
@@ -252,11 +513,12 @@ func on_hit_by_player(attacker_pos: Vector3, damage: int = 2) -> void:
 	_state_timer = 3.8
 	_hurt_flash_timer = 0.26
 	_creeper_fuse = maxf(0.0, _creeper_fuse - 0.5)
+	is_provoked = true
 
 	if _mob_mat != null:
 		_mob_mat.albedo_color = Color(1.0, 0.32, 0.32)
 
-	if get_tree() != null:
+	if is_inside_tree() and get_tree() != null:
 		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
 		if sfx != null and sfx.has_method("play_sfx_at_pos"):
 			var hurt_sfx := ""
@@ -269,6 +531,7 @@ func on_hit_by_player(attacker_pos: Vector3, damage: int = 2) -> void:
 				MobVariant.SPIDER: hurt_sfx = "spider_hurt"
 				MobVariant.SHEEP: hurt_sfx = "sheep_hurt"
 				MobVariant.VILLAGER: hurt_sfx = "villager_hurt"
+				MobVariant.CHICKEN: hurt_sfx = "chicken_hurt"
 			if not hurt_sfx.is_empty():
 				sfx.play_sfx_at_pos(hurt_sfx, current_pos, 1.0)
 
@@ -277,7 +540,8 @@ func on_hit_by_player(attacker_pos: Vector3, damage: int = 2) -> void:
 
 
 func _die_and_drop_loot() -> void:
-	if get_tree() != null:
+	var cur_pos: Vector3 = global_position if is_inside_tree() else position
+	if is_inside_tree() and get_tree() != null:
 		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
 		if sfx != null and sfx.has_method("play_sfx_at_pos"):
 			var death_sfx := ""
@@ -289,8 +553,9 @@ func _die_and_drop_loot() -> void:
 				MobVariant.SPIDER: death_sfx = "spider_hurt"
 				MobVariant.SHEEP: death_sfx = "sheep_hurt"
 				MobVariant.VILLAGER: death_sfx = "villager_hurt"
+				MobVariant.CHICKEN: death_sfx = "chicken_hurt"
 			if not death_sfx.is_empty():
-				sfx.play_sfx_at_pos(death_sfx, global_position if is_inside_tree() else position, 2.0)
+				sfx.play_sfx_at_pos(death_sfx, cur_pos, 2.0)
 
 	if _world_manager != null:
 		var drop_id: int = 0
@@ -303,20 +568,22 @@ func _die_and_drop_loot() -> void:
 			MobVariant.ZOMBIE:
 				drop_id = InventoryManager.ItemId.ROTTEN_FLESH
 			MobVariant.SKELETON:
-				drop_id = InventoryManager.ItemId.COAL if randf() < 0.4 else InventoryManager.ItemId.STICK
+				drop_id = InventoryManager.ItemId.ARROW if randf() < 0.6 else InventoryManager.ItemId.STICK
 			MobVariant.CREEPER:
 				drop_id = InventoryManager.ItemId.GUNPOWDER
 			MobVariant.SPIDER:
-				drop_id = InventoryManager.ItemId.STICK
+				drop_id = InventoryManager.ItemId.STRING
 			MobVariant.SHEEP:
 				drop_id = InventoryManager.ItemId.WOOL if not is_sheared else InventoryManager.ItemId.RAW_PORKCHOP
+			MobVariant.CHICKEN:
+				drop_id = InventoryManager.ItemId.FEATHER if randf() < 0.5 else InventoryManager.ItemId.RAW_CHICKEN
 			MobVariant.VILLAGER:
 				drop_id = InventoryManager.ItemId.BREAD
 
 		if drop_id > 0:
 			DroppedItem.spawn_drop(
 				_world_manager,
-				global_position + Vector3(0.0, 0.45, 0.0),
+				cur_pos + Vector3(0.0, 0.45, 0.0),
 				drop_id,
 				drop_cnt
 			)
@@ -324,7 +591,7 @@ func _die_and_drop_loot() -> void:
 
 
 func _play_ambient_vocal() -> void:
-	if get_tree() == null:
+	if not is_inside_tree() or get_tree() == null:
 		return
 	var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
 	if sfx == null or not sfx.has_method("play_sfx_at_pos"):
@@ -338,6 +605,7 @@ func _play_ambient_vocal() -> void:
 		MobVariant.SPIDER: sfx_name = "spider_ambient"
 		MobVariant.SHEEP: sfx_name = "sheep_ambient"
 		MobVariant.VILLAGER: sfx_name = "villager_ambient"
+		MobVariant.CHICKEN: sfx_name = "chicken_ambient"
 	if not sfx_name.is_empty():
 		sfx.play_sfx_at_pos(sfx_name, global_position if is_inside_tree() else position, -1.5, 1.0, 24.0)
 
@@ -346,7 +614,7 @@ func _play_ambient_vocal() -> void:
 func on_fed_by_player(feeder_pos: Vector3) -> void:
 	if is_hostile():
 		return
-	var to_player: Vector3 = feeder_pos - global_position
+	var to_player: Vector3 = feeder_pos - (global_position if is_inside_tree() else position)
 	to_player.y = 0.0
 	if to_player.length_squared() > 0.001:
 		_target_yaw = atan2(-to_player.x, -to_player.z)
@@ -364,42 +632,64 @@ func on_interact_with_item(player: PlayerController, item_id: int) -> bool:
 	if is_hostile():
 		return false
 
-	var feeder_pos: Vector3 = player.global_position if player != null else global_position
+	var feeder_pos: Vector3 = player.global_position if (player != null and player.is_inside_tree()) else (global_position if is_inside_tree() else position)
 
 	if variant == MobVariant.SHEEP:
 		if item_id == InventoryManager.ItemId.SHEARS:
 			if not is_sheared:
 				is_sheared = true
-				if get_tree() != null:
+				if _wool_mesh != null:
+					_wool_mesh.visible = false
+				if is_inside_tree() and get_tree() != null:
 					var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
 					if sfx != null and sfx.has_method("play_sfx_at_pos"):
-						sfx.play_sfx_at_pos("shears", global_position, 1.0)
+						sfx.play_sfx_at_pos("shears", global_position if is_inside_tree() else position, 1.0)
 				if _world_manager != null:
 					DroppedItem.spawn_drop(
 						_world_manager,
-						global_position + Vector3(0.0, 0.5, 0.0),
+						(global_position if is_inside_tree() else position) + Vector3(0.0, 0.5, 0.0),
 						InventoryManager.ItemId.WOOL,
-						randi_range(2, 3)
+						randi_range(1, 3)
 					)
 				_spawn_love_particles()
 				return true
 			return false
 		elif item_id == InventoryManager.ItemId.WHEAT:
-			is_sheared = false
+			if is_sheared:
+				is_sheared = false
+				if _wool_mesh != null:
+					_wool_mesh.visible = true
+			on_fed_by_player(feeder_pos)
+			return true
+
+	elif variant == MobVariant.COW:
+		if item_id == InventoryManager.ItemId.BUCKET:
+			if is_inside_tree() and get_tree() != null:
+				var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+				if sfx != null and sfx.has_method("play_sfx_at_pos"):
+					sfx.play_sfx_at_pos("cow_ambient", global_position if is_inside_tree() else position, 1.0)
+			_spawn_love_particles()
+			return true
+		elif item_id == InventoryManager.ItemId.WHEAT:
+			on_fed_by_player(feeder_pos)
+			return true
+
+	elif variant == MobVariant.CHICKEN:
+		if item_id == InventoryManager.ItemId.WHEAT_SEEDS:
 			on_fed_by_player(feeder_pos)
 			return true
 
 	elif variant == MobVariant.VILLAGER:
-		if get_tree() != null:
+		if is_inside_tree() and get_tree() != null:
 			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
 			if sfx != null and sfx.has_method("play_sfx_at_pos"):
-				sfx.play_sfx_at_pos("villager_ambient", global_position, 1.0)
+				sfx.play_sfx_at_pos("villager_ambient", global_position if is_inside_tree() else position, 1.0)
 		on_fed_by_player(feeder_pos)
 		if item_id == InventoryManager.ItemId.WHEAT or item_id == InventoryManager.ItemId.POTATO:
 			if _world_manager != null:
 				DroppedItem.spawn_drop(
 					_world_manager,
-					global_position + Vector3(0.0, 0.6, 0.0),
+					(global_position if is_inside_tree() else position) + Vector3(0.0, 0.6, 0.0),
 					InventoryManager.ItemId.BREAD,
 					1
 				)
@@ -413,6 +703,8 @@ func on_interact_with_item(player: PlayerController, item_id: int) -> bool:
 
 
 func _spawn_love_particles() -> void:
+	if not is_inside_tree():
+		return
 	var particles := CPUParticles3D.new()
 	particles.position = Vector3(0.0, 1.15, 0.0)
 	particles.emitting = false
@@ -461,36 +753,34 @@ func _animate_limbs(delta: float) -> void:
 		var swing: float = sin(_anim_time) * (0.68 if _state != MobState.WANDER else 0.48)
 
 		if variant == MobVariant.ZOMBIE or variant == MobVariant.SKELETON:
-			# 2 Legs swing in opposite phase
 			if _legs.size() >= 2:
 				_legs[0].rotation.x = swing
 				_legs[1].rotation.x = -swing
-			# Arms sway gently while held outstretched
 			if _arms.size() >= 2:
 				var arm_base: float = -PI * 0.48
 				_arms[0].rotation.x = arm_base + swing * 0.15
 				_arms[1].rotation.x = arm_base - swing * 0.15
 		elif variant == MobVariant.CREEPER:
-			# Diagonal pairs swing together
 			if _legs.size() >= 4:
 				_legs[0].rotation.x = swing
 				_legs[1].rotation.x = -swing
 				_legs[2].rotation.x = -swing
 				_legs[3].rotation.x = swing
 		elif variant == MobVariant.VILLAGER:
-			# 2 Legs swing in opposite phase
 			if _legs.size() >= 2:
 				_legs[0].rotation.x = swing
 				_legs[1].rotation.x = -swing
 		elif variant == MobVariant.COW or variant == MobVariant.PIG or variant == MobVariant.SHEEP:
-			# Quadruped walk cycle
 			if _legs.size() >= 4:
 				_legs[0].rotation.x = swing
 				_legs[1].rotation.x = -swing
 				_legs[2].rotation.x = -swing
 				_legs[3].rotation.x = swing
+		elif variant == MobVariant.CHICKEN:
+			if _legs.size() >= 2:
+				_legs[0].rotation.x = swing
+				_legs[1].rotation.x = -swing
 		elif variant == MobVariant.SPIDER:
-			# Spider 8-leg crawling ripple
 			for i in range(_legs.size()):
 				var phase: float = float(i) * 0.78
 				_legs[i].rotation.z = sin(_anim_time + phase) * 0.22
@@ -502,26 +792,48 @@ func _animate_limbs(delta: float) -> void:
 		for arm in _arms:
 			arm.rotation.x = lerpf(arm.rotation.x, -PI * 0.48, 10.0 * delta)
 
+	# Chicken wing flapping when in air
+	if variant == MobVariant.CHICKEN:
+		if not is_on_floor() and velocity.y < 0.0:
+			for i in range(_wings.size()):
+				var flap: float = sin(_anim_time * 26.0) * 0.85
+				_wings[i].rotation.z = flap if i == 0 else -flap
+		else:
+			for w in _wings:
+				w.rotation.z = lerpf(w.rotation.z, 0.0, 12.0 * delta)
+
 
 func _build_collision_and_rays() -> void:
-	var col := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	box.size = Vector3(0.68, 1.75, 0.68) if (variant == MobVariant.ZOMBIE or variant == MobVariant.SKELETON or variant == MobVariant.CREEPER or variant == MobVariant.VILLAGER) else Vector3(0.78, 0.95, 0.95)
-	col.shape = box
-	col.position = Vector3(0.0, box.size.y * 0.5, 0.0)
-	add_child(col)
+	if _col_shape == null:
+		_col_shape = CollisionShape3D.new()
+		add_child(_col_shape)
 
-	_ledge_ray = RayCast3D.new()
-	_ledge_ray.position = Vector3(0.0, 0.8, -0.85)
+	var box := BoxShape3D.new()
+	if variant == MobVariant.SPIDER:
+		box.size = Vector3(1.35, 0.85, 1.35)
+	elif variant == MobVariant.CHICKEN:
+		box.size = Vector3(0.48, 0.68, 0.48)
+	elif variant == MobVariant.ZOMBIE or variant == MobVariant.SKELETON or variant == MobVariant.CREEPER or variant == MobVariant.VILLAGER:
+		box.size = Vector3(0.68, 1.75, 0.68)
+	else:
+		box.size = Vector3(0.78, 0.95, 0.95)
+
+	_col_shape.shape = box
+	_col_shape.position = Vector3(0.0, box.size.y * 0.5, 0.0)
+
+	if _ledge_ray == null:
+		_ledge_ray = RayCast3D.new()
+		add_child(_ledge_ray)
+	_ledge_ray.position = Vector3(0.0, box.size.y * 0.5, -box.size.z * 0.65)
 	_ledge_ray.target_position = Vector3(0.0, -2.6, 0.0)
 	_ledge_ray.collision_mask = 1
-	add_child(_ledge_ray)
 
-	_step_ray = RayCast3D.new()
-	_step_ray.position = Vector3(0.0, 0.35, -0.4)
+	if _step_ray == null:
+		_step_ray = RayCast3D.new()
+		add_child(_step_ray)
+	_step_ray.position = Vector3(0.0, 0.35, -box.size.z * 0.5)
 	_step_ray.target_position = Vector3(0.0, 0.0, -0.48)
 	_step_ray.collision_mask = 1
-	add_child(_step_ray)
 
 
 func _build_voxel_model() -> void:
@@ -555,6 +867,9 @@ func _build_voxel_model() -> void:
 		MobVariant.VILLAGER:
 			mob_tex_path = "res://assets/textures/entity/villager.png"
 			_primary_color = Color(0.65, 0.45, 0.32)
+		MobVariant.CHICKEN:
+			mob_tex_path = "res://assets/textures/entity/chicken.png"
+			_primary_color = Color(0.96, 0.96, 0.96)
 
 	_mob_mat = StandardMaterial3D.new()
 	_mob_mat.roughness = 1.0
@@ -593,6 +908,8 @@ func _build_voxel_model() -> void:
 			_build_sheep_model(sheet_w, sheet_h)
 		MobVariant.VILLAGER:
 			_build_villager_model(sheet_w, sheet_h)
+		MobVariant.CHICKEN:
+			_build_chicken_model(sheet_w, sheet_h)
 
 
 func _create_part(
@@ -613,17 +930,15 @@ func _create_part(
 # ==============================================================================
 
 func _build_zombie_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (8x8x8 at 0, 0)
 	var head := _create_part(Vector3(0.50, 0.50, 0.50), 0, 0, 8, 8, 8, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 1.48, 0.0)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Torso (8x12x4 at 16, 16)
 	var torso := _create_part(Vector3(0.50, 0.72, 0.25), 16, 16, 8, 12, 4, sheet_w, sheet_h)
 	torso.position = Vector3(0.0, 0.88, 0.0)
 	_visual_root.add_child(torso)
 
-	# Right Arm (4x12x4 at 40, 16) - Outstretched Zombie Pose
 	var r_arm_pivot := Node3D.new()
 	r_arm_pivot.position = Vector3(0.375, 1.18, 0.0)
 	r_arm_pivot.rotation.x = -PI * 0.48
@@ -633,7 +948,6 @@ func _build_zombie_model(sheet_w: float, sheet_h: float) -> void:
 	_visual_root.add_child(r_arm_pivot)
 	_arms.append(r_arm_pivot)
 
-	# Left Arm (4x12x4 at 40, 16, mirrored)
 	var l_arm_pivot := Node3D.new()
 	l_arm_pivot.position = Vector3(-0.375, 1.18, 0.0)
 	l_arm_pivot.rotation.x = -PI * 0.48
@@ -643,7 +957,6 @@ func _build_zombie_model(sheet_w: float, sheet_h: float) -> void:
 	_visual_root.add_child(l_arm_pivot)
 	_arms.append(l_arm_pivot)
 
-	# Right Leg (4x12x4 at 0, 16)
 	var r_leg_pivot := Node3D.new()
 	r_leg_pivot.position = Vector3(0.125, 0.52, 0.0)
 	var r_leg := _create_part(Vector3(0.24, 0.72, 0.24), 0, 16, 4, 12, 4, sheet_w, sheet_h)
@@ -652,7 +965,6 @@ func _build_zombie_model(sheet_w: float, sheet_h: float) -> void:
 	_visual_root.add_child(r_leg_pivot)
 	_legs.append(r_leg_pivot)
 
-	# Left Leg (4x12x4 at 0, 16, mirrored)
 	var l_leg_pivot := Node3D.new()
 	l_leg_pivot.position = Vector3(-0.125, 0.52, 0.0)
 	var l_leg := _create_part(Vector3(0.24, 0.72, 0.24), 0, 16, 4, 12, 4, sheet_w, sheet_h, true)
@@ -663,17 +975,15 @@ func _build_zombie_model(sheet_w: float, sheet_h: float) -> void:
 
 
 func _build_skeleton_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (8x8x8 at 0, 0)
 	var head := _create_part(Vector3(0.50, 0.50, 0.50), 0, 0, 8, 8, 8, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 1.48, 0.0)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Torso (8x12x4 at 16, 16)
 	var torso := _create_part(Vector3(0.50, 0.72, 0.25), 16, 16, 8, 12, 4, sheet_w, sheet_h)
 	torso.position = Vector3(0.0, 0.88, 0.0)
 	_visual_root.add_child(torso)
 
-	# Right Arm (2x12x2 at 40, 16)
 	var r_arm_pivot := Node3D.new()
 	r_arm_pivot.position = Vector3(0.31, 1.18, 0.0)
 	r_arm_pivot.rotation.x = -PI * 0.48
@@ -683,17 +993,22 @@ func _build_skeleton_model(sheet_w: float, sheet_h: float) -> void:
 	_visual_root.add_child(r_arm_pivot)
 	_arms.append(r_arm_pivot)
 
-	# Left Arm (2x12x2 at 40, 16, mirrored)
 	var l_arm_pivot := Node3D.new()
 	l_arm_pivot.position = Vector3(-0.31, 1.18, 0.0)
 	l_arm_pivot.rotation.x = -PI * 0.48
 	var l_arm := _create_part(Vector3(0.14, 0.72, 0.14), 40, 16, 2, 12, 2, sheet_w, sheet_h, true)
 	l_arm.position = Vector3(0.0, -0.32, 0.0)
 	l_arm_pivot.add_child(l_arm)
+
+	# 3D Bow held in skeleton's hand
+	_bow_mesh = _create_part(Vector3(0.08, 0.62, 0.12), 40, 0, 2, 10, 2, sheet_w, sheet_h)
+	_bow_mesh.position = Vector3(0.0, -0.32, -0.16)
+	_bow_mesh.rotation.y = deg_to_rad(20.0)
+	l_arm_pivot.add_child(_bow_mesh)
+
 	_visual_root.add_child(l_arm_pivot)
 	_arms.append(l_arm_pivot)
 
-	# Right Leg (2x12x2 at 0, 16)
 	var r_leg_pivot := Node3D.new()
 	r_leg_pivot.position = Vector3(0.125, 0.52, 0.0)
 	var r_leg := _create_part(Vector3(0.14, 0.72, 0.14), 0, 16, 2, 12, 2, sheet_w, sheet_h)
@@ -702,7 +1017,6 @@ func _build_skeleton_model(sheet_w: float, sheet_h: float) -> void:
 	_visual_root.add_child(r_leg_pivot)
 	_legs.append(r_leg_pivot)
 
-	# Left Leg (2x12x2 at 0, 16, mirrored)
 	var l_leg_pivot := Node3D.new()
 	l_leg_pivot.position = Vector3(-0.125, 0.52, 0.0)
 	var l_leg := _create_part(Vector3(0.14, 0.72, 0.14), 0, 16, 2, 12, 2, sheet_w, sheet_h, true)
@@ -713,17 +1027,15 @@ func _build_skeleton_model(sheet_w: float, sheet_h: float) -> void:
 
 
 func _build_creeper_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (8x8x8 at 0, 0)
 	var head := _create_part(Vector3(0.50, 0.50, 0.50), 0, 0, 8, 8, 8, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 1.42, 0.0)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Torso (8x12x4 at 16, 16)
 	var torso := _create_part(Vector3(0.50, 0.72, 0.25), 16, 16, 8, 12, 4, sheet_w, sheet_h)
 	torso.position = Vector3(0.0, 0.82, 0.0)
 	_visual_root.add_child(torso)
 
-	# 4 Feet (4x6x4 at 0, 16)
 	var foot_coords: Array[Vector3] = [
 		Vector3(-0.13, 0.36, -0.16),
 		Vector3(0.13, 0.36, -0.16),
@@ -741,28 +1053,24 @@ func _build_creeper_model(sheet_w: float, sheet_h: float) -> void:
 
 
 func _build_cow_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (8x8x6 at 0, 0)
 	var head := _create_part(Vector3(0.48, 0.48, 0.36), 0, 0, 8, 8, 6, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 0.88, -0.52)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Horns (1x3x1 at 22, 0)
 	for side in [-1.0, 1.0]:
 		var horn := _create_part(Vector3(0.06, 0.18, 0.06), 22, 0, 1, 3, 1, sheet_w, sheet_h)
 		horn.position = Vector3(side * 0.25, 1.15, -0.48)
 		_visual_root.add_child(horn)
 
-	# Torso (12x18x10 at 18, 4)
 	var body := _create_part(Vector3(0.72, 0.60, 1.08), 18, 4, 12, 18, 10, sheet_w, sheet_h)
 	body.position = Vector3(0.0, 0.72, 0.0)
 	_visual_root.add_child(body)
 
-	# Udders (4x6x2 at 52, 0)
 	var udders := _create_part(Vector3(0.24, 0.36, 0.12), 52, 0, 4, 6, 2, sheet_w, sheet_h)
 	udders.position = Vector3(0.0, 0.44, 0.22)
 	_visual_root.add_child(udders)
 
-	# 4 Legs (4x12x4 at 0, 16)
 	var leg_coords: Array[Vector3] = [
 		Vector3(-0.20, 0.60, -0.36),
 		Vector3(0.20, 0.60, -0.36),
@@ -780,22 +1088,19 @@ func _build_cow_model(sheet_w: float, sheet_h: float) -> void:
 
 
 func _build_pig_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (8x8x8 at 0, 0)
 	var head := _create_part(Vector3(0.48, 0.48, 0.48), 0, 0, 8, 8, 8, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 0.68, -0.42)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Snout (4x3x1 at 16, 16)
 	var snout := _create_part(Vector3(0.24, 0.18, 0.08), 16, 16, 4, 3, 1, sheet_w, sheet_h)
 	snout.position = Vector3(0.0, 0.58, -0.68)
 	_visual_root.add_child(snout)
 
-	# Torso (10x16x8 at 28, 8)
 	var body := _create_part(Vector3(0.60, 0.48, 0.96), 28, 8, 10, 16, 8, sheet_w, sheet_h)
 	body.position = Vector3(0.0, 0.54, 0.0)
 	_visual_root.add_child(body)
 
-	# 4 Legs (4x6x4 at 0, 16)
 	var leg_coords: Array[Vector3] = [
 		Vector3(-0.18, 0.36, -0.26),
 		Vector3(0.18, 0.36, -0.26),
@@ -813,26 +1118,22 @@ func _build_pig_model(sheet_w: float, sheet_h: float) -> void:
 
 
 func _build_spider_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (8x8x8 at 32, 4)
 	var head := _create_part(Vector3(0.46, 0.46, 0.46), 32, 4, 8, 8, 8, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 0.44, -0.38)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Neck / Middle (6x6x6 at 0, 0)
 	var neck := _create_part(Vector3(0.36, 0.36, 0.36), 0, 0, 6, 6, 6, sheet_w, sheet_h)
 	neck.position = Vector3(0.0, 0.40, -0.05)
 	_visual_root.add_child(neck)
 
-	# Abdomen (10x8x12 at 0, 12)
 	var abdomen := _create_part(Vector3(0.60, 0.48, 0.72), 0, 12, 10, 8, 12, sheet_w, sheet_h)
 	abdomen.position = Vector3(0.0, 0.46, 0.42)
 	_visual_root.add_child(abdomen)
 
-	# 8 Spider Legs (12x2x2 at 18, 0)
 	var z_positions: Array[float] = [-0.18, -0.06, 0.06, 0.18]
 	for i in range(4):
 		var z_pos: float = z_positions[i]
-		# Right leg (+X)
 		var r_pivot := Node3D.new()
 		r_pivot.position = Vector3(0.22, 0.38, z_pos)
 		r_pivot.rotation.z = deg_to_rad(-24.0)
@@ -843,7 +1144,6 @@ func _build_spider_model(sheet_w: float, sheet_h: float) -> void:
 		_visual_root.add_child(r_pivot)
 		_legs.append(r_pivot)
 
-		# Left leg (-X)
 		var l_pivot := Node3D.new()
 		l_pivot.position = Vector3(-0.22, 0.38, z_pos)
 		l_pivot.rotation.z = deg_to_rad(24.0)
@@ -856,17 +1156,21 @@ func _build_spider_model(sheet_w: float, sheet_h: float) -> void:
 
 
 func _build_sheep_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (6x6x8 at 0, 0)
 	var head := _create_part(Vector3(0.40, 0.40, 0.48), 0, 0, 6, 6, 8, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 0.78, -0.48)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Body (12x18x8 at 28, 8)
 	var body := _create_part(Vector3(0.68, 0.58, 0.98), 28, 8, 12, 18, 8, sheet_w, sheet_h)
 	body.position = Vector3(0.0, 0.62, 0.0)
 	_visual_root.add_child(body)
 
-	# 4 Legs (4x12x4 at 0, 16)
+	# Fluffy wool fleece layer covering body
+	_wool_mesh = _create_part(Vector3(0.76, 0.66, 1.06), 28, 8, 12, 18, 8, sheet_w, sheet_h)
+	_wool_mesh.position = Vector3(0.0, 0.62, 0.0)
+	_visual_root.add_child(_wool_mesh)
+	_wool_mesh.visible = not is_sheared
+
 	var leg_coords: Array[Vector3] = [
 		Vector3(-0.18, 0.52, -0.32),
 		Vector3(0.18, 0.52, -0.32),
@@ -883,28 +1187,75 @@ func _build_sheep_model(sheet_w: float, sheet_h: float) -> void:
 		_legs.append(pivot)
 
 
+func _build_chicken_model(sheet_w: float, sheet_h: float) -> void:
+	var head := _create_part(Vector3(0.24, 0.32, 0.24), 0, 0, 3, 4, 3, sheet_w, sheet_h)
+	head.position = Vector3(0.0, 0.54, -0.22)
+	_visual_root.add_child(head)
+	_head_node = head
+
+	var beak := _create_part(Vector3(0.18, 0.12, 0.14), 14, 0, 4, 2, 2, sheet_w, sheet_h)
+	beak.position = Vector3(0.0, 0.50, -0.36)
+	_visual_root.add_child(beak)
+
+	var wattle := _create_part(Vector3(0.10, 0.16, 0.10), 14, 4, 2, 4, 2, sheet_w, sheet_h)
+	wattle.position = Vector3(0.0, 0.38, -0.28)
+	_visual_root.add_child(wattle)
+
+	var body := _create_part(Vector3(0.36, 0.36, 0.48), 0, 9, 6, 8, 6, sheet_w, sheet_h)
+	body.position = Vector3(0.0, 0.36, 0.0)
+	_visual_root.add_child(body)
+
+	var r_wing_pivot := Node3D.new()
+	r_wing_pivot.position = Vector3(0.20, 0.42, 0.0)
+	var r_wing := _create_part(Vector3(0.06, 0.24, 0.36), 24, 13, 1, 4, 6, sheet_w, sheet_h)
+	r_wing.position = Vector3(0.0, -0.12, 0.0)
+	r_wing_pivot.add_child(r_wing)
+	_visual_root.add_child(r_wing_pivot)
+	_wings.append(r_wing_pivot)
+
+	var l_wing_pivot := Node3D.new()
+	l_wing_pivot.position = Vector3(-0.20, 0.42, 0.0)
+	var l_wing := _create_part(Vector3(0.06, 0.24, 0.36), 24, 13, 1, 4, 6, sheet_w, sheet_h, true)
+	l_wing.position = Vector3(0.0, -0.12, 0.0)
+	l_wing_pivot.add_child(l_wing)
+	_visual_root.add_child(l_wing_pivot)
+	_wings.append(l_wing_pivot)
+
+	var r_leg_pivot := Node3D.new()
+	r_leg_pivot.position = Vector3(0.10, 0.24, 0.0)
+	var r_leg := _create_part(Vector3(0.08, 0.24, 0.08), 26, 0, 3, 5, 3, sheet_w, sheet_h)
+	r_leg.position = Vector3(0.0, -0.12, 0.0)
+	r_leg_pivot.add_child(r_leg)
+	_visual_root.add_child(r_leg_pivot)
+	_legs.append(r_leg_pivot)
+
+	var l_leg_pivot := Node3D.new()
+	l_leg_pivot.position = Vector3(-0.10, 0.24, 0.0)
+	var l_leg := _create_part(Vector3(0.08, 0.24, 0.08), 26, 0, 3, 5, 3, sheet_w, sheet_h, true)
+	l_leg.position = Vector3(0.0, -0.12, 0.0)
+	l_leg_pivot.add_child(l_leg)
+	_visual_root.add_child(l_leg_pivot)
+	_legs.append(l_leg_pivot)
+
+
 func _build_villager_model(sheet_w: float, sheet_h: float) -> void:
-	# Head (8x10x8 at 0, 0)
 	var head := _create_part(Vector3(0.50, 0.58, 0.50), 0, 0, 8, 10, 8, sheet_w, sheet_h)
 	head.position = Vector3(0.0, 1.45, 0.0)
 	_visual_root.add_child(head)
+	_head_node = head
 
-	# Nose (2x4x2 at 24, 0)
 	var nose := _create_part(Vector3(0.12, 0.24, 0.12), 24, 0, 2, 4, 2, sheet_w, sheet_h)
 	nose.position = Vector3(0.0, 1.32, -0.31)
 	_visual_root.add_child(nose)
 
-	# Body / Robe (8x12x6 at 16, 20)
 	var body := _create_part(Vector3(0.52, 0.74, 0.36), 16, 20, 8, 12, 6, sheet_w, sheet_h)
 	body.position = Vector3(0.0, 0.82, 0.0)
 	_visual_root.add_child(body)
 
-	# Crossed Arms (10x8x4 at 40, 38)
 	var arms := _create_part(Vector3(0.60, 0.36, 0.30), 40, 38, 10, 8, 4, sheet_w, sheet_h)
 	arms.position = Vector3(0.0, 0.85, -0.16)
 	_visual_root.add_child(arms)
 
-	# Right Leg (4x12x4 at 0, 22)
 	var r_leg_pivot := Node3D.new()
 	r_leg_pivot.position = Vector3(0.13, 0.45, 0.0)
 	var r_leg := _create_part(Vector3(0.22, 0.65, 0.22), 0, 22, 4, 12, 4, sheet_w, sheet_h)
@@ -913,7 +1264,6 @@ func _build_villager_model(sheet_w: float, sheet_h: float) -> void:
 	_visual_root.add_child(r_leg_pivot)
 	_legs.append(r_leg_pivot)
 
-	# Left Leg (4x12x4 at 0, 22, mirrored)
 	var l_leg_pivot := Node3D.new()
 	l_leg_pivot.position = Vector3(-0.13, 0.45, 0.0)
 	var l_leg := _create_part(Vector3(0.22, 0.65, 0.22), 0, 22, 4, 12, 4, sheet_w, sheet_h, true)

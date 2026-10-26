@@ -25,6 +25,7 @@ enum ItemId {
 	DIAMOND = 106,
 	BUCKET = 107,
 	WATER_BUCKET = 108,
+	MILK_BUCKET = 109,
 	RAW_PORKCHOP = 110,
 	COOKED_PORKCHOP = 111,
 	RAW_BEEF = 112,
@@ -59,6 +60,8 @@ enum ItemId {
 	LEATHER = 140,
 	SUGAR = 141,
 	EGG = 142,
+	RAW_CHICKEN = 143,
+	COOKED_CHICKEN = 144,
 
 	# Pickaxes (201..205)
 	WOOD_PICKAXE = 201,
@@ -364,6 +367,7 @@ static func is_tool_item(item_id: int) -> bool:
 		(item_id >= ItemId.WOOD_PICKAXE and item_id <= ItemId.GOLD_HOE)
 		or (item_id >= ItemId.LEATHER_HELMET and item_id <= ItemId.DIAMOND_BOOTS)
 		or item_id == ItemId.WATER_BUCKET
+		or item_id == ItemId.MILK_BUCKET
 		or item_id == ItemId.LAVA_BUCKET
 		or item_id == ItemId.BUCKET
 		or item_id == ItemId.BOW
@@ -381,6 +385,9 @@ static func is_food_item(item_id: int) -> bool:
 		or item_id == ItemId.BAKED_POTATO
 		or item_id == ItemId.MUSHROOM_STEW
 		or item_id == ItemId.APPLE
+		or item_id == ItemId.MILK_BUCKET
+		or item_id == ItemId.RAW_CHICKEN
+		or item_id == ItemId.COOKED_CHICKEN
 	)
 
 
@@ -390,13 +397,15 @@ static func get_food_nutrition(item_id: int) -> int:
 			return 10
 		ItemId.COOKED_PORKCHOP, ItemId.STEAK:
 			return 8
+		ItemId.COOKED_CHICKEN:
+			return 6
 		ItemId.BREAD, ItemId.BAKED_POTATO:
 			return 5
 		ItemId.APPLE:
 			return 4
 		ItemId.RAW_PORKCHOP, ItemId.RAW_BEEF:
 			return 3
-		ItemId.POTATO, ItemId.ROTTEN_FLESH:
+		ItemId.POTATO, ItemId.ROTTEN_FLESH, ItemId.RAW_CHICKEN, ItemId.MILK_BUCKET:
 			return 2
 		_:
 			return 2
@@ -640,6 +649,8 @@ static func get_item_name(item_id: int) -> String:
 			return "Iron Bucket"
 		ItemId.WATER_BUCKET:
 			return "Water Bucket"
+		ItemId.MILK_BUCKET:
+			return "Milk Bucket"
 		ItemId.RAW_PORKCHOP:
 			return "Raw Porkchop"
 		ItemId.COOKED_PORKCHOP:
@@ -754,6 +765,10 @@ static func get_item_name(item_id: int) -> String:
 			return "Sugar"
 		ItemId.EGG:
 			return "Egg"
+		ItemId.RAW_CHICKEN:
+			return "Raw Chicken"
+		ItemId.COOKED_CHICKEN:
+			return "Cooked Chicken"
 		ItemId.LEATHER_HELMET:
 			return "Leather Cap"
 		ItemId.LEATHER_CHESTPLATE:
@@ -812,6 +827,8 @@ static func get_item_short_label(item_id: int) -> String:
 			return "Bucket"
 		ItemId.WATER_BUCKET:
 			return "WtrBkt"
+		ItemId.MILK_BUCKET:
+			return "Milk"
 		ItemId.RAW_PORKCHOP:
 			return "RawPrk"
 		ItemId.COOKED_PORKCHOP:
@@ -902,6 +919,10 @@ static func get_item_short_label(item_id: int) -> String:
 			return "Sugar"
 		ItemId.EGG:
 			return "Egg"
+		ItemId.RAW_CHICKEN:
+			return "RawChkn"
+		ItemId.COOKED_CHICKEN:
+			return "CkChkn"
 		ItemId.LEATHER_HELMET:
 			return "L-Cap"
 		ItemId.LEATHER_CHESTPLATE:
@@ -960,6 +981,8 @@ static func get_item_color(item_id: int) -> Color:
 			return Color(0.76, 0.80, 0.86)
 		ItemId.WATER_BUCKET:
 			return Color(0.22, 0.56, 0.96)
+		ItemId.MILK_BUCKET:
+			return Color(0.95, 0.95, 0.98)
 		ItemId.RAW_PORKCHOP:
 			return Color(0.94, 0.58, 0.60)
 		ItemId.COOKED_PORKCHOP:
@@ -994,6 +1017,10 @@ static func get_item_color(item_id: int) -> Color:
 			return Color(0.98, 0.98, 0.98)
 		ItemId.EGG:
 			return Color(0.95, 0.92, 0.82)
+		ItemId.RAW_CHICKEN:
+			return Color(0.92, 0.65, 0.65)
+		ItemId.COOKED_CHICKEN:
+			return Color(0.78, 0.52, 0.28)
 		ItemId.WOOD_PICKAXE, ItemId.WOOD_AXE, ItemId.WOOD_SHOVEL, ItemId.WOOD_SWORD, ItemId.WOOD_HOE:
 			return Color(0.68, 0.50, 0.28)
 		ItemId.STONE_PICKAXE, ItemId.STONE_AXE, ItemId.STONE_SHOVEL, ItemId.STONE_SWORD, ItemId.STONE_HOE:
@@ -2107,6 +2134,8 @@ static func _get_smelt_result(input_id: int) -> int:
 			return ItemId.COOKED_PORKCHOP
 		ItemId.RAW_BEEF:
 			return ItemId.STEAK
+		ItemId.RAW_CHICKEN:
+			return ItemId.COOKED_CHICKEN
 		ItemId.POTATO:
 			return ItemId.BAKED_POTATO
 		BlockRegistry.BlockId.COBBLESTONE:
