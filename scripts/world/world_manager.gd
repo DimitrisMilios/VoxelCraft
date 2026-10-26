@@ -416,6 +416,40 @@ func get_block_world(world_block_pos: Vector3i) -> int:
 	return chunk.get_block_local(lx, world_block_pos.y, lz)
 
 
+## Checks whether a world position is illuminated by any nearby light emitters (Torches, Glowstone, Lava, Furnaces).
+## In Minecraft rules, hostile mobs cannot spawn within ~9-11 blocks of a torch or light source.
+func is_position_illuminated_by_blocks(world_pos: Vector3, light_range: float = 11.0) -> bool:
+	var base_chunk := world_to_chunk_coords(world_pos)
+
+	# 1. Check OmniLight3D emitters registered in current and adjacent 8 chunks
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var c_coord := base_chunk + Vector2i(dx, dz)
+			if _active_chunks.has(c_coord):
+				var chunk: VoxelChunk = _active_chunks[c_coord]
+				for local_pos in chunk._block_lights.keys():
+					var light_node: OmniLight3D = chunk._block_lights[local_pos]
+					var l_range: float = light_node.omni_range if (light_node != null and is_instance_valid(light_node)) else light_range
+					var chunk_origin: Vector3 = chunk.global_position if chunk.is_inside_tree() else chunk.position
+					var l_world: Vector3 = chunk_origin + Vector3(local_pos) + Vector3(0.5, 0.5, 0.5)
+					if world_pos.distance_squared_to(l_world) <= (l_range * l_range):
+						return true
+
+	# 2. Check local block neighborhood around world_pos for any light-emitting blocks
+	var ipos := Vector3i(floori(world_pos.x), floori(world_pos.y), floori(world_pos.z))
+	for dy in range(-3, 4):
+		for dx in range(-8, 9):
+			for dz in range(-8, 9):
+				var check_p := ipos + Vector3i(dx, dy, dz)
+				var bid: int = get_block_world(check_p)
+				if BlockRegistry.is_light_emitter(bid):
+					var b_world := Vector3(check_p) + Vector3(0.5, 0.5, 0.5)
+					var eff_range: float = 14.0 if bid == BlockRegistry.BlockId.LAVA else light_range
+					if world_pos.distance_squared_to(b_world) <= (eff_range * eff_range):
+						return true
+	return false
+
+
 func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
 	if world_block_pos.y <= 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
 		return false

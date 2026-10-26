@@ -58,15 +58,22 @@ func _try_spawn_mob() -> void:
 
 	var surface_y: int = _world_manager.get_surface_height_at(wx, wz)
 	var ground_block: int = _world_manager.get_block_world(Vector3i(wx, surface_y, wz))
-	if not BlockRegistry.is_solid(ground_block):
+	if not BlockRegistry.is_solid(ground_block) or BlockRegistry.is_liquid(ground_block):
 		return
 
 	var is_night: bool = false
 	if _day_night != null:
 		is_night = (_day_night.time_of_day < 0.24 or _day_night.time_of_day > 0.76)
 
+	var spawn_pos := Vector3(float(wx) + 0.5, float(surface_y) + 1.2, float(wz) + 0.5)
+
 	var mob := PassiveMob.new()
 	if is_night:
+		# Minecraft spawning rule: Hostile monsters CANNOT spawn in illuminated areas!
+		# Torches, glowstones, lava pools, or furnaces within ~10 blocks prevent enemy spawns.
+		if _world_manager.is_position_illuminated_by_blocks(spawn_pos, 10.0):
+			return
+
 		var roll: float = randf()
 		if roll < 0.34:
 			mob.variant = PassiveMob.MobVariant.ZOMBIE
@@ -77,6 +84,7 @@ func _try_spawn_mob() -> void:
 		else:
 			mob.variant = PassiveMob.MobVariant.SPIDER
 	else:
+		# During daytime, monsters cannot spawn on the sunny surface; only peaceful animals on grass
 		if ground_block != BlockRegistry.BlockId.GRASS:
 			return
 		var p_roll: float = randf()
@@ -88,5 +96,5 @@ func _try_spawn_mob() -> void:
 			mob.variant = PassiveMob.MobVariant.PIG
 
 	add_child(mob)
-	mob.global_position = Vector3(float(wx) + 0.5, float(surface_y) + 1.2, float(wz) + 0.5)
+	mob.global_position = spawn_pos
 	_mobs.append(mob)

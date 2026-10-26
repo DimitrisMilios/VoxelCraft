@@ -73,6 +73,7 @@ light_volumetric_fog_energy = 2.2
 
 [node name="DayNightCycle" type="Node" parent="."]
 script = ExtResource("5_day_night")
+day_length_seconds = 1800.0
 
 [node name="WorldManager" type="Node3D" parent="."]
 script = ExtResource("2_world_manager")

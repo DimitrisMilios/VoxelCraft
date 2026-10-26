@@ -1319,7 +1319,7 @@ func _update_light_emitter_at(local_pos: Vector3i, block_id: int) -> void:
 
 
 func _sync_all_light_emitters() -> void:
-	if not is_dirty or _voxels.is_empty():
+	if _voxels.is_empty():
 		return
 	var max_y: int = mini(_highest_solid_y + 1, CHUNK_SIZE_Y)
 	for ly in range(max_y):

@@ -4,7 +4,7 @@ const GameSession = preload("res://scripts/core/game_session.gd")
 ## Controls dynamic Day/Night cycle, rotating SunLight and blending sky/ambient/fog colors.
 ## Press [T] to fast-forward time by +2.5 hours.
 
-@export var day_length_seconds: float = 360.0
+@export var day_length_seconds: float = 1800.0
 @export var start_hour: float = 17.5
 @export var sun_light_path: NodePath = NodePath("../SunLight")
 @export var world_env_path: NodePath = NodePath("../WorldEnvironment")
