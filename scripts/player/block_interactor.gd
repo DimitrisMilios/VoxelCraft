@@ -286,6 +286,12 @@ func _complete_break_block() -> void:
 				var adj_id: int = _world_manager.get_block_world(adj)
 				if adj_id == BlockRegistry.BlockId.BED or adj_id == BlockRegistry.BlockId.BED_HEAD:
 					_world_manager.set_block_world(adj, BlockRegistry.BlockId.AIR)
+			if _player_body != null and _player_body.has_custom_respawn:
+				var b_int := Vector3i(floori(_player_body.custom_respawn_pos.x), floori(_player_body.custom_respawn_pos.y), floori(_player_body.custom_respawn_pos.z))
+				if b_int == broken_pos or (absi(b_int.x - broken_pos.x) + absi(b_int.z - broken_pos.z) <= 1 and b_int.y == broken_pos.y):
+					_player_body.has_custom_respawn = false
+					_player_body.custom_respawn_pos = Vector3.ZERO
+					loot_notification.emit("Bed broken! Respawn point removed.")
 
 		var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if is_creative else equipped_id
 		var drop_id: int = InventoryManager.get_dropped_item_for_block(previous_id, effective_tool)
@@ -445,7 +451,8 @@ func _try_interact_or_place_block() -> void:
 			_player_body.set_respawn_bed_position(Vector3(target_block_pos))
 
 		var monsters_nearby: bool = false
-		var mobs: Array = get_tree().get_nodes_in_group("mobs") if get_tree() != null else []
+		var tree: SceneTree = get_tree() if is_inside_tree() else (_world_manager.get_tree() if (_world_manager != null and _world_manager.is_inside_tree()) else null)
+		var mobs: Array = tree.get_nodes_in_group("mobs") if tree != null else []
 		for m in mobs:
 			if is_instance_valid(m) and m is PassiveMob:
 				var mob_inst := m as PassiveMob
@@ -458,16 +465,25 @@ func _try_interact_or_place_block() -> void:
 			loot_notification.emit("You may not rest now, there are monsters nearby!")
 			return
 
-		var dn := get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle
-		if dn != null and (dn.time_of_day < 0.23 or dn.time_of_day > 0.73):
-			dn.time_of_day = 0.26
+		var dn: DayNightCycle = tree.get_first_node_in_group("day_night_cycle") as DayNightCycle if tree != null else null
+		if dn == null and _world_manager != null and _world_manager.get_parent() != null:
+			dn = _world_manager.get_parent().get_node_or_null("DayNightCycle") as DayNightCycle
+		var is_night: bool = dn != null and dn.is_night_time()
+		if is_night:
+			dn.advance_to_morning()
 			if _player_body != null:
 				_player_body.eat_food(6)
 				_player_body.current_health = _player_body.max_health
+				_player_body.current_hunger = _player_body.max_hunger
 				_player_body.health_changed.emit(_player_body.current_health, _player_body.max_health)
-			loot_notification.emit("Slept through the night! Good morning & Respawn set.")
+				_player_body.hunger_changed.emit(_player_body.current_hunger, _player_body.max_hunger)
+			loot_notification.emit("Slept through the night! Good morning & Respawn saved.")
 		else:
-			loot_notification.emit("Respawn point set at Bed! (You can only sleep at night)")
+			loot_notification.emit("Respawn point set at Bed! World saved.")
+
+		# Save world state immediately so bed respawn point is saved to disk
+		if _world_manager != null and _world_manager.has_method("save_complete_world"):
+			_world_manager.save_complete_world()
 		return
 
 	# Right-clicking Grass or Dirt with a Shovel or Stick tills it into Farmland

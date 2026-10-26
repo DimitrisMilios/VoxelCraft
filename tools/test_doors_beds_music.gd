@@ -45,11 +45,13 @@ func _init() -> void:
 
 	var world_mgr: WorldManager = root.find_child("WorldManager", true, false) as WorldManager
 	assert(world_mgr != null, "WorldManager must exist")
-	var player = root.find_child("Player", true, false)
+	var player = root.find_child("Player", true, false) as PlayerController
 	assert(player != null, "Player must exist")
+	player._world_manager = world_mgr
 	var interactor: BlockInteractor = player.find_child("BlockInteractor", true, false) as BlockInteractor
 	assert(interactor != null, "BlockInteractor must exist")
 	interactor._world_manager = world_mgr
+	interactor._player_body = player
 
 	# Ensure chunk (0, 0) exists in world_mgr
 	if not world_mgr._active_chunks.has(Vector2i(0, 0)):
@@ -105,6 +107,59 @@ func _init() -> void:
 	assert(world_mgr.get_block_world(bed_foot_pos) == BlockRegistry.BlockId.AIR, "Broken bed foot should become AIR")
 	assert(world_mgr.get_block_world(bed_head_pos) == BlockRegistry.BlockId.AIR, "Partner bed head should automatically be cleared to AIR")
 	print("PASS: Breaking Bed foot cleanly removed partner Bed head.")
+
+	# Test Sleeping and Respawning at Bed on Death
+	# 1. Place a bed inside a clear 3x3 room with stone floor at y=63
+	for rx in range(4):
+		for rz in range(4):
+			world_mgr.set_block_world(Vector3i(3 + rx, 63, 3 + rz), BlockRegistry.BlockId.STONE)
+			world_mgr.set_block_world(Vector3i(3 + rx, 64, 3 + rz), BlockRegistry.BlockId.AIR)
+			world_mgr.set_block_world(Vector3i(3 + rx, 65, 3 + rz), BlockRegistry.BlockId.AIR)
+			world_mgr.set_block_world(Vector3i(3 + rx, 66, 3 + rz), BlockRegistry.BlockId.AIR)
+	var new_bed_pos := Vector3i(4, 64, 4)
+	var new_bed_head := Vector3i(4, 64, 5)
+	world_mgr.set_block_world(new_bed_pos, BlockRegistry.BlockId.BED)
+	world_mgr.set_block_world(new_bed_head, BlockRegistry.BlockId.BED_HEAD)
+
+	# Set night time
+	var dn: DayNightCycle = root.find_child("DayNightCycle", true, false) as DayNightCycle
+	if dn != null:
+		dn.current_hour = 22.0 # 10:00 PM Night
+		assert(dn.is_night_time(), "Must be night time at 22:00")
+
+	# Right-click bed to sleep and set respawn
+	interactor.target_block_pos = new_bed_pos
+	interactor.has_target = true
+	interactor._player_body = player
+	player.current_health = 10
+	player.current_hunger = 10
+	interactor._try_interact_or_place_block()
+
+	assert(player.has_custom_respawn, "Player must have custom respawn enabled after clicking bed")
+	assert(player.custom_respawn_pos == Vector3(new_bed_pos), "Bed respawn position must match clicked bed")
+	if dn != null:
+		assert(dn.current_hour == 6.0, "Time must advance to 06:00 AM Sunrise after sleeping")
+		assert(not dn.is_night_time(), "Morning at 06:00 is daytime")
+	assert(player.current_health == player.max_health, "Sleeping must restore full health")
+	print("PASS: Sleeping at night advanced time to Sunrise, restored health, and saved bed respawn.")
+
+	var check_result: Dictionary = player._find_safe_bed_spawn_position(new_bed_pos)
+	assert(check_result["valid"], "Bed check must be valid")
+
+	# Kill player and verify respawn at bed
+	player.take_damage(100)
+	assert(player.has_custom_respawn, "Player should still have bed respawn active")
+	var dist_to_bed: float = player.position.distance_to(Vector3(new_bed_pos) + Vector3(0.5, 0.0, 0.5))
+	assert(dist_to_bed < 3.0, "Player must respawn adjacent to or at their bed (dist: %.2f)" % dist_to_bed)
+	print("PASS: Player successfully respawned at bed after death!")
+
+	# Break the bed and verify fallback to world spawn
+	interactor.target_block_pos = new_bed_pos
+	interactor._complete_break_block()
+	assert(not player.has_custom_respawn, "Breaking player's bed must invalidate custom respawn")
+	player.take_damage(100)
+	assert(not player.has_custom_respawn, "Player must now respawn at world spawn")
+	print("PASS: Invalidation on bed destruction and fallback to world spawn verified.")
 
 	# Test Door break partner cleanup
 	interactor.target_block_pos = test_door_pos

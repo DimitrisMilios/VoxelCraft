@@ -64,6 +64,13 @@ func _ready() -> void:
 	var has_saved_pos: bool = false
 	if not GameSession.active_world_data.is_empty():
 		var p_data: Dictionary = GameSession.active_world_data.get("player", {})
+		if _player != null:
+			var has_bed: bool = bool(p_data.get("has_bed", false))
+			_player.set("has_custom_respawn", has_bed)
+			if has_bed and p_data.has("bed_pos") and p_data["bed_pos"] is Array:
+				var b_arr: Array = p_data["bed_pos"]
+				_player.set("custom_respawn_pos", Vector3(b_arr[0], b_arr[1], b_arr[2]))
+
 		has_saved_pos = bool(p_data.get("has_saved_pos", false))
 		if has_saved_pos and p_data.has("pos") and p_data["pos"] is Array:
 			var p_arr: Array = p_data["pos"]
@@ -79,11 +86,6 @@ func _ready() -> void:
 				_player.set("current_hunger", int(p_data.get("hunger", 20)))
 				_player.set("current_oxygen", int(p_data.get("oxygen", 10)))
 				_player.set("is_flying", bool(p_data.get("is_flying", false)))
-				var has_bed: bool = bool(p_data.get("has_bed", false))
-				_player.set("has_custom_respawn", has_bed)
-				if has_bed and p_data.has("bed_pos") and p_data["bed_pos"] is Array:
-					var b_arr: Array = p_data["bed_pos"]
-					_player.set("custom_respawn_pos", Vector3(b_arr[0], b_arr[1], b_arr[2]))
 	elif _player != null:
 		start_chunk = world_to_chunk_coords(_player.global_position)
 
@@ -293,7 +295,9 @@ func _worker_build_chunk(coord: Vector2i) -> void:
 	chunk.chunk_coords = coord
 	chunk.neighbor_block_getter = get_block_or_procedural_world
 
-	var saved_data: Dictionary = _storage.load_chunk_data(coord)
+	var saved_data: Dictionary = {}
+	if _storage != null:
+		saved_data = _storage.load_chunk_data(coord)
 	if not saved_data.is_empty():
 		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]))
 	else:
@@ -362,7 +366,9 @@ func _spawn_chunk_immediate(coord: Vector2i) -> VoxelChunk:
 	)
 	add_child(chunk)
 
-	var saved_data: Dictionary = _storage.load_chunk_data(coord)
+	var saved_data: Dictionary = {}
+	if _storage != null:
+		saved_data = _storage.load_chunk_data(coord)
 	if not saved_data.is_empty():
 		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]))
 	else:
@@ -375,6 +381,15 @@ func _spawn_chunk_immediate(coord: Vector2i) -> VoxelChunk:
 	chunk.rebuild_mesh()
 	_active_chunks[coord] = chunk
 	return chunk
+
+
+## Ensures the 3x3 chunks surrounding a world position are immediately loaded/built with collision.
+func ensure_chunks_around_pos(world_pos: Vector3) -> void:
+	var center_chunk: Vector2i = world_to_chunk_coords(world_pos)
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			_spawn_chunk_immediate(center_chunk + Vector2i(dx, dz))
+	_last_player_chunk = center_chunk
 
 
 ## Thread-safe neighbor query used during mesh generation for cross-chunk face culling.
@@ -892,10 +907,10 @@ func save_all_modified_chunks() -> int:
 func save_complete_world() -> int:
 	var count: int = save_all_modified_chunks()
 	var inv: Node = get_node_or_null("../InventoryManager")
-	if inv == null and get_tree() != null:
+	if inv == null and is_inside_tree() and get_tree() != null:
 		inv = get_tree().get_first_node_in_group("inventory_manager")
 	var dn: Node = get_node_or_null("../DayNightCycle")
-	if dn == null and get_tree() != null:
+	if dn == null and is_inside_tree() and get_tree() != null:
 		dn = get_tree().get_first_node_in_group("day_night_cycle")
 	GameSession.save_world_state(_player, inv, dn, self)
 	world_saved.emit(count)

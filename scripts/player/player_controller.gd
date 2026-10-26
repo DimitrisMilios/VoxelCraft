@@ -201,6 +201,74 @@ func eat_food(nutrition: int) -> bool:
 func set_respawn_bed_position(bed_world_pos: Vector3) -> void:
 	custom_respawn_pos = bed_world_pos
 	has_custom_respawn = true
+	if not GameSession.active_world_data.is_empty():
+		var p_data: Dictionary = GameSession.active_world_data.get("player", {})
+		p_data["has_bed"] = true
+		p_data["bed_pos"] = [bed_world_pos.x, bed_world_pos.y, bed_world_pos.z]
+		GameSession.active_world_data["player"] = p_data
+
+
+func _find_safe_bed_spawn_position(bed_pos: Vector3i) -> Dictionary:
+	if _world_manager == null:
+		return {"valid": true, "pos": Vector3(float(bed_pos.x) + 0.5, float(bed_pos.y) + 0.60, float(bed_pos.z) + 0.5)}
+
+	# Verify bed block exists at bed_pos
+	var bed_block: int = _world_manager.get_block_world(bed_pos)
+	if bed_block != BlockRegistry.BlockId.BED and bed_block != BlockRegistry.BlockId.BED_HEAD:
+		return {"valid": false, "pos": Vector3.ZERO}
+
+	# Identify both halves of the bed if adjacent
+	var bed_positions: Array[Vector3i] = [bed_pos]
+	for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+		var partner: Vector3i = bed_pos + d
+		var p_blk: int = _world_manager.get_block_world(partner)
+		if p_blk == BlockRegistry.BlockId.BED or p_blk == BlockRegistry.BlockId.BED_HEAD:
+			bed_positions.append(partner)
+			break
+
+	# Search adjacent positions around the bed for solid floor + 2 blocks of air headroom
+	var neighbor_offsets: Array[Vector3i] = [
+		Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+		Vector3i(1, 0, 1), Vector3i(-1, 0, 1), Vector3i(1, 0, -1), Vector3i(-1, 0, -1)
+	]
+
+	for b in bed_positions:
+		for offset in neighbor_offsets:
+			var candidate: Vector3i = b + offset
+			if candidate in bed_positions:
+				continue
+
+			for floor_dy in [0, -1]:
+				var floor_pos: Vector3i = candidate + Vector3i(0, floor_dy - 1, 0)
+				var stand_pos: Vector3i = candidate + Vector3i(0, floor_dy, 0)
+				var head_pos: Vector3i = candidate + Vector3i(0, floor_dy + 1, 0)
+
+				var floor_id: int = _world_manager.get_block_world(floor_pos)
+				var stand_id: int = _world_manager.get_block_world(stand_pos)
+				var head_id: int = _world_manager.get_block_world(head_pos)
+
+				if BlockRegistry.is_solid(floor_id) and not BlockRegistry.is_liquid(floor_id) and floor_id != BlockRegistry.BlockId.CACTUS:
+					if not BlockRegistry.is_solid(stand_id) and not BlockRegistry.is_liquid(stand_id):
+						if not BlockRegistry.is_solid(head_id) and not BlockRegistry.is_liquid(head_id):
+							return {
+								"valid": true,
+								"pos": Vector3(float(stand_pos.x) + 0.5, float(stand_pos.y) + 0.05, float(stand_pos.z) + 0.5)
+							}
+
+	# Fallback: standing on top of the mattress if vertical clearance permits
+	for b in bed_positions:
+		var above_bed: Vector3i = b + Vector3i(0, 1, 0)
+		var head_above: Vector3i = b + Vector3i(0, 2, 0)
+		var above_id: int = _world_manager.get_block_world(above_bed)
+		var head_id: int = _world_manager.get_block_world(head_above)
+		if not BlockRegistry.is_solid(above_id) and not BlockRegistry.is_liquid(above_id):
+			if not BlockRegistry.is_solid(head_id) and not BlockRegistry.is_liquid(head_id):
+				return {
+					"valid": true,
+					"pos": Vector3(float(b.x) + 0.5, float(b.y) + 0.60, float(b.z) + 0.5)
+				}
+
+	return {"valid": false, "pos": Vector3.ZERO}
 
 
 func take_damage(amount: int) -> void:
@@ -222,20 +290,46 @@ func _respawn_player() -> void:
 	current_oxygen = max_oxygen
 	velocity = Vector3.ZERO
 	_max_fall_speed = 0.0
-	var respawned_at_bed: bool = has_custom_respawn
+
+	var respawned_at_bed: bool = false
 	if has_custom_respawn:
-		global_position = custom_respawn_pos + Vector3(0.5, 1.5, 0.5)
-	else:
+		var b_pos := Vector3i(floori(custom_respawn_pos.x), floori(custom_respawn_pos.y), floori(custom_respawn_pos.z))
+		if _world_manager != null:
+			_world_manager.ensure_chunks_around_pos(custom_respawn_pos)
+
+		var bed_check: Dictionary = _find_safe_bed_spawn_position(b_pos)
+		if bool(bed_check.get("valid", false)):
+			if is_inside_tree():
+				global_position = bed_check["pos"]
+			position = bed_check["pos"]
+			respawned_at_bed = true
+		else:
+			# Bed missing or obstructed
+			has_custom_respawn = false
+			custom_respawn_pos = Vector3.ZERO
+			if not GameSession.active_world_data.is_empty():
+				var p_data: Dictionary = GameSession.active_world_data.get("player", {})
+				p_data["has_bed"] = false
+				p_data["bed_pos"] = [0.0, 0.0, 0.0]
+				GameSession.active_world_data["player"] = p_data
+
+	if not respawned_at_bed:
 		var spawn_x: int = 8
 		var spawn_z: int = 8
 		var surface_y: int = 56
 		if _world_manager != null:
+			_world_manager.ensure_chunks_around_pos(Vector3(float(spawn_x), 50.0, float(spawn_z)))
 			surface_y = _world_manager.get_surface_height_at(spawn_x, spawn_z)
-		global_position = Vector3(float(spawn_x) + 0.5, float(surface_y) + 2.5, float(spawn_z) + 0.5)
+		var spawn_target := Vector3(float(spawn_x) + 0.5, float(surface_y) + 1.5, float(spawn_z) + 0.5)
+		if is_inside_tree():
+			global_position = spawn_target
+		position = spawn_target
+
 	health_changed.emit(current_health, max_health)
 	hunger_changed.emit(current_hunger, max_hunger)
 	oxygen_changed.emit(current_oxygen, max_oxygen)
 	player_respawned.emit(respawned_at_bed)
+
 	if _world_manager != null and _world_manager.has_method("save_complete_world"):
 		_world_manager.save_complete_world()
 

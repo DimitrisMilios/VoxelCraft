@@ -106,6 +106,19 @@ func advance_hours(delta_hours: float) -> void:
 	_apply_lighting(current_hour)
 
 
+func is_night_time() -> bool:
+	# Night is between 18:30 (dusk) and 06:00 (dawn)
+	return current_hour >= 18.5 or current_hour < 6.0
+
+
+func advance_to_morning() -> void:
+	# Sleep advances time directly to 06:00 AM (Sunrise) the next morning
+	if current_hour >= 6.0:
+		day_number += 1
+	current_hour = 6.0
+	_apply_lighting(current_hour)
+
+
 func get_formatted_time() -> String:
 	var h: int = int(floor(current_hour)) % 24
 	var m: int = int(floor((current_hour - floor(current_hour)) * 60.0)) % 60
