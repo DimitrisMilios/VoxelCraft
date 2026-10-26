@@ -808,33 +808,160 @@ func ignite_tnt_at(world_block_pos: Vector3i) -> void:
 func _detonate_tnt_at(center: Vector3i, visual_node: Node3D) -> void:
 	if is_instance_valid(visual_node):
 		visual_node.queue_free()
+	create_explosion(Vector3(center) + Vector3(0.5, 0.5, 0.5), 3.2, true, true)
 
-	var det_pos := Vector3(center) + Vector3(0.5, 0.5, 0.5)
-	var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
-	if sfx != null and sfx.has_method("play_sfx_at_pos"):
-		sfx.play_sfx_at_pos("explosion", det_pos, 5.0, 1.0, 60.0)
 
-	for dy in range(-3, 4):
-		for dx in range(-3, 4):
-			for dz in range(-3, 4):
-				if dx * dx + dy * dy + dz * dz <= 9:
-					var bpos: Vector3i = center + Vector3i(dx, dy, dz)
-					if bpos.y <= 1:
-						continue
+## High-performance batched explosion that destroys voxels with minimal sub-chunk mesh rebuilds,
+## pooled entity drops, chained TNT, and realistic radial falloff damage.
+func create_explosion(center: Vector3, radius: float = 3.2, is_tnt: bool = true, damage_player: bool = true) -> void:
+	if get_tree() != null:
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			sfx.play_sfx_at_pos("explosion", center, 5.0, 1.0, 60.0)
+
+	var center_i := Vector3i(floori(center.x), floori(center.y), floori(center.z))
+	var rad_int: int = int(ceil(radius))
+	var rad_sq: float = radius * radius
+
+	# 1. Gather all blocks to destroy and group by chunk coordinate
+	var affected_chunks: Dictionary = {} # Vector2i -> Array[Dictionary]
+	var tnt_to_chain: Array[Vector3i] = []
+	var drop_candidates: Array[int] = []
+
+	for dy in range(-rad_int, rad_int + 1):
+		var wy: int = center_i.y + dy
+		if wy <= 1 or wy >= VoxelChunk.CHUNK_SIZE_Y - 1:
+			continue
+		for dx in range(-rad_int, rad_int + 1):
+			for dz in range(-rad_int, rad_int + 1):
+				var dsq: float = float(dx * dx + dy * dy + dz * dz)
+				if dsq <= rad_sq:
+					var bpos := center_i + Vector3i(dx, dy, dz)
 					var bid: int = get_block_world(bpos)
+					if bid == BlockRegistry.BlockId.AIR:
+						continue
 					if bid == BlockRegistry.BlockId.TNT:
-						ignite_tnt_at(bpos)
-					elif BlockRegistry.is_solid(bid):
-						set_block_world(bpos, BlockRegistry.BlockId.AIR)
-						if randf() < 0.32:
+						tnt_to_chain.append(bpos)
+						continue
+					if BlockRegistry.is_solid(bid):
+						if randf() < 0.28:
 							var drop_id: int = InventoryManager.get_dropped_item_for_block(bid, InventoryManager.ItemId.DIAMOND_PICKAXE)
 							if drop_id > 0:
-								DroppedItem.spawn_drop(self, Vector3(bpos) + Vector3(0.5, 0.5, 0.5), drop_id, 1)
+								drop_candidates.append(drop_id)
 
-	if _player != null and is_instance_valid(_player) and _player is PlayerController:
+						var cx: int = floori(float(bpos.x) / float(VoxelChunk.CHUNK_SIZE_X))
+						var cz: int = floori(float(bpos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
+						var c_coord := Vector2i(cx, cz)
+						if not affected_chunks.has(c_coord):
+							affected_chunks[c_coord] = []
+						var lx: int = posmod(bpos.x, VoxelChunk.CHUNK_SIZE_X)
+						var lz: int = posmod(bpos.z, VoxelChunk.CHUNK_SIZE_Z)
+						affected_chunks[c_coord].append({
+							"lx": lx,
+							"ly": wy,
+							"lz": lz,
+							"wx": bpos.x,
+							"wz": bpos.z,
+						})
+
+	# 2. Batch apply block clearance & rebuild only unique sub-chunks
+	for c_coord_var in affected_chunks:
+		var c_coord: Vector2i = c_coord_var
+		if not _active_chunks.has(c_coord):
+			continue
+		var chunk: VoxelChunk = _active_chunks[c_coord]
+		var block_list: Array = affected_chunks[c_coord]
+		var sub_indices: Dictionary = {}
+		var neighbor_rebuild: Dictionary = {}
+
+		for b in block_list:
+			chunk.set_block_local(b["lx"], b["ly"], b["lz"], BlockRegistry.BlockId.AIR, false)
+			var sub_idx: int = clampi(b["ly"] / VoxelChunk.SUB_CHUNK_HEIGHT, 0, VoxelChunk.SUB_CHUNK_COUNT - 1)
+			sub_indices[sub_idx] = true
+
+			var local_sub_y: int = b["ly"] % VoxelChunk.SUB_CHUNK_HEIGHT
+			if local_sub_y == 0 and sub_idx > 0:
+				sub_indices[sub_idx - 1] = true
+			elif local_sub_y == VoxelChunk.SUB_CHUNK_HEIGHT - 1 and sub_idx < VoxelChunk.SUB_CHUNK_COUNT - 1:
+				sub_indices[sub_idx + 1] = true
+
+			# Neighbor chunk boundaries
+			if b["lx"] <= 1:
+				var n_coord: Vector2i = c_coord + Vector2i(-1, 0)
+				if not neighbor_rebuild.has(n_coord): neighbor_rebuild[n_coord] = {}
+				neighbor_rebuild[n_coord][sub_idx] = true
+			elif b["lx"] >= VoxelChunk.CHUNK_SIZE_X - 2:
+				var n_coord: Vector2i = c_coord + Vector2i(1, 0)
+				if not neighbor_rebuild.has(n_coord): neighbor_rebuild[n_coord] = {}
+				neighbor_rebuild[n_coord][sub_idx] = true
+
+			if b["lz"] <= 1:
+				var n_coord: Vector2i = c_coord + Vector2i(0, -1)
+				if not neighbor_rebuild.has(n_coord): neighbor_rebuild[n_coord] = {}
+				neighbor_rebuild[n_coord][sub_idx] = true
+			elif b["lz"] >= VoxelChunk.CHUNK_SIZE_Z - 2:
+				var n_coord: Vector2i = c_coord + Vector2i(0, 1)
+				if not neighbor_rebuild.has(n_coord): neighbor_rebuild[n_coord] = {}
+				neighbor_rebuild[n_coord][sub_idx] = true
+
+		# Single mirror buffer & storage update per affected chunk
+		var v_buf: PackedByteArray = chunk.get_voxels_buffer()
+		_mirror_mutex.lock()
+		_chunk_voxel_mirror[c_coord] = v_buf
+		_mirror_mutex.unlock()
+
+		_storage.store_modified_chunk(
+			c_coord,
+			v_buf,
+			chunk.get_highest_solid_y(),
+			false
+		)
+
+		# Rebuild unique sub-chunks in this chunk
+		chunk._ensure_child_nodes()
+		for s_idx in sub_indices.keys():
+			chunk._apply_single_sub_chunk(s_idx, chunk._build_single_sub_chunk_data(s_idx))
+
+		# Rebuild neighbor sub-chunks
+		for n_coord in neighbor_rebuild:
+			if _active_chunks.has(n_coord):
+				var n_chunk: VoxelChunk = _active_chunks[n_coord]
+				n_chunk._ensure_child_nodes()
+				for s_idx in neighbor_rebuild[n_coord].keys():
+					n_chunk._apply_single_sub_chunk(s_idx, n_chunk._build_single_sub_chunk_data(s_idx))
+
+	# 3. Spawn pooled drops (capped to max 8 to prevent physics entity lag)
+	var max_drops := mini(8, drop_candidates.size())
+	for i in range(max_drops):
+		var drop_item_id: int = drop_candidates[i]
+		var spawn_pos: Vector3 = center + Vector3(randf_range(-1.2, 1.2), randf_range(0.2, 1.2), randf_range(-1.2, 1.2))
+		DroppedItem.spawn_drop(self, spawn_pos, drop_item_id, 1)
+
+	# 4. Chain TNT
+	for tnt_pos in tnt_to_chain:
+		ignite_tnt_at(tnt_pos)
+
+	# 5. Entity Damage & Knockback to Player
+	if damage_player and _player != null and is_instance_valid(_player) and _player is PlayerController:
 		var p_ctrl := _player as PlayerController
-		var dist: float = p_ctrl.global_position.distance_to(Vector3(center) + Vector3(0.5, 0.5, 0.5))
-		if dist <= 6.0:
-			var dmg: int = maxi(2, int(round((6.0 - dist) * 2.4)))
+		var p_pos: Vector3 = p_ctrl.global_position if p_ctrl.is_inside_tree() else p_ctrl.position
+		var dist: float = p_pos.distance_to(center)
+		var max_dmg_dist: float = radius * 1.6
+		if dist <= max_dmg_dist:
+			var dmg: int = maxi(2, int(round((max_dmg_dist - dist) * 2.5)))
 			p_ctrl.take_damage(dmg)
-			p_ctrl.velocity += (p_ctrl.global_position - Vector3(center)).normalized() * 10.0 + Vector3(0.0, 6.0, 0.0)
+			var push_dir: Vector3 = (p_pos - center).normalized()
+			if push_dir.length_squared() < 0.01:
+				push_dir = Vector3.UP
+			p_ctrl.velocity += push_dir * 11.0 + Vector3(0.0, 5.5, 0.0)
+
+	# 6. Entity Damage & Knockback to nearby Mobs
+	var mobs: Array = get_tree().get_nodes_in_group("mobs") if get_tree() != null else []
+	for m in mobs:
+		if is_instance_valid(m) and m is PassiveMob:
+			var m_mob := m as PassiveMob
+			var m_pos: Vector3 = m_mob.global_position if m_mob.is_inside_tree() else m_mob.position
+			var m_dist: float = m_pos.distance_to(center)
+			if m_dist <= radius * 1.8:
+				var m_dmg: int = maxi(2, int(round((radius * 1.8 - m_dist) * 3.0)))
+				m_mob.on_hit_by_player(center, m_dmg)

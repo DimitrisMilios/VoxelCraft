@@ -60,6 +60,7 @@ func is_hostile() -> bool:
 
 
 func _ready() -> void:
+	add_to_group("mobs")
 	collision_layer = 4
 	collision_mask = 1
 	max_health = 20 if is_hostile() else 10
@@ -216,35 +217,14 @@ func _process_hostile_ai(delta: float) -> void:
 
 
 func _trigger_creeper_explosion() -> void:
-	if get_tree() != null:
-		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
-		if sfx != null and sfx.has_method("play_sfx_at_pos"):
-			sfx.play_sfx_at_pos("creeper_explode", global_position, 4.0, 1.0, 48.0)
-
-	if _world_manager != null:
-		var center := Vector3i(floori(global_position.x), floori(global_position.y + 0.5), floori(global_position.z))
-		for dy in range(-2, 3):
-			for dx in range(-2, 3):
-				for dz in range(-2, 3):
-					if dx * dx + dy * dy + dz * dz <= 4:
-						var bpos := center + Vector3i(dx, dy, dz)
-						if bpos.y > 1:
-							var bid: int = _world_manager.get_block_world(bpos)
-							if BlockRegistry.is_solid(bid):
-								_world_manager.set_block_world(bpos, BlockRegistry.BlockId.AIR)
-								if randf() < 0.25:
-									var drop_id: int = InventoryManager.get_dropped_item_for_block(bid, InventoryManager.ItemId.DIAMOND_PICKAXE)
-									if drop_id > 0:
-										DroppedItem.spawn_drop(_world_manager, Vector3(bpos) + Vector3(0.5, 0.5, 0.5), drop_id, 1)
-
-	if _player != null and is_instance_valid(_player):
-		var dist: float = global_position.distance_to(_player.global_position)
-		if dist <= 4.5:
-			var dmg: int = maxi(2, int(round((4.5 - dist) * 2.5)))
-			_player.take_damage(dmg)
-			var push: Vector3 = (_player.global_position - global_position).normalized() * 8.5 + Vector3(0.0, 5.0, 0.0)
-			_player.velocity += push
-
+	var boom_pos: Vector3 = global_position if is_inside_tree() else position
+	if _world_manager != null and _world_manager.has_method("create_explosion"):
+		_world_manager.create_explosion(boom_pos + Vector3(0.0, 0.4, 0.0), 2.4, false, true)
+	else:
+		if get_tree() != null:
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+			if sfx != null and sfx.has_method("play_sfx_at_pos"):
+				sfx.play_sfx_at_pos("creeper_explode", boom_pos, 4.0, 1.0, 48.0)
 	queue_free()
 
 

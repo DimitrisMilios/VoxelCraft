@@ -204,7 +204,7 @@ func _process(delta: float) -> void:
 
 	if _debug_label != null and _player != null:
 		var pos: Vector3 = _player.global_position
-		var chunk_coord: Vector2i = WorldManager.world_to_chunk_coords(pos)
+		var chunk_coord: Vector2i = _world_manager.world_to_chunk_coords(pos) if _world_manager != null else Vector2i.ZERO
 		var fps: int = Engine.get_frames_per_second()
 		var held_name: String = "Empty Hand"
 		if _interactor != null:
