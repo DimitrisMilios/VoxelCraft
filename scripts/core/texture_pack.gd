@@ -11,27 +11,51 @@ const ASSETS_PREFIX: String = "res://assets/"
 const PACK_ROOT: String = "res://assets/packs/faithful_64x/"
 
 
-## Returns the absolute filesystem path for `res_path`, preferring the texture pack override.
-static func resolve_abs_path(res_path: String) -> String:
+## Returns the best matching res:// path, preferring the texture pack override.
+static func resolve_res_path(res_path: String) -> String:
 	if res_path.begins_with(ASSETS_PREFIX) and not res_path.begins_with(PACK_ROOT):
 		var override_res: String = PACK_ROOT + res_path.substr(ASSETS_PREFIX.length())
-		var override_abs: String = ProjectSettings.globalize_path(override_res)
-		if FileAccess.file_exists(override_abs):
-			return override_abs
-	return ProjectSettings.globalize_path(res_path)
+		if ResourceLoader.exists(override_res) or FileAccess.file_exists(override_res):
+			return override_res
+	return res_path
 
 
-## Loads an Image from `res_path` (with local pack override). Returns null if missing.
+## Returns the absolute filesystem path for `res_path`, preferring the texture pack override.
+static func resolve_abs_path(res_path: String) -> String:
+	var path: String = resolve_res_path(res_path)
+	return ProjectSettings.globalize_path(path)
+
+
+## Loads an Image from `res_path` (with local pack override). Works both in editor and inside exported .pck.
 static func load_image(res_path: String) -> Image:
-	var abs_path: String = resolve_abs_path(res_path)
-	if not FileAccess.file_exists(abs_path):
-		return null
-	var img := Image.load_from_file(abs_path)
-	if img == null or img.is_empty():
-		return null
-	return img
+	var path: String = resolve_res_path(res_path)
+
+	# 1. ResourceLoader (already imported Texture2D)
+	if ResourceLoader.exists(path):
+		var res: Resource = ResourceLoader.load(path)
+		if res is Texture2D:
+			return (res as Texture2D).get_image()
+
+	# Fallback to direct res_path in ResourceLoader
+	if path != res_path and ResourceLoader.exists(res_path):
+		var res: Resource = ResourceLoader.load(res_path)
+		if res is Texture2D:
+			return (res as Texture2D).get_image()
+
+	# 2. FileAccess reading raw png bytes (works inside .pck and on loose filesystem)
+	for try_path in [path, res_path, ProjectSettings.globalize_path(path), ProjectSettings.globalize_path(res_path)]:
+		if FileAccess.file_exists(try_path):
+			var fa := FileAccess.open(try_path, FileAccess.READ)
+			if fa != null:
+				var bytes := fa.get_buffer(fa.get_length())
+				fa.close()
+				var img := Image.new()
+				if img.load_png_from_buffer(bytes) == OK and not img.is_empty():
+					return img
+
+	return null
 
 
 ## True when a local texture pack is installed.
 static func is_pack_active() -> bool:
-	return FileAccess.file_exists(ProjectSettings.globalize_path(PACK_ROOT + "pack_info.txt"))
+	return FileAccess.file_exists(PACK_ROOT + "pack_info.txt") or FileAccess.file_exists(ProjectSettings.globalize_path(PACK_ROOT + "pack_info.txt"))

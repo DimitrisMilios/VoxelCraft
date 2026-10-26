@@ -669,27 +669,45 @@ func _copy_destroy_stages() -> void:
 func _build_hud_and_gui_assets() -> void:
 	var hud_dir: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/ui/hud_icons/")
 	var gui_dir: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/ui/gui_panels/")
+	var fallback_hud_dir: String = ProjectSettings.globalize_path("res://assets/ui/hud_icons/")
+	var fallback_gui_dir: String = ProjectSettings.globalize_path("res://assets/ui/gui_panels/")
 
 	# 1. Hearts (composite container + full / half)
 	var heart_cont: Image = _load_faithful_image("gui/sprites/hud/heart/container.png")
 	var heart_full_fg: Image = _load_faithful_image("gui/sprites/hud/heart/full.png")
 	var heart_half_fg: Image = _load_faithful_image("gui/sprites/hud/heart/half.png")
-	_alpha_composite(heart_cont, heart_full_fg).save_png(hud_dir + "heart_full.png")
-	_alpha_composite(heart_cont, heart_half_fg).save_png(hud_dir + "heart_half.png")
+	var h_full: Image = _alpha_composite(heart_cont, heart_full_fg)
+	var h_half: Image = _alpha_composite(heart_cont, heart_half_fg)
+	h_full.save_png(hud_dir + "heart_full.png")
+	h_full.save_png(fallback_hud_dir + "heart_full.png")
+	h_half.save_png(hud_dir + "heart_half.png")
+	h_half.save_png(fallback_hud_dir + "heart_half.png")
 	heart_cont.save_png(hud_dir + "heart_empty.png")
+	heart_cont.save_png(fallback_hud_dir + "heart_empty.png")
 
 	# 2. Hunger Drumsticks (composite food_empty + food_full / food_half)
 	var food_cont: Image = _load_faithful_image("gui/sprites/hud/food_empty.png")
 	var food_full_fg: Image = _load_faithful_image("gui/sprites/hud/food_full.png")
 	var food_half_fg: Image = _load_faithful_image("gui/sprites/hud/food_half.png")
-	_alpha_composite(food_cont, food_full_fg).save_png(hud_dir + "hunger_full.png")
-	_alpha_composite(food_cont, food_half_fg).save_png(hud_dir + "hunger_half.png")
+	var f_full: Image = _alpha_composite(food_cont, food_full_fg)
+	var f_half: Image = _alpha_composite(food_cont, food_half_fg)
+	f_full.save_png(hud_dir + "hunger_full.png")
+	f_full.save_png(fallback_hud_dir + "hunger_full.png")
+	f_half.save_png(hud_dir + "hunger_half.png")
+	f_half.save_png(fallback_hud_dir + "hunger_half.png")
 	food_cont.save_png(hud_dir + "hunger_empty.png")
+	food_cont.save_png(fallback_hud_dir + "hunger_empty.png")
 
 	# 3. Oxygen Bubbles & Crosshair
-	_load_faithful_image("gui/sprites/hud/air.png").save_png(hud_dir + "bubble_full.png")
-	_load_faithful_image("gui/sprites/hud/air_bursting.png").save_png(hud_dir + "bubble_empty.png")
-	_load_faithful_image("gui/sprites/hud/crosshair.png").save_png(hud_dir + "crosshair.png")
+	var bub_full: Image = _load_faithful_image("gui/sprites/hud/air.png")
+	bub_full.save_png(hud_dir + "bubble_full.png")
+	bub_full.save_png(fallback_hud_dir + "bubble_full.png")
+	var bub_empty: Image = _load_faithful_image("gui/sprites/hud/air_bursting.png")
+	bub_empty.save_png(hud_dir + "bubble_empty.png")
+	bub_empty.save_png(fallback_hud_dir + "bubble_empty.png")
+	var cross: Image = _load_faithful_image("gui/sprites/hud/crosshair.png")
+	cross.save_png(hud_dir + "crosshair.png")
+	cross.save_png(fallback_hud_dir + "crosshair.png")
 
 	# 4. Armor Slot Silhouettes
 	_load_faithful_image("gui/sprites/container/slot/helmet.png").save_png(hud_dir + "armor_helmet.png")
@@ -700,29 +718,31 @@ func _build_hud_and_gui_assets() -> void:
 	# 5. GUI Slots, Selected Frame & Container Panel
 	var slot_norm: Image = _load_faithful_image("gui/sprites/container/slot.png")
 	slot_norm.save_png(gui_dir + "slot_normal.png")
+	slot_norm.save_png(fallback_gui_dir + "slot_normal.png")
 
 	# Selected slot frame: composite hotbar_selection over slot_normal
 	var sel_raw: Image = _load_faithful_image("gui/sprites/hud/hotbar_selection.png")
 	sel_raw.resize(72, 72, Image.INTERPOLATE_NEAREST)
 	var slot_sel: Image = _alpha_composite(slot_norm, sel_raw)
 	slot_sel.save_png(gui_dir + "slot_selected.png")
+	slot_sel.save_png(fallback_gui_dir + "slot_selected.png")
 
 	# Output slot: warm golden-trimmed Faithful slot
 	var slot_out: Image = _tint_image(slot_norm, Color(1.05, 0.96, 0.78, 1.0))
 	slot_out.save_png(gui_dir + "slot_output.png")
+	slot_out.save_png(fallback_gui_dir + "slot_output.png")
 
 	# Faithful 64x Hotbar strip
-	_load_faithful_image("gui/sprites/hud/hotbar.png").save_png(gui_dir + "hotbar_bg.png")
+	var hotbar: Image = _load_faithful_image("gui/sprites/hud/hotbar.png")
+	hotbar.save_png(gui_dir + "hotbar_bg.png")
+	hotbar.save_png(fallback_gui_dir + "hotbar_bg.png")
 
-	# Faithful 64x Stone-Grey Modal Dialog Panel (extracted from inventory.png outer 3D bevel frame)
+	# Faithful 64x Stone-Grey Modal Dialog Panel
 	var inv_sheet: Image = _load_faithful_image("gui/container/inventory.png")
 	var panel_bg := Image.create(128, 128, false, Image.FORMAT_RGBA8)
 	if inv_sheet.get_width() >= 704 and inv_sheet.get_height() >= 664:
-		# Top-left 16x16 corner (x=0..15, y=0..15), top-right (x=688..703, y=0..15),
-		# bottom-left (x=0..15, y=648..663), bottom-right (x=688..703, y=648..663)
 		var fill_col: Color = inv_sheet.get_pixel(32, 32)
 		panel_bg.fill(fill_col)
-		# Copy 16px 3D beveled borders from `inventory.png`
 		panel_bg.blit_rect(inv_sheet, Rect2i(0, 0, 64, 16), Vector2i(0, 0))
 		panel_bg.blit_rect(inv_sheet, Rect2i(640, 0, 64, 16), Vector2i(64, 0))
 		panel_bg.blit_rect(inv_sheet, Rect2i(0, 648, 64, 16), Vector2i(0, 112))
@@ -732,31 +752,53 @@ func _build_hud_and_gui_assets() -> void:
 	else:
 		panel_bg.fill(Color(0.77, 0.77, 0.77, 1.0))
 	panel_bg.save_png(gui_dir + "panel_bg.png")
+	panel_bg.save_png(fallback_gui_dir + "panel_bg.png")
+
 	# 6. Authentic Container Windows
 	var inv_full: Image = _load_faithful_image("gui/container/inventory.png")
 	inv_full.save_png(gui_dir + "container_inventory.png")
+	inv_full.save_png(fallback_gui_dir + "container_inventory.png")
 	var craft_full: Image = _load_faithful_image("gui/container/crafting_table.png")
 	craft_full.save_png(gui_dir + "container_crafting_table.png")
+	craft_full.save_png(fallback_gui_dir + "container_crafting_table.png")
 	var furn_full: Image = _load_faithful_image("gui/container/furnace.png")
 	furn_full.save_png(gui_dir + "container_furnace.png")
+	furn_full.save_png(fallback_gui_dir + "container_furnace.png")
 	var chest_full: Image = _load_faithful_image("gui/container/generic_54.png")
 	chest_full.save_png(gui_dir + "container_chest.png")
+	chest_full.save_png(fallback_gui_dir + "container_chest.png")
 	var furn_lit: Image = _load_faithful_image("gui/sprites/container/furnace/lit_progress.png")
 	furn_lit.save_png(gui_dir + "furnace_lit_progress.png")
+	furn_lit.save_png(fallback_gui_dir + "furnace_lit_progress.png")
 	var furn_burn: Image = _load_faithful_image("gui/sprites/container/furnace/burn_progress.png")
 	furn_burn.save_png(gui_dir + "furnace_burn_progress.png")
+	furn_burn.save_png(fallback_gui_dir + "furnace_burn_progress.png")
 
 	# 7. Authentic Buttons & Widget Sprites
-	_load_faithful_image("gui/sprites/widget/button.png").save_png(gui_dir + "button.png")
-	_load_faithful_image("gui/sprites/widget/button_highlighted.png").save_png(gui_dir + "button_highlighted.png")
-	_load_faithful_image("gui/sprites/widget/button_disabled.png").save_png(gui_dir + "button_disabled.png")
-	_load_faithful_image("gui/sprites/widget/slider.png").save_png(gui_dir + "slider.png")
-	_load_faithful_image("gui/sprites/widget/slider_handle.png").save_png(gui_dir + "slider_handle.png")
-	_load_faithful_image("gui/sprites/widget/text_field.png").save_png(gui_dir + "text_field.png")
+	var b_norm: Image = _load_faithful_image("gui/sprites/widget/button.png")
+	b_norm.save_png(gui_dir + "button.png")
+	b_norm.save_png(fallback_gui_dir + "button.png")
+	var b_hov: Image = _load_faithful_image("gui/sprites/widget/button_highlighted.png")
+	b_hov.save_png(gui_dir + "button_highlighted.png")
+	b_hov.save_png(fallback_gui_dir + "button_highlighted.png")
+	var b_dis: Image = _load_faithful_image("gui/sprites/widget/button_disabled.png")
+	b_dis.save_png(gui_dir + "button_disabled.png")
+	b_dis.save_png(fallback_gui_dir + "button_disabled.png")
+
+	var slider_img: Image = _load_faithful_image("gui/sprites/widget/slider.png")
+	slider_img.save_png(gui_dir + "slider.png")
+	slider_img.save_png(fallback_gui_dir + "slider.png")
+	var handle_img: Image = _load_faithful_image("gui/sprites/widget/slider_handle.png")
+	handle_img.save_png(gui_dir + "slider_handle.png")
+	handle_img.save_png(fallback_gui_dir + "slider_handle.png")
+	var tf_img: Image = _load_faithful_image("gui/sprites/widget/text_field.png")
+	tf_img.save_png(gui_dir + "text_field.png")
+	tf_img.save_png(fallback_gui_dir + "text_field.png")
 
 	# 8. Title Panorama Backdrop
 	var panorama: Image = _load_faithful_image("gui/title/background/panorama_0.png")
 	panorama.save_png(gui_dir + "title_panorama.png")
+	panorama.save_png(fallback_gui_dir + "title_panorama.png")
 
 	print("[Faithful64xBuilder] Saved Faithful 64x HUD & GUI textures.")
 

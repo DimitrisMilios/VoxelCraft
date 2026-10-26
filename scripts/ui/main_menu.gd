@@ -57,17 +57,25 @@ func _ready() -> void:
 
 
 func _build_ui() -> void:
-	# 1. Background Panorama
+	# 1. Background Panorama / Dirt
 	var bg := TextureRect.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	bg.texture = _load_gui_texture("title_panorama.png")
+	var pano_tex: Texture2D = _load_gui_texture("title_panorama.png")
+	if pano_tex != null:
+		bg.texture = pano_tex
+	else:
+		var dirt_img: Image = TexturePack.load_image("res://assets/textures/block/dirt.png")
+		if dirt_img != null:
+			bg.texture = ImageTexture.create_from_image(dirt_img)
+			bg.stretch_mode = TextureRect.STRETCH_TILE
+			bg.modulate = Color(0.35, 0.35, 0.35, 1.0)
 	add_child(bg)
 
 	var vignette := ColorRect.new()
 	vignette.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	vignette.color = Color(0.02, 0.04, 0.08, 0.55)
+	vignette.color = Color(0.02, 0.04, 0.08, 0.45)
 	add_child(vignette)
 
 	# 2. Views Container
@@ -86,53 +94,90 @@ func _style_faithful_button(btn: Button) -> void:
 	var tex_hover: Texture2D = _load_gui_texture("button_highlighted.png")
 	var tex_disabled: Texture2D = _load_gui_texture("button_disabled.png")
 
-	var sb_norm := StyleBoxTexture.new()
-	sb_norm.texture = tex_normal
-	sb_norm.texture_margin_left = 6.0
-	sb_norm.texture_margin_right = 6.0
-	sb_norm.texture_margin_top = 6.0
-	sb_norm.texture_margin_bottom = 6.0
-	sb_norm.set_content_margin_all(8.0)
+	if tex_normal != null:
+		var sb_norm := StyleBoxTexture.new()
+		sb_norm.texture = tex_normal
+		sb_norm.texture_margin_left = 6.0
+		sb_norm.texture_margin_right = 6.0
+		sb_norm.texture_margin_top = 6.0
+		sb_norm.texture_margin_bottom = 6.0
+		sb_norm.set_content_margin_all(8.0)
 
-	var sb_hov := StyleBoxTexture.new()
-	sb_hov.texture = tex_hover
-	sb_hov.texture_margin_left = 6.0
-	sb_hov.texture_margin_right = 6.0
-	sb_hov.texture_margin_top = 6.0
-	sb_hov.texture_margin_bottom = 6.0
-	sb_hov.set_content_margin_all(8.0)
+		var sb_hov := StyleBoxTexture.new()
+		sb_hov.texture = tex_hover if tex_hover != null else tex_normal
+		sb_hov.texture_margin_left = 6.0
+		sb_hov.texture_margin_right = 6.0
+		sb_hov.texture_margin_top = 6.0
+		sb_hov.texture_margin_bottom = 6.0
+		sb_hov.set_content_margin_all(8.0)
 
-	var sb_dis := StyleBoxTexture.new()
-	sb_dis.texture = tex_disabled
-	sb_dis.texture_margin_left = 6.0
-	sb_dis.texture_margin_right = 6.0
-	sb_dis.texture_margin_top = 6.0
-	sb_dis.texture_margin_bottom = 6.0
-	sb_dis.set_content_margin_all(8.0)
+		var sb_dis := StyleBoxTexture.new()
+		sb_dis.texture = tex_disabled if tex_disabled != null else tex_normal
+		sb_dis.texture_margin_left = 6.0
+		sb_dis.texture_margin_right = 6.0
+		sb_dis.texture_margin_top = 6.0
+		sb_dis.texture_margin_bottom = 6.0
+		sb_dis.set_content_margin_all(8.0)
 
-	btn.add_theme_stylebox_override("normal", sb_norm)
-	btn.add_theme_stylebox_override("hover", sb_hov)
-	btn.add_theme_stylebox_override("pressed", sb_hov)
-	btn.add_theme_stylebox_override("focus", sb_hov)
-	btn.add_theme_stylebox_override("disabled", sb_dis)
+		btn.add_theme_stylebox_override("normal", sb_norm)
+		btn.add_theme_stylebox_override("hover", sb_hov)
+		btn.add_theme_stylebox_override("pressed", sb_hov)
+		btn.add_theme_stylebox_override("focus", sb_hov)
+		btn.add_theme_stylebox_override("disabled", sb_dis)
+	else:
+		var sb_norm := StyleBoxFlat.new()
+		sb_norm.bg_color = Color(0.38, 0.38, 0.40, 1.0)
+		sb_norm.border_color = Color(0.65, 0.65, 0.68, 1.0)
+		sb_norm.border_width_left = 2
+		sb_norm.border_width_top = 2
+		sb_norm.border_width_right = 2
+		sb_norm.border_width_bottom = 3
+		sb_norm.set_content_margin_all(8.0)
+
+		var sb_hov := StyleBoxFlat.new()
+		sb_hov.bg_color = Color(0.50, 0.50, 0.60, 1.0)
+		sb_hov.border_color = Color(1.0, 1.0, 1.0, 1.0)
+		sb_hov.border_width_left = 2
+		sb_hov.border_width_top = 2
+		sb_hov.border_width_right = 2
+		sb_hov.border_width_bottom = 3
+		sb_hov.set_content_margin_all(8.0)
+
+		btn.add_theme_stylebox_override("normal", sb_norm)
+		btn.add_theme_stylebox_override("hover", sb_hov)
+		btn.add_theme_stylebox_override("pressed", sb_hov)
+		btn.add_theme_stylebox_override("focus", sb_hov)
+
 	btn.add_theme_color_override("font_color", Color(1, 1, 1, 1))
 	btn.add_theme_color_override("font_hover_color", Color(1, 1, 0.65, 1))
 	btn.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	btn.add_theme_constant_override("shadow_offset_x", 1)
 	btn.add_theme_constant_override("shadow_offset_y", 1)
-	btn.pressed.connect(_play_ui_click)
+	if not btn.pressed.is_connected(_play_ui_click):
+		btn.pressed.connect(_play_ui_click)
 
 
 func _style_panel_box(panel: PanelContainer) -> void:
 	var tex_panel: Texture2D = _load_gui_texture("panel_bg.png")
-	var sb := StyleBoxTexture.new()
-	sb.texture = tex_panel
-	sb.texture_margin_left = 12.0
-	sb.texture_margin_right = 12.0
-	sb.texture_margin_top = 12.0
-	sb.texture_margin_bottom = 12.0
-	sb.set_content_margin_all(16.0)
-	panel.add_theme_stylebox_override("panel", sb)
+	if tex_panel != null:
+		var sb := StyleBoxTexture.new()
+		sb.texture = tex_panel
+		sb.texture_margin_left = 12.0
+		sb.texture_margin_right = 12.0
+		sb.texture_margin_top = 12.0
+		sb.texture_margin_bottom = 12.0
+		sb.set_content_margin_all(18.0)
+		panel.add_theme_stylebox_override("panel", sb)
+	else:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.16, 0.18, 0.22, 0.94)
+		sb.border_color = Color(0.42, 0.45, 0.52, 1.0)
+		sb.border_width_left = 3
+		sb.border_width_top = 3
+		sb.border_width_right = 3
+		sb.border_width_bottom = 3
+		sb.set_content_margin_all(18.0)
+		panel.add_theme_stylebox_override("panel", sb)
 
 
 func _style_line_edit(line_edit: LineEdit) -> void:
@@ -486,16 +531,16 @@ func _build_options_view() -> void:
 	vbox.add_child(title)
 
 	_render_dist_label = Label.new()
-	_render_dist_label.text = "Render Distance: 5 Chunks"
+	_render_dist_label.text = "Render Distance: 10 Chunks (160m)"
 	vbox.add_child(_render_dist_label)
 
 	_render_dist_slider = HSlider.new()
-	_render_dist_slider.min_value = 2
-	_render_dist_slider.max_value = 8
+	_render_dist_slider.min_value = 3
+	_render_dist_slider.max_value = 16
 	_render_dist_slider.step = 1
-	_render_dist_slider.value = 5
+	_render_dist_slider.value = 10
 	_render_dist_slider.value_changed.connect(func(val: float) -> void:
-		_render_dist_label.text = "Render Distance: %d Chunks" % int(val)
+		_render_dist_label.text = "Render Distance: %d Chunks (%dm)" % [int(val), int(val) * 16]
 	)
 	vbox.add_child(_render_dist_slider)
 

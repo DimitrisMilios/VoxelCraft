@@ -105,17 +105,22 @@ static var _ui_tex_cache: Dictionary = {}
 static func load_ui_texture(res_path: String) -> Texture2D:
 	if _ui_tex_cache.has(res_path):
 		return _ui_tex_cache[res_path]
-	var abs_path: String = TexturePack.resolve_abs_path(res_path)
-	if FileAccess.file_exists(abs_path):
-		var img := Image.load_from_file(abs_path)
-		if img != null and not img.is_empty():
-			var tex := ImageTexture.create_from_image(img)
-			_ui_tex_cache[res_path] = tex
-			return tex
-	if ResourceLoader.exists(res_path):
-		var r_tex := load(res_path) as Texture2D
-		_ui_tex_cache[res_path] = r_tex
-		return r_tex
+	var path: String = TexturePack.resolve_res_path(res_path)
+	if ResourceLoader.exists(path):
+		var r_tex := ResourceLoader.load(path) as Texture2D
+		if r_tex != null:
+			_ui_tex_cache[res_path] = r_tex
+			return r_tex
+	if path != res_path and ResourceLoader.exists(res_path):
+		var r_tex := ResourceLoader.load(res_path) as Texture2D
+		if r_tex != null:
+			_ui_tex_cache[res_path] = r_tex
+			return r_tex
+	var img: Image = TexturePack.load_image(res_path)
+	if img != null and not img.is_empty():
+		var tex := ImageTexture.create_from_image(img)
+		_ui_tex_cache[res_path] = tex
+		return tex
 	_ui_tex_cache[res_path] = null
 	return null
 
