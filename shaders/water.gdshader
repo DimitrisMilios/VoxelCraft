@@ -1,26 +1,20 @@
 shader_type spatial;
 render_mode depth_draw_always, cull_back, specular_schlick_ggx;
 
-uniform vec4 shallow_color : source_color = vec4(0.24, 0.74, 0.82, 0.40);
-uniform vec4 deep_color : source_color = vec4(0.04, 0.30, 0.56, 0.90);
-uniform float depth_distance : hint_range(0.5, 20.0) = 5.5;
-uniform float beer_factor : hint_range(0.1, 5.0) = 1.25;
+uniform vec4 water_color : source_color = vec4(0.14, 0.54, 0.84, 0.68);
+uniform vec4 deep_color : source_color = vec4(0.04, 0.24, 0.52, 0.85);
 
 uniform sampler2D wave_normal_1 : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform sampler2D wave_normal_2 : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform vec2 wave_speed_1 = vec2(0.022, 0.014);
 uniform vec2 wave_speed_2 = vec2(-0.016, 0.024);
-uniform float wave_scale_1 = 0.18;
-uniform float wave_scale_2 = 0.32;
-uniform float normal_strength : hint_range(0.0, 2.0) = 0.85;
+uniform float wave_scale_1 = 0.20;
+uniform float wave_scale_2 = 0.35;
+uniform float normal_strength : hint_range(0.0, 2.0) = 0.80;
 
 uniform float roughness : hint_range(0.0, 1.0) = 0.04;
-uniform float metallic : hint_range(0.0, 1.0) = 0.05;
-uniform float specular : hint_range(0.0, 1.0) = 0.95;
-uniform float refraction_strength : hint_range(0.0, 0.1) = 0.02;
-
-uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
-uniform sampler2D depth_texture : hint_depth_texture, filter_linear_mipmap;
+uniform float metallic : hint_range(0.0, 1.0) = 0.06;
+uniform float specular : hint_range(0.0, 1.0) = 0.94;
 
 varying vec3 v_world_pos;
 
@@ -41,30 +35,16 @@ void fragment() {
 	vec3 wave_view = (VIEW_MATRIX * vec4(wave_perturb.x, 0.0, wave_perturb.y, 0.0)).xyz;
 	NORMAL = normalize(NORMAL + wave_view * normal_strength);
 
-	// Fast linear depth reconstruction for water absorption
-	float depth_raw = texture(depth_texture, SCREEN_UV).r;
-	vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, depth_raw);
-	vec4 view_pos = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
-	view_pos.xyz /= view_pos.w;
-	float linear_depth = -view_pos.z;
-	float water_depth = max(0.0, linear_depth - (-VERTEX.z));
-
-	float depth_factor = clamp(water_depth / depth_distance, 0.0, 1.0);
-	depth_factor = pow(depth_factor, beer_factor);
-
-	// Underwater terrain refraction with depth-attenuation
-	vec2 refr_offset = wave_perturb * refraction_strength * clamp(water_depth * 0.35, 0.0, 1.0);
-	vec3 refracted_screen = texture(screen_texture, SCREEN_UV + refr_offset).rgb;
-
-	// Fresnel reflection for glancing sun / sky highlights
+	// Fresnel reflection: glancing angles reflect light sky blue, top-down is crystal clear
 	float fresnel = clamp(1.0 - dot(NORMAL, VIEW), 0.0, 1.0);
-	fresnel = pow(fresnel, 4.0);
+	float fresnel_pow = pow(fresnel, 3.2);
 
-	vec4 water_col = mix(shallow_color, deep_color, depth_factor);
+	vec3 base_col = mix(water_color.rgb, deep_color.rgb, 0.35);
+	vec3 sky_reflection = vec3(0.68, 0.86, 1.0);
 
-	ALBEDO = mix(refracted_screen, water_col.rgb, water_col.a * (1.0 - fresnel * 0.4));
+	ALBEDO = mix(base_col, sky_reflection, fresnel_pow * 0.65);
 	ROUGHNESS = roughness;
 	METALLIC = metallic;
 	SPECULAR = specular;
-	ALPHA = 1.0;
+	ALPHA = clamp(water_color.a + fresnel_pow * 0.25, 0.0, 0.95);
 }

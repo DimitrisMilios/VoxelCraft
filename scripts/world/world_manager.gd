@@ -6,8 +6,8 @@ const GameSession = preload("res://scripts/core/game_session.gd")
 
 signal world_saved(saved_chunk_count: int)
 
-const WATER_TICK_INTERVAL: float = 0.12
-const MAX_WATER_SPREAD_PER_TICK: int = 48
+const WATER_TICK_INTERVAL: float = 0.25
+const MAX_WATER_SPREAD_PER_TICK: int = 8
 
 @export_group("World Generation")
 @export var world_seed: int = 2027
@@ -450,7 +450,7 @@ func is_position_illuminated_by_blocks(world_pos: Vector3, light_range: float = 
 	return false
 
 
-func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
+func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int = 2) -> bool:
 	if world_block_pos.y <= 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
 		return false
 
@@ -498,18 +498,26 @@ func set_block_world(world_block_pos: Vector3i, block_id: int) -> bool:
 		false
 	)
 
-	chunk.rebuild_at_local_y(world_block_pos.y)
+	if rebuild_mode == 2:
+		chunk.rebuild_at_local_y(world_block_pos.y)
 
-	# If near a chunk boundary (within 1 block for shared water corner vertices), rebuild neighbor sub-chunk
-	if lx <= 1 and _active_chunks.has(chunk_coord + Vector2i(-1, 0)):
-		(_active_chunks[chunk_coord + Vector2i(-1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
-	elif lx >= VoxelChunk.CHUNK_SIZE_X - 2 and _active_chunks.has(chunk_coord + Vector2i(1, 0)):
-		(_active_chunks[chunk_coord + Vector2i(1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
+		# If near a chunk boundary (within 1 block for shared water corner vertices), rebuild neighbor sub-chunk
+		if lx <= 1 and _active_chunks.has(chunk_coord + Vector2i(-1, 0)):
+			(_active_chunks[chunk_coord + Vector2i(-1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
+		elif lx >= VoxelChunk.CHUNK_SIZE_X - 2 and _active_chunks.has(chunk_coord + Vector2i(1, 0)):
+			(_active_chunks[chunk_coord + Vector2i(1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
 
-	if lz <= 1 and _active_chunks.has(chunk_coord + Vector2i(0, -1)):
-		(_active_chunks[chunk_coord + Vector2i(0, -1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
-	elif lz >= VoxelChunk.CHUNK_SIZE_Z - 2 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
-		(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
+		if lz <= 1 and _active_chunks.has(chunk_coord + Vector2i(0, -1)):
+			(_active_chunks[chunk_coord + Vector2i(0, -1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
+		elif lz >= VoxelChunk.CHUNK_SIZE_Z - 2 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
+			(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
+	elif rebuild_mode == 1:
+		chunk.rebuild_water_at_local_y(world_block_pos.y)
+
+	# Enqueue 6-connected neighborhood for finite 8-level water flow & drainage
+	_enqueue_water_neighborhood(world_block_pos)
+
+	return true
 
 	# Enqueue 6-connected neighborhood for finite 8-level water flow & drainage
 	_enqueue_water_neighborhood(world_block_pos)
@@ -688,6 +696,7 @@ func _process_water_flow(delta: float) -> void:
 
 	var updates: int = 0
 	var batch_size: int = mini(_water_flow_queue.size(), MAX_WATER_SPREAD_PER_TICK)
+	var dirty_water_chunks: Dictionary = {}
 
 	for _i in range(batch_size):
 		if _water_flow_queue.is_empty() or updates >= MAX_WATER_SPREAD_PER_TICK:
@@ -711,8 +720,41 @@ func _process_water_flow(delta: float) -> void:
 				var tgt_lvl: int = BlockRegistry.get_water_level(target_id)
 				if cur_id != BlockRegistry.BlockId.WATER_FALLING and tgt_lvl < cur_lvl and cur_lvl > 2:
 					next_id = BlockRegistry.make_flowing_water_id(maxi(tgt_lvl, cur_lvl - 2))
-				if set_block_world(pos, next_id):
+				if set_block_world(pos, next_id, 0): # Mode 0: Batch voxel change without immediate rebuild
 					updates += 1
+					var cx: int = floori(float(pos.x) / float(VoxelChunk.CHUNK_SIZE_X))
+					var cz: int = floori(float(pos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
+					var c_coord := Vector2i(cx, cz)
+					if _active_chunks.has(c_coord):
+						var ch: VoxelChunk = _active_chunks[c_coord]
+						if not dirty_water_chunks.has(ch):
+							dirty_water_chunks[ch] = {}
+						dirty_water_chunks[ch][pos.y] = true
+
+						var lx: int = posmod(pos.x, VoxelChunk.CHUNK_SIZE_X)
+						var lz: int = posmod(pos.z, VoxelChunk.CHUNK_SIZE_Z)
+						if lx <= 1 and _active_chunks.has(c_coord + Vector2i(-1, 0)):
+							var nb_ch: VoxelChunk = _active_chunks[c_coord + Vector2i(-1, 0)]
+							if not dirty_water_chunks.has(nb_ch):
+								dirty_water_chunks[nb_ch] = {}
+							dirty_water_chunks[nb_ch][pos.y] = true
+						elif lx >= VoxelChunk.CHUNK_SIZE_X - 2 and _active_chunks.has(c_coord + Vector2i(1, 0)):
+							var nb_ch: VoxelChunk = _active_chunks[c_coord + Vector2i(1, 0)]
+							if not dirty_water_chunks.has(nb_ch):
+								dirty_water_chunks[nb_ch] = {}
+							dirty_water_chunks[nb_ch][pos.y] = true
+
+						if lz <= 1 and _active_chunks.has(c_coord + Vector2i(0, -1)):
+							var nb_ch: VoxelChunk = _active_chunks[c_coord + Vector2i(0, -1)]
+							if not dirty_water_chunks.has(nb_ch):
+								dirty_water_chunks[nb_ch] = {}
+							dirty_water_chunks[nb_ch][pos.y] = true
+						elif lz >= VoxelChunk.CHUNK_SIZE_Z - 2 and _active_chunks.has(c_coord + Vector2i(0, 1)):
+							var nb_ch: VoxelChunk = _active_chunks[c_coord + Vector2i(0, 1)]
+							if not dirty_water_chunks.has(nb_ch):
+								dirty_water_chunks[nb_ch] = {}
+							dirty_water_chunks[nb_ch][pos.y] = true
+
 				if next_id != target_id:
 					_enqueue_water_pos(pos)
 				continue
@@ -748,6 +790,12 @@ func _process_water_flow(delta: float) -> void:
 				):
 					if _is_allowed_spread_direction(pos, d):
 						_enqueue_water_pos(nb)
+
+	# Batch-apply all dirty water subchunks in 0.05ms each without rebuilding trimesh collision
+	for ch in dirty_water_chunks.keys():
+		var y_dict: Dictionary = dirty_water_chunks[ch]
+		for y_val in y_dict.keys():
+			(ch as VoxelChunk).rebuild_water_at_local_y(int(y_val))
 
 
 ## Returns the 3D directional water current vector at `world_pos` (pointing downhill / toward corners & waterfalls).

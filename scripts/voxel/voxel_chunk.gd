@@ -676,6 +676,7 @@ func _build_desert_pyramid(ox: int, base_y: int, oz: int, _seed_val: int) -> voi
 func build_mesh_data() -> Dictionary:
 	var sub_results: Array[Dictionary] = []
 	var max_sub_idx: int = mini(_highest_solid_y / SUB_CHUNK_HEIGHT, SUB_CHUNK_COUNT - 1)
+	var lights: Array[Vector3i] = []
 
 	for sub_idx in range(SUB_CHUNK_COUNT):
 		if sub_idx <= max_sub_idx:
@@ -683,7 +684,25 @@ func build_mesh_data() -> Dictionary:
 		else:
 			sub_results.append({"mesh": null, "water_mesh": null, "shape": null})
 
-	return {"sub_chunks": sub_results}
+	# Pre-collect up to 3 surface / torch light emitters in background worker
+	var max_y: int = mini(_highest_solid_y + 1, CHUNK_SIZE_Y)
+	for ly in range(max_y):
+		if lights.size() >= 3:
+			break
+		for lx in range(CHUNK_SIZE_X):
+			if lights.size() >= 3:
+				break
+			for lz in range(CHUNK_SIZE_Z):
+				var bid: int = get_block_local(lx, ly, lz)
+				if bid == BlockRegistry.BlockId.TORCH or (bid == BlockRegistry.BlockId.LAVA and ly >= WATER_LEVEL - 4):
+					lights.append(Vector3i(lx, ly, lz))
+					if lights.size() >= 3:
+						break
+
+	return {
+		"sub_chunks": sub_results,
+		"lights": lights,
+	}
 
 
 ## Builds solid mesh, water mesh, and trimesh collision for a single 16x16x16 vertical slice.
@@ -716,22 +735,33 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 					var h11: float = _compute_water_corner_height(lx, ly, lz, 1, 1)
 					var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
 
-					if not BlockRegistry.is_liquid(_get_neighbor_id(lx, ly + 1, lz)):
+					var nb_top: int = _get_neighbor_id(lx, ly + 1, lz)
+					if not BlockRegistry.is_liquid(nb_top):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
 						water_faces += 1
-					if _get_neighbor_id(lx, ly - 1, lz) == BlockRegistry.BlockId.AIR:
+
+					var nb_bottom: int = _get_neighbor_id(lx, ly - 1, lz)
+					if not BlockRegistry.is_liquid(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
 						water_faces += 1
-					if _get_neighbor_id(lx + 1, ly, lz) == BlockRegistry.BlockId.AIR:
+
+					var nb_east: int = _get_neighbor_id(lx + 1, ly, lz)
+					if not BlockRegistry.is_liquid(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
 						water_faces += 1
-					if _get_neighbor_id(lx - 1, ly, lz) == BlockRegistry.BlockId.AIR:
+
+					var nb_west: int = _get_neighbor_id(lx - 1, ly, lz)
+					if not BlockRegistry.is_liquid(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
 						water_faces += 1
-					if _get_neighbor_id(lx, ly, lz + 1) == BlockRegistry.BlockId.AIR:
+
+					var nb_south: int = _get_neighbor_id(lx, ly, lz + 1)
+					if not BlockRegistry.is_liquid(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
 						water_faces += 1
-					if _get_neighbor_id(lx, ly, lz - 1) == BlockRegistry.BlockId.AIR:
+
+					var nb_north: int = _get_neighbor_id(lx, ly, lz - 1)
+					if not BlockRegistry.is_liquid(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
 						water_faces += 1
 					continue
@@ -826,7 +856,13 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 	var sub_chunks: Array = mesh_data.get("sub_chunks", [])
 	for sub_idx in range(mini(sub_chunks.size(), SUB_CHUNK_COUNT)):
 		_apply_single_sub_chunk(sub_idx, sub_chunks[sub_idx])
-	_sync_all_light_emitters()
+
+	# Fast light emitter attachment using precalculated worker lights
+	var pre_lights: Array = mesh_data.get("lights", [])
+	for l_pos in pre_lights:
+		var pos_i: Vector3i = l_pos as Vector3i
+		_update_light_emitter_at(pos_i, get_block_local(pos_i.x, pos_i.y, pos_i.z))
+
 	if not generated_loot_chests.is_empty() and is_inside_tree():
 		var inv := get_tree().get_first_node_in_group("inventory_manager") as InventoryManager
 		if inv != null:
@@ -844,6 +880,79 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 				parent_node.add_child(villager)
 				villager.global_position = spawn_pos
 		generated_villager_spawns.clear()
+
+
+## High-performance water-only mesh rebuild for dynamic fluid flow.
+## Skips solid mesh, tangents, and trimesh collision generation (0.05ms execution).
+func rebuild_water_at_local_y(ly: int) -> void:
+	_ensure_child_nodes()
+	var sub_idx: int = clampi(ly / SUB_CHUNK_HEIGHT, 0, SUB_CHUNK_COUNT - 1)
+	var wm: ArrayMesh = _build_single_sub_chunk_water_only(sub_idx)
+	_sub_water_meshes[sub_idx].mesh = wm
+	_sub_water_meshes[sub_idx].visible = (wm != null)
+
+	var local_sub_y: int = ly % SUB_CHUNK_HEIGHT
+	if local_sub_y == 0 and sub_idx > 0:
+		var wm_below: ArrayMesh = _build_single_sub_chunk_water_only(sub_idx - 1)
+		_sub_water_meshes[sub_idx - 1].mesh = wm_below
+		_sub_water_meshes[sub_idx - 1].visible = (wm_below != null)
+	elif local_sub_y == SUB_CHUNK_HEIGHT - 1 and sub_idx < SUB_CHUNK_COUNT - 1:
+		var wm_above: ArrayMesh = _build_single_sub_chunk_water_only(sub_idx + 1)
+		_sub_water_meshes[sub_idx + 1].mesh = wm_above
+		_sub_water_meshes[sub_idx + 1].visible = (wm_above != null)
+
+
+func _build_single_sub_chunk_water_only(sub_idx: int) -> ArrayMesh:
+	var st_water := SurfaceTool.new()
+	st_water.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var y_start: int = sub_idx * SUB_CHUNK_HEIGHT
+	var y_end: int = mini(y_start + SUB_CHUNK_HEIGHT, CHUNK_SIZE_Y)
+	var water_faces: int = 0
+
+	for ly in range(y_start, y_end):
+		for lx in range(CHUNK_SIZE_X):
+			for lz in range(CHUNK_SIZE_Z):
+				var block_id: int = get_block_local(lx, ly, lz)
+				if not BlockRegistry.is_liquid(block_id):
+					continue
+
+				var h00: float = _compute_water_corner_height(lx, ly, lz, -1, -1)
+				var h10: float = _compute_water_corner_height(lx, ly, lz, 1, -1)
+				var h11: float = _compute_water_corner_height(lx, ly, lz, 1, 1)
+				var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
+
+				var nb_top: int = _get_neighbor_id(lx, ly + 1, lz)
+				if not BlockRegistry.is_liquid(nb_top):
+					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
+					water_faces += 1
+
+				var nb_bottom: int = _get_neighbor_id(lx, ly - 1, lz)
+				if not BlockRegistry.is_liquid(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
+					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
+					water_faces += 1
+
+				var nb_east: int = _get_neighbor_id(lx + 1, ly, lz)
+				if not BlockRegistry.is_liquid(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
+					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
+					water_faces += 1
+
+				var nb_west: int = _get_neighbor_id(lx - 1, ly, lz)
+				if not BlockRegistry.is_liquid(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
+					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
+					water_faces += 1
+
+				var nb_south: int = _get_neighbor_id(lx, ly, lz + 1)
+				if not BlockRegistry.is_liquid(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
+					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
+					water_faces += 1
+
+				var nb_north: int = _get_neighbor_id(lx, ly, lz - 1)
+				if not BlockRegistry.is_liquid(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
+					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
+					water_faces += 1
+
+	return st_water.commit() if water_faces > 0 else null
 
 
 func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:

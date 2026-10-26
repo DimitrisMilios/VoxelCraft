@@ -51,6 +51,7 @@ func _play_ui_click() -> void:
 
 
 func _ready() -> void:
+	DisplayServer.window_set_title("VoxelCraft")
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	_build_ui()
 	_show_view(ViewState.TITLE)

@@ -100,6 +100,7 @@ var _damage_flash_alpha: float = 0.0
 
 
 func _ready() -> void:
+	DisplayServer.window_set_title("VoxelCraft")
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_load_blender_ui_textures()
 	_build_screen_tints()
