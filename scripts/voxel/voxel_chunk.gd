@@ -574,6 +574,7 @@ func _build_village_house(ox: int, base_y: int, oz: int, _seed_val: int) -> void
 	_set_voxel_raw(ox + 3, base_y + 1, oz + 3, BlockRegistry.BlockId.TORCH)
 	_set_voxel_raw(ox + 1, base_y + 1, oz + 5, BlockRegistry.BlockId.CRAFTING_TABLE)
 	_set_voxel_raw(ox + 5, base_y + 1, oz + 5, BlockRegistry.BlockId.BED)
+	_set_voxel_raw(ox + 5, base_y + 1, oz + 4, BlockRegistry.BlockId.BED_HEAD)
 	_set_voxel_raw(ox + 1, base_y + 1, oz + 1, BlockRegistry.BlockId.CHEST)
 	generated_loot_chests.append(Vector3i(world_origin_x + ox + 1, base_y + 1, world_origin_z + oz + 1))
 	generated_villager_spawns.append(Vector3(float(world_origin_x + ox + 3) + 0.5, float(base_y + 1) + 0.2, float(world_origin_z + oz + 3) + 0.5))
@@ -785,7 +786,7 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						BlockRegistry.BlockId.TORCH:
 							min_b = Vector3(0.40, 0.0, 0.40)
 							max_b = Vector3(0.60, 0.68, 0.60)
-						BlockRegistry.BlockId.BED:
+						BlockRegistry.BlockId.BED, BlockRegistry.BlockId.BED_HEAD:
 							min_b = Vector3(0.0, 0.0, 0.0)
 							max_b = Vector3(1.0, 0.56, 1.0)
 						BlockRegistry.BlockId.DOOR_CLOSED:

@@ -131,6 +131,8 @@ static func get_item_icon_texture(item_id: int) -> Texture2D:
 	var lookup_id: int = item_id
 	if lookup_id == BlockRegistry.BlockId.DOOR_OPEN:
 		lookup_id = BlockRegistry.BlockId.DOOR_CLOSED
+	elif lookup_id == BlockRegistry.BlockId.BED_HEAD:
+		lookup_id = BlockRegistry.BlockId.BED
 	elif BlockRegistry.is_liquid(lookup_id):
 		lookup_id = BlockRegistry.BlockId.WATER
 	if _icon_cache.has(lookup_id):
@@ -141,11 +143,18 @@ static func get_item_icon_texture(item_id: int) -> Texture2D:
 	return tex
 
 
-func _ready() -> void:
-	add_to_group("inventory_manager")
+func _init() -> void:
 	slots.resize(TOTAL_SLOTS)
 	for i in range(TOTAL_SLOTS):
 		slots[i] = {"id": 0, "count": 0}
+
+
+func _ready() -> void:
+	add_to_group("inventory_manager")
+	if slots.size() < TOTAL_SLOTS:
+		slots.resize(TOTAL_SLOTS)
+		for i in range(TOTAL_SLOTS):
+			slots[i] = {"id": 0, "count": 0}
 
 	set_crafting_grid_dimension(2)
 
@@ -307,7 +316,7 @@ static func get_attack_damage(item_id: int) -> int:
 
 
 static func is_placeable_block(item_id: int) -> bool:
-	return item_id > 0 and item_id < 100 and not BlockRegistry.is_liquid(item_id)
+	return item_id > 0 and item_id < 100 and not BlockRegistry.is_liquid(item_id) and item_id != BlockRegistry.BlockId.BED_HEAD
 
 
 static func get_tool_category(item_id: int) -> int:
@@ -654,7 +663,7 @@ static func get_item_color(item_id: int) -> Color:
 # ============================================================================
 
 func get_hotbar_slot(slot_idx: int) -> Dictionary:
-	if slot_idx < 0 or slot_idx >= HOTBAR_SIZE:
+	if slot_idx < 0 or slot_idx >= HOTBAR_SIZE or slot_idx >= slots.size():
 		return {"id": 0, "count": 0}
 	return slots[slot_idx]
 

@@ -363,8 +363,10 @@ func _on_hotbar_slot_changed(_slot_index: int, _block_id: int) -> void:
 func _on_station_opened(station_id: int) -> void:
 	if station_id == BlockRegistry.BlockId.CHEST:
 		play_sfx("door_open", -2.0)
-	elif station_id == BlockRegistry.BlockId.DOOR_CLOSED or station_id == BlockRegistry.BlockId.DOOR_OPEN:
+	elif station_id == BlockRegistry.BlockId.DOOR_OPEN:
 		play_sfx("door_open", -2.0)
+	elif station_id == BlockRegistry.BlockId.DOOR_CLOSED:
+		play_sfx("door_close", -3.0)
 	else:
 		play_sfx("door_close", -4.0)
 

@@ -508,12 +508,13 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 	_chunk_voxel_mirror[chunk_coord] = chunk.get_voxels_buffer()
 	_mirror_mutex.unlock()
 
-	_storage.store_modified_chunk(
-		chunk_coord,
-		chunk.get_voxels_buffer(),
-		chunk.get_highest_solid_y(),
-		false
-	)
+	if _storage != null:
+		_storage.store_modified_chunk(
+			chunk_coord,
+			chunk.get_voxels_buffer(),
+			chunk.get_highest_solid_y(),
+			false
+		)
 
 	if rebuild_mode == 2:
 		chunk.rebuild_at_local_y(world_block_pos.y)

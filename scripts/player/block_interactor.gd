@@ -272,10 +272,27 @@ func _complete_break_block() -> void:
 	if _world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.AIR):
 		if previous_id == BlockRegistry.BlockId.CHEST and _inventory != null:
 			_inventory.drop_chest_contents_at(_world_manager, broken_pos)
+		# Clean up partner door block if breaking top or bottom door
+		if previous_id == BlockRegistry.BlockId.DOOR_CLOSED or previous_id == BlockRegistry.BlockId.DOOR_OPEN:
+			for dy in [-1, 1]:
+				var adj: Vector3i = broken_pos + Vector3i(0, dy, 0)
+				var adj_id: int = _world_manager.get_block_world(adj)
+				if adj_id == BlockRegistry.BlockId.DOOR_CLOSED or adj_id == BlockRegistry.BlockId.DOOR_OPEN:
+					_world_manager.set_block_world(adj, BlockRegistry.BlockId.AIR)
+		# Clean up partner bed block if breaking foot or head of bed
+		elif previous_id == BlockRegistry.BlockId.BED or previous_id == BlockRegistry.BlockId.BED_HEAD:
+			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				var adj: Vector3i = broken_pos + d
+				var adj_id: int = _world_manager.get_block_world(adj)
+				if adj_id == BlockRegistry.BlockId.BED or adj_id == BlockRegistry.BlockId.BED_HEAD:
+					_world_manager.set_block_world(adj, BlockRegistry.BlockId.AIR)
+
 		var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if is_creative else equipped_id
 		var drop_id: int = InventoryManager.get_dropped_item_for_block(previous_id, effective_tool)
 		if drop_id == BlockRegistry.BlockId.DOOR_OPEN:
 			drop_id = BlockRegistry.BlockId.DOOR_CLOSED
+		elif drop_id == BlockRegistry.BlockId.BED_HEAD or previous_id == BlockRegistry.BlockId.BED_HEAD:
+			drop_id = BlockRegistry.BlockId.BED
 		if drop_id > 0:
 			DroppedItem.spawn_drop(
 				_world_manager,
@@ -423,7 +440,7 @@ func _try_interact_or_place_block() -> void:
 		return
 
 	# Right-clicking a Bed sets respawn point and sleeps through the night to Sunrise!
-	if targeted_id == BlockRegistry.BlockId.BED:
+	if targeted_id == BlockRegistry.BlockId.BED or targeted_id == BlockRegistry.BlockId.BED_HEAD:
 		if _player_body != null:
 			_player_body.set_respawn_bed_position(Vector3(target_block_pos))
 
@@ -498,7 +515,12 @@ func _try_interact_or_place_block() -> void:
 			var adj_id: int = _world_manager.get_block_world(adj)
 			if adj_id == BlockRegistry.BlockId.DOOR_CLOSED or adj_id == BlockRegistry.BlockId.DOOR_OPEN:
 				_world_manager.set_block_world(adj, next_door)
+		if next_door == BlockRegistry.BlockId.DOOR_OPEN:
+			station_opened.emit(BlockRegistry.BlockId.DOOR_OPEN)
+		else:
+			station_opened.emit(BlockRegistry.BlockId.DOOR_CLOSED)
 		mob_interacted.emit(false, 0)
+		_update_raycast_target()
 		return
 
 	# Right-clicking TNT ignites a 3-second flashing fuse & crater explosion!
@@ -535,6 +557,59 @@ func _try_interact_or_place_block() -> void:
 		if int(slot_data.get("count", 0)) <= 0:
 			return
 
+	# Special placement: Wooden Door (2 blocks tall)
+	if selected_item == BlockRegistry.BlockId.DOOR_CLOSED:
+		var top_door_pos: Vector3i = place_block_pos + Vector3i(0, 1, 0)
+		var top_blk: int = _world_manager.get_block_world(top_door_pos)
+		if top_blk != BlockRegistry.BlockId.AIR and not BlockRegistry.is_liquid(top_blk):
+			loot_notification.emit("Not enough space to place Door!")
+			return
+		if _player_body != null:
+			var player_pos: Vector3 = _player_body.global_position
+			var player_aabb := AABB(player_pos + Vector3(-0.32, 0.05, -0.32), Vector3(0.64, 1.72, 0.64))
+			if AABB(Vector3(place_block_pos), Vector3.ONE).intersects(player_aabb) or AABB(Vector3(top_door_pos), Vector3.ONE).intersects(player_aabb):
+				return
+		if _world_manager.set_block_world(place_block_pos, BlockRegistry.BlockId.DOOR_CLOSED):
+			_world_manager.set_block_world(top_door_pos, BlockRegistry.BlockId.DOOR_CLOSED)
+			if not is_creative and _inventory != null:
+				_inventory.consume_from_hotbar_slot(selected_slot, 1)
+			block_placed.emit(place_block_pos, BlockRegistry.BlockId.DOOR_CLOSED)
+			loot_notification.emit("Placed Wood Door!")
+			_update_raycast_target()
+		return
+
+	# Special placement: Bed (2 blocks long: Foot + Head)
+	if selected_item == BlockRegistry.BlockId.BED:
+		var fwd: Vector3i = _get_player_horizontal_facing()
+		var foot_pos: Vector3i = place_block_pos
+		var head_pos: Vector3i = place_block_pos + fwd
+		var head_blk: int = _world_manager.get_block_world(head_pos)
+		if head_blk != BlockRegistry.BlockId.AIR and not BlockRegistry.is_liquid(head_blk):
+			var found_valid: bool = false
+			for alt_dir in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				var alt_head: Vector3i = foot_pos + alt_dir
+				var alt_blk: int = _world_manager.get_block_world(alt_head)
+				if alt_blk == BlockRegistry.BlockId.AIR or BlockRegistry.is_liquid(alt_blk):
+					head_pos = alt_head
+					found_valid = true
+					break
+			if not found_valid:
+				loot_notification.emit("Not enough space to place Bed!")
+				return
+		if _player_body != null:
+			var player_pos: Vector3 = _player_body.global_position
+			var player_aabb := AABB(player_pos + Vector3(-0.32, 0.05, -0.32), Vector3(0.64, 1.72, 0.64))
+			if AABB(Vector3(foot_pos), Vector3.ONE).intersects(player_aabb) or AABB(Vector3(head_pos), Vector3.ONE).intersects(player_aabb):
+				return
+		if _world_manager.set_block_world(foot_pos, BlockRegistry.BlockId.BED):
+			_world_manager.set_block_world(head_pos, BlockRegistry.BlockId.BED_HEAD)
+			if not is_creative and _inventory != null:
+				_inventory.consume_from_hotbar_slot(selected_slot, 1)
+			block_placed.emit(foot_pos, BlockRegistry.BlockId.BED)
+			loot_notification.emit("Placed Bed!")
+			_update_raycast_target()
+		return
+
 	# Prevent placing a solid block directly intersecting the player's body capsule
 	if _player_body != null:
 		var block_aabb := AABB(Vector3(place_block_pos), Vector3.ONE)
@@ -552,6 +627,22 @@ func _try_interact_or_place_block() -> void:
 			_inventory.consume_from_hotbar_slot(selected_slot, 1)
 		block_placed.emit(placed_pos, selected_item)
 		_update_raycast_target()
+
+
+func _get_player_horizontal_facing() -> Vector3i:
+	var fwd := Vector3.FORWARD
+	if _raycast != null:
+		fwd = -_raycast.global_transform.basis.z
+	elif _player_body != null:
+		fwd = -_player_body.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.001:
+		return Vector3i(0, 0, 1)
+	fwd = fwd.normalized()
+	if absf(fwd.x) > absf(fwd.z):
+		return Vector3i(1, 0, 0) if fwd.x > 0.0 else Vector3i(-1, 0, 0)
+	else:
+		return Vector3i(0, 0, 1) if fwd.z > 0.0 else Vector3i(0, 0, -1)
 
 
 func _create_selection_wireframe() -> void:

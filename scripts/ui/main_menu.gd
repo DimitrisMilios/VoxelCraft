@@ -559,6 +559,43 @@ func _build_options_view() -> void:
 	)
 	vbox.add_child(fov_slider)
 
+	# Music Volume & Toggle
+	var music_mgr: Node = get_node_or_null("/root/MusicManager")
+	var music_row := HBoxContainer.new()
+	music_row.add_theme_constant_override("separation", 10)
+	vbox.add_child(music_row)
+
+	var music_lbl := Label.new()
+	var cur_vol: int = int((music_mgr.get_music_volume() * 100.0) if music_mgr != null else 65.0)
+	music_lbl.text = "Music Volume: %d%%" % cur_vol
+	music_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	music_row.add_child(music_lbl)
+
+	var music_toggle_btn := Button.new()
+	var is_on: bool = music_mgr.is_music_enabled() if music_mgr != null else true
+	music_toggle_btn.text = "Music: ON" if is_on else "Music: OFF"
+	music_toggle_btn.custom_minimum_size = Vector2(100, 32)
+	_style_faithful_button(music_toggle_btn)
+	music_row.add_child(music_toggle_btn)
+
+	var music_slider := HSlider.new()
+	music_slider.min_value = 0.0
+	music_slider.max_value = 1.0
+	music_slider.step = 0.05
+	music_slider.value = music_mgr.get_music_volume() if music_mgr != null else 0.65
+	music_slider.value_changed.connect(func(val: float) -> void:
+		music_lbl.text = "Music Volume: %d%%" % int(val * 100.0)
+		if music_mgr != null:
+			music_mgr.set_music_volume(val)
+	)
+	music_toggle_btn.pressed.connect(func() -> void:
+		if music_mgr != null:
+			var new_state: bool = not music_mgr.is_music_enabled()
+			music_mgr.set_music_enabled(new_state)
+			music_toggle_btn.text = "Music: ON" if new_state else "Music: OFF"
+	)
+	vbox.add_child(music_slider)
+
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 16)
 	vbox.add_child(spacer)

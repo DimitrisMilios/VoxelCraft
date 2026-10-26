@@ -47,6 +47,7 @@ enum BlockId {
 	OBSIDIAN = 43,
 	SUGAR_CANE = 44,
 	SEAGRASS = 45,
+	BED_HEAD = 46,
 }
 
 enum FaceDir {
@@ -106,7 +107,6 @@ static func is_solid(block_id: int) -> bool:
 static func is_passable_block(block_id: int) -> bool:
 	return (
 		block_id == BlockId.TORCH
-		or block_id == BlockId.DOOR_OPEN
 		or block_id == BlockId.LADDER
 		or block_id == BlockId.WHEAT_CROPS
 		or block_id == BlockId.POTATO_CROPS
@@ -122,6 +122,7 @@ static func is_opaque_full_cube(block_id: int) -> bool:
 	if (
 		block_id == BlockId.TORCH
 		or block_id == BlockId.BED
+		or block_id == BlockId.BED_HEAD
 		or block_id == BlockId.DOOR_CLOSED
 		or block_id == BlockId.DOOR_OPEN
 		or block_id == BlockId.LADDER
@@ -231,7 +232,7 @@ static func get_block_hardness(block_id: int) -> float:
 			return 0.35
 		BlockId.FARMLAND:
 			return 0.38
-		BlockId.LEAVES, BlockId.SNOW, BlockId.CACTUS, BlockId.BED:
+		BlockId.LEAVES, BlockId.SNOW, BlockId.CACTUS, BlockId.BED, BlockId.BED_HEAD:
 			return 0.24
 		BlockId.GRASS, BlockId.DIRT, BlockId.SAND, BlockId.LADDER:
 			return 0.38
@@ -295,7 +296,7 @@ static func get_block_name(block_id: int) -> String:
 			return "Chest"
 		BlockId.TORCH:
 			return "Torch"
-		BlockId.BED:
+		BlockId.BED, BlockId.BED_HEAD:
 			return "Bed"
 		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
 			return "Wood Door"
@@ -369,7 +370,7 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.72, 0.48, 0.20)
 		BlockId.TORCH:
 			return Color(1.0, 0.78, 0.24)
-		BlockId.BED:
+		BlockId.BED, BlockId.BED_HEAD:
 			return Color(0.86, 0.18, 0.22)
 		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
 			return Color(0.64, 0.46, 0.26)
@@ -464,7 +465,7 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 				return 20
 		BlockId.TORCH:
 			return 21
-		BlockId.BED:
+		BlockId.BED, BlockId.BED_HEAD:
 			return 22
 		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
 			return 23

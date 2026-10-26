@@ -1322,7 +1322,7 @@ func _build_pause_menu() -> void:
 	_pause_overlay.add_child(center)
 
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(380, 420)
+	card.custom_minimum_size = Vector2(380, 470)
 	var card_style := _make_blender_stylebox(_tex_panel_bg, 12.0)
 	card_style.set_content_margin_all(20)
 	card.add_theme_stylebox_override("panel", card_style)
@@ -1427,6 +1427,21 @@ func _build_pause_menu() -> void:
 			_pause_status_label.text = "Time set to %s" % _day_night.get_formatted_time()
 	)
 	vbox.add_child(time_btn)
+
+	var music_mgr: Node = get_node_or_null("/root/MusicManager")
+	var music_btn := Button.new()
+	var is_music_on: bool = music_mgr.is_music_enabled() if music_mgr != null else true
+	music_btn.text = "Background Music: %s" % ("ON" if is_music_on else "OFF")
+	music_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(music_btn)
+	music_btn.pressed.connect(func() -> void:
+		if music_mgr != null:
+			var new_state: bool = not music_mgr.is_music_enabled()
+			music_mgr.set_music_enabled(new_state)
+			music_btn.text = "Background Music: %s" % ("ON" if new_state else "OFF")
+			_pause_status_label.text = "Music %s" % ("ENABLED" if new_state else "DISABLED")
+	)
+	vbox.add_child(music_btn)
 
 	var save_btn := Button.new()
 	save_btn.text = "Save World to Disk (F6)"
