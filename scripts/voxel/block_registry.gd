@@ -44,6 +44,7 @@ enum BlockId {
 	WATER_FALLING = 38,
 	LAVA = 41,
 	POTATO_CROPS = 42,
+	OBSIDIAN = 43,
 }
 
 enum FaceDir {
@@ -135,6 +136,47 @@ static func is_liquid(block_id: int) -> bool:
 	)
 
 
+## True for water source/flowing/falling blocks only (excludes Lava).
+static func is_water(block_id: int) -> bool:
+	return (
+		block_id == BlockId.WATER
+		or (block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FALLING)
+	)
+
+
+static func is_water_source(block_id: int) -> bool:
+	return block_id == BlockId.WATER
+
+
+## Returns water level from 0 (not water) to 8 (full Source or Falling waterfall).
+static func get_water_level(block_id: int) -> int:
+	if block_id == BlockId.WATER or block_id == BlockId.WATER_FALLING:
+		return 8
+	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FLOW_7:
+		return block_id - BlockId.WATER_FLOW_1 + 1
+	return 0
+
+
+static func make_flowing_water_id(level: int) -> int:
+	if level <= 0:
+		return BlockId.AIR
+	if level >= 8:
+		return BlockId.WATER_FALLING
+	return BlockId.WATER_FLOW_1 + clampi(level, 1, 7) - 1
+
+
+## Returns normalized visual/physical height (0.0 to 1.0) of a water block at its center.
+static func get_water_height_ratio(block_id: int) -> float:
+	if block_id == BlockId.WATER_FALLING:
+		return 1.0
+	if block_id == BlockId.WATER:
+		return 0.875
+	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FLOW_7:
+		var lvl: int = block_id - BlockId.WATER_FLOW_1 + 1
+		return clampf(float(lvl) / 9.0, 0.11, 0.78)
+	return 0.0
+
+
 static func is_lava(block_id: int) -> bool:
 	return block_id == BlockId.LAVA
 
@@ -167,6 +209,7 @@ static func is_stone_Or_ore(block_id: int) -> bool:
 		or block_id == BlockId.GOLD_ORE
 		or block_id == BlockId.DIAMOND_ORE
 		or block_id == BlockId.FURNACE
+		or block_id == BlockId.OBSIDIAN
 	)
 
 
@@ -195,6 +238,8 @@ static func get_block_hardness(block_id: int) -> float:
 			return 1.75
 		BlockId.DIAMOND_ORE:
 			return 2.10
+		BlockId.OBSIDIAN:
+			return 4.50
 		_:
 			return 0.5
 
@@ -267,6 +312,8 @@ static func get_block_name(block_id: int) -> String:
 			return "Potatoes"
 		BlockId.LAVA:
 			return "Lava"
+		BlockId.OBSIDIAN:
+			return "Obsidian"
 		_:
 			return "Unknown"
 
@@ -335,6 +382,8 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.35, 0.65, 0.25)
 		BlockId.LAVA:
 			return Color(1.0, 0.38, 0.08)
+		BlockId.OBSIDIAN:
+			return Color(0.12, 0.08, 0.18)
 		_:
 			return Color.GRAY
 
@@ -438,6 +487,8 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 			return 39
 		BlockId.LAVA:
 			return 40
+		BlockId.OBSIDIAN:
+			return 41
 		_:
 			return 3
 

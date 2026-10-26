@@ -5,6 +5,8 @@ extends RefCounted
 static var _cached_material: StandardMaterial3D = null
 static var _cached_water_material: StandardMaterial3D = null
 static var _cached_texture: ImageTexture = null
+static var _cached_normal_texture: ImageTexture = null
+static var _cached_roughness_texture: ImageTexture = null
 
 
 static func get_shared_voxel_material() -> StandardMaterial3D:
@@ -15,8 +17,24 @@ static func get_shared_voxel_material() -> StandardMaterial3D:
 	material.albedo_texture = get_atlas_texture()
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	material.vertex_color_use_as_albedo = true
-	material.roughness = 0.95
+
+	# PBR Roughness map for tuned matte/gloss physical response
+	var rough_tex: ImageTexture = get_atlas_roughness_texture()
+	if rough_tex != null:
+		material.roughness = 1.0
+		material.roughness_texture = rough_tex
+		material.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_GREEN
+	else:
+		material.roughness = 0.85
 	material.metallic = 0.0
+
+	# PBR Normal texture for micro-surface bumps and stone cracks under dynamic lighting
+	var norm_tex: ImageTexture = get_atlas_normal_texture()
+	if norm_tex != null:
+		material.normal_enabled = true
+		material.normal_scale = 1.6
+		material.normal_texture = norm_tex
+
 	_cached_material = material
 	return _cached_material
 
@@ -103,6 +121,24 @@ static func get_atlas_texture() -> ImageTexture:
 
 	_cached_texture = ImageTexture.create_from_image(img)
 	return _cached_texture
+
+
+static func get_atlas_normal_texture() -> ImageTexture:
+	if _cached_normal_texture != null:
+		return _cached_normal_texture
+	var norm_img: Image = TexturePack.load_image("res://assets/textures/block_atlas_normal.png")
+	if norm_img != null and not norm_img.is_empty():
+		_cached_normal_texture = ImageTexture.create_from_image(norm_img)
+	return _cached_normal_texture
+
+
+static func get_atlas_roughness_texture() -> ImageTexture:
+	if _cached_roughness_texture != null:
+		return _cached_roughness_texture
+	var rough_img: Image = TexturePack.load_image("res://assets/textures/block_atlas_roughness.png")
+	if rough_img != null and not rough_img.is_empty():
+		_cached_roughness_texture = ImageTexture.create_from_image(rough_img)
+	return _cached_roughness_texture
 
 
 static func _paint_tile(

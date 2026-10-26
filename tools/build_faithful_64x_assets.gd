@@ -215,8 +215,6 @@ func _build_door_tile() -> Image:
 
 
 func _build_block_atlas() -> void:
-	var atlas := Image.create(ATLAS_COLS * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
-
 	var grass_tint := Color(0.475, 0.753, 0.353, 1.0)   # Authentic Minecraft Plains/Forest Grass tint (#79C05A)
 	var foliage_tint := Color(0.349, 0.682, 0.188, 1.0) # Authentic Minecraft Oak Foliage tint (#59AE30)
 
@@ -275,15 +273,176 @@ func _build_block_atlas() -> void:
 		_load_tile_64("block/wheat_stage7.png"),             # 38: Wheat Crops
 		_load_tile_64("block/potatoes_stage3.png"),          # 39: Potato Crops
 		_load_tile_64("block/lava_still.png"),               # 40: Lava
+		_load_tile_64("block/obsidian.png"),                 # 41: Obsidian
 	]
 
+	var atlas := Image.create(tiles.size() * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
 	for idx in range(tiles.size()):
 		atlas.blit_rect(tiles[idx], Rect2i(0, 0, TILE_SIZE, TILE_SIZE), Vector2i(idx * TILE_SIZE, 0))
 
 	var out_path: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/textures/block_atlas.png")
+	var fallback_path: String = ProjectSettings.globalize_path("res://assets/textures/block_atlas.png")
 	atlas.save_png(out_path)
-	print("[Faithful64xBuilder] Saved 36-tile 64x64 Block Atlas (2304x64) -> ", out_path)
+	atlas.save_png(fallback_path)
+	print("[Faithful64xBuilder] Saved %d-tile 64x64 Block Atlas (%dx64) -> %s" % [tiles.size(), tiles.size() * TILE_SIZE, out_path])
+
+	_build_normal_atlas(tiles)
+	_build_roughness_atlas(tiles)
 	_build_isometric_block_icons(tiles)
+
+
+func _generate_normal_tile(src: Image, bump_strength: float) -> Image:
+	var w: int = src.get_width()
+	var h: int = src.get_height()
+	var norm_img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var lum := PackedFloat32Array()
+	lum.resize(w * h)
+	for y in range(h):
+		for x in range(w):
+			var c: Color = src.get_pixel(x, y)
+			lum[y * w + x] = c.r * 0.299 + c.g * 0.587 + c.b * 0.114
+
+	for y in range(h):
+		var y_prev: int = (y - 1 + h) % h
+		var y_next: int = (y + 1) % h
+		for x in range(w):
+			var x_prev: int = (x - 1 + w) % w
+			var x_next: int = (x + 1) % w
+
+			var tl: float = lum[y_prev * w + x_prev]
+			var l: float = lum[y * w + x_prev]
+			var bl: float = lum[y_next * w + x_prev]
+			var tr: float = lum[y_prev * w + x_next]
+			var r: float = lum[y * w + x_next]
+			var br: float = lum[y_next * w + x_next]
+			var dx: float = ((tr + 2.0 * r + br) - (tl + 2.0 * l + bl)) * bump_strength
+
+			var t: float = lum[y_prev * w + x]
+			var b: float = lum[y_next * w + x]
+			var dy: float = ((bl + 2.0 * b + br) - (tl + 2.0 * t + tr)) * bump_strength
+
+			var n := Vector3(-dx, -dy, 1.0).normalized()
+			var col := Color(
+				n.x * 0.5 + 0.5,
+				n.y * 0.5 + 0.5,
+				n.z * 0.5 + 0.5,
+				1.0
+			)
+			norm_img.set_pixel(x, y, col)
+	return norm_img
+
+
+func _build_normal_atlas(tiles: Array[Image]) -> void:
+	var num_tiles: int = tiles.size()
+	var normal_atlas := Image.create(num_tiles * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
+	for idx in range(num_tiles):
+		var tile: Image = tiles[idx]
+		var strength: float = 2.4
+		match idx:
+			3, 8, 27: # Stone, Cobblestone, Mossy Cobble (deep cracks & stone bumps)
+				strength = 3.4
+			12, 13, 14, 15: # Ores (pronounced facets and mineral crevices)
+				strength = 3.6
+			4, 5, 9, 16, 17: # Wood bark, planks, workbench
+				strength = 2.6
+			26: # Sandstone
+				strength = 2.8
+			41: # Obsidian (volcanic glass fracture ridges)
+				strength = 3.2
+			0, 1, 2, 37: # Grass, Dirt, Farmland
+				strength = 2.0
+			6: # Leaves
+				strength = 1.8
+			10: # Snow
+				strength = 1.2
+			40: # Lava
+				strength = 1.4
+
+		var norm_tile := _generate_normal_tile(tile, strength)
+		normal_atlas.blit_rect(norm_tile, Rect2i(0, 0, TILE_SIZE, TILE_SIZE), Vector2i(idx * TILE_SIZE, 0))
+
+	var p1: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/textures/block_atlas_normal.png")
+	var p2: String = ProjectSettings.globalize_path("res://assets/textures/block_atlas_normal.png")
+	normal_atlas.save_png(p1)
+	normal_atlas.save_png(p2)
+	print("[Faithful64xBuilder] Saved PBR Normal Map Atlas (stone cracks, micro-surface depth) -> ", p1)
+
+
+func _generate_roughness_tile(src: Image, base_roughness: float, variation: float) -> Image:
+	var w: int = src.get_width()
+	var h: int = src.get_height()
+	var rough_img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	for y in range(h):
+		for x in range(w):
+			var c: Color = src.get_pixel(x, y)
+			var lum: float = c.r * 0.299 + c.g * 0.587 + c.b * 0.114
+			var r: float = clampf(base_roughness - (lum - 0.5) * variation, 0.05, 1.0)
+			rough_img.set_pixel(x, y, Color(r, r, r, 1.0))
+	return rough_img
+
+
+func _build_roughness_atlas(tiles: Array[Image]) -> void:
+	var num_tiles: int = tiles.size()
+	var rough_atlas := Image.create(num_tiles * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
+	for idx in range(num_tiles):
+		var tile: Image = tiles[idx]
+		var base_rough: float = 0.84
+		var variation: float = 0.12
+		match idx:
+			0, 1: # Grass
+				base_rough = 0.92
+				variation = 0.06
+			2, 37: # Dirt, Farmland
+				base_rough = 0.95
+				variation = 0.05
+			3, 8, 27: # Stone, Cobblestone, Mossy Cobble
+				base_rough = 0.82
+				variation = 0.15
+			4, 5, 9, 16, 17: # Wood log, planks, workbench
+				base_rough = 0.76
+				variation = 0.10
+			6: # Leaves
+				base_rough = 0.68
+				variation = 0.16
+			7, 26: # Sand, Sandstone
+				base_rough = 0.94
+				variation = 0.06
+			10: # Snow
+				base_rough = 0.45
+				variation = 0.12
+			11: # Glowstone
+				base_rough = 0.28
+				variation = 0.15
+			12: # Coal Ore
+				base_rough = 0.76
+				variation = 0.35
+			13: # Iron Ore
+				base_rough = 0.70
+				variation = 0.40
+			14: # Gold Ore
+				base_rough = 0.62
+				variation = 0.50
+			15: # Diamond Ore
+				base_rough = 0.55
+				variation = 0.55
+			36: # White Wool
+				base_rough = 0.98
+				variation = 0.02
+			40: # Lava
+				base_rough = 0.18
+				variation = 0.08
+			41: # Obsidian (glassy polish, high specular glint)
+				base_rough = 0.12
+				variation = 0.08
+
+		var rough_tile := _generate_roughness_tile(tile, base_rough, variation)
+		rough_atlas.blit_rect(rough_tile, Rect2i(0, 0, TILE_SIZE, TILE_SIZE), Vector2i(idx * TILE_SIZE, 0))
+
+	var p1: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/textures/block_atlas_roughness.png")
+	var p2: String = ProjectSettings.globalize_path("res://assets/textures/block_atlas_roughness.png")
+	rough_atlas.save_png(p1)
+	rough_atlas.save_png(p2)
+	print("[Faithful64xBuilder] Saved PBR Roughness Map Atlas (tuned matte/gloss levels) -> ", p1)
 
 
 func _render_iso_cube_icon(top_img: Image, left_img: Image, right_img: Image, height_scale: float = 1.0) -> Image:
@@ -381,8 +540,10 @@ func _build_isometric_block_icons(tiles: Array[Image]) -> void:
 		30: [38, 38, 38, 1.0], # Wheat Crop Block
 		40: [39, 39, 39, 1.0], # Potato Crop Block
 		41: [40, 40, 40, 0.88], # Lava Block
+		43: [41, 41, 41, 1.0],  # Obsidian Block
 	}
 
+	var fallback_icon_dir: String = ProjectSettings.globalize_path("res://assets/ui/item_icons/")
 	for block_id in block_icon_specs.keys():
 		var spec: Array = block_icon_specs[block_id]
 		var top_t: Image = tiles[int(spec[0])]
@@ -391,11 +552,13 @@ func _build_isometric_block_icons(tiles: Array[Image]) -> void:
 		var h_scale: float = float(spec[3])
 		var iso_icon: Image = _render_iso_cube_icon(top_t, left_t, right_t, h_scale)
 		iso_icon.save_png(icon_dir + ("item_%d.png" % int(block_id)))
+		iso_icon.save_png(fallback_icon_dir + ("item_%d.png" % int(block_id)))
 
 	# Water Block Icon (ID 9)
 	var water_icon: Image = _render_iso_cube_icon(water_tile, water_tile, water_tile, 0.88)
 	water_icon.save_png(icon_dir + "item_9.png")
-	print("[Faithful64xBuilder] Rendered 23 Isometric 3D Block Icons from Faithful 64x tiles.")
+	water_icon.save_png(fallback_icon_dir + "item_9.png")
+	print("[Faithful64xBuilder] Rendered 24 Isometric 3D Block Icons from Faithful 64x tiles.")
 
 
 func _build_water_texture() -> void:

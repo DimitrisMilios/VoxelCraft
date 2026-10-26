@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://c8v0x3lmain01"]
+[gd_scene load_steps=12 format=3 uid="uid://c8v0x3lmain01"]
 
 [ext_resource type="PackedScene" uid="uid://b6v0x3lplayer" path="res://scenes/player/player.tscn" id="1_player_scene"]
 [ext_resource type="Script" path="res://scripts/world/world_manager.gd" id="2_world_manager"]
@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://scripts/world/day_night_cycle.gd" id="5_day_night"]
 [ext_resource type="Script" path="res://scripts/voxel/voxel_particle_spawner.gd" id="6_particle_spawner"]
 [ext_resource type="Script" path="res://scripts/audio/retro_sfx_player.gd" id="7_retro_sfx"]
+[ext_resource type="Script" path="res://scripts/environment/zero_g_particles.gd" id="8_zero_g_particles"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_retro"]
 sky_top_color = Color(0.32, 0.58, 0.92, 1)
@@ -23,10 +24,33 @@ sky = SubResource("Sky_retro")
 ambient_light_source = 3
 ambient_light_color = Color(0.75, 0.8, 0.88, 1)
 ambient_light_sky_contribution = 0.5
-tonemap_mode = 2
+tonemap_mode = 3
+tonemap_exposure = 1.05
+tonemap_white = 1.0
+ssao_enabled = true
+ssao_radius = 1.6
+ssao_intensity = 2.4
+ssao_power = 1.5
+ssao_detail = 0.5
+ssao_horizon = 0.06
+ssao_sharpness = 0.98
+ssil_enabled = true
+ssil_radius = 5.0
+ssil_intensity = 1.2
+ssil_sharpness = 0.9
+ssil_normal_rejection = 1.0
+glow_enabled = true
+glow_intensity = 0.65
+glow_bloom = 0.12
 fog_enabled = true
 fog_light_color = Color(0.68, 0.84, 0.96, 1)
-fog_density = 0.004
+fog_density = 0.003
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.008
+volumetric_fog_albedo = Color(0.96, 0.88, 0.76, 1)
+volumetric_fog_anisotropy = 0.65
+volumetric_fog_length = 96.0
+volumetric_fog_ambient_inject = 0.08
 
 [node name="Main" type="Node3D"]
 
@@ -36,7 +60,16 @@ environment = SubResource("Environment_retro")
 [node name="SunLight" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.819152, -0.40558, 0.40558, 0, 0.707107, 0.707107, -0.573576, -0.579228, 0.579228, 0, 80, 0)
 shadow_enabled = true
-directional_shadow_max_distance = 120.0
+shadow_blur = 1.8
+directional_shadow_mode = 2
+directional_shadow_split_1 = 0.07
+directional_shadow_split_2 = 0.2
+directional_shadow_split_3 = 0.55
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 160.0
+directional_shadow_fade_start = 0.8
+light_energy = 1.35
+light_volumetric_fog_energy = 2.2
 
 [node name="DayNightCycle" type="Node" parent="."]
 script = ExtResource("5_day_night")
@@ -48,6 +81,10 @@ player_path = NodePath("../Player")
 
 [node name="VoxelParticleSpawner" type="Node3D" parent="."]
 script = ExtResource("6_particle_spawner")
+
+[node name="ZeroGGlowParticles" type="Node3D" parent="."]
+script = ExtResource("8_zero_g_particles")
+player_path = NodePath("../Player")
 
 [node name="RetroSfxPlayer" type="Node" parent="."]
 script = ExtResource("7_retro_sfx")

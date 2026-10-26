@@ -5,11 +5,11 @@ const GameSession = preload("res://scripts/core/game_session.gd")
 ## Press [T] to fast-forward time by +2.5 hours.
 
 @export var day_length_seconds: float = 360.0
-@export var start_hour: float = 9.5
+@export var start_hour: float = 17.5
 @export var sun_light_path: NodePath = NodePath("../SunLight")
 @export var world_env_path: NodePath = NodePath("../WorldEnvironment")
 
-var current_hour: float = 9.5
+var current_hour: float = 17.5
 var day_number: int = 1
 
 ## Normalized time of day (`0.0 .. 1.0`, where `0.25 = 06:00 Sunrise`, `0.50 = 12:00 Noon`, `0.75 = 18:00 Sunset`).
@@ -124,15 +124,17 @@ func _apply_lighting(hour: float) -> void:
 
 		if sun_height > 0.0:
 			var day_factor: float = clampf(sun_height, 0.0, 1.0)
-			_sun_light.light_energy = lerpf(0.25, 1.15, pow(day_factor, 0.6))
-			var sunset_color := Color(1.0, 0.62, 0.36)
-			var noon_color := Color(1.0, 0.98, 0.94)
-			_sun_light.light_color = sunset_color.lerp(noon_color, clampf(sun_height * 2.2, 0.0, 1.0))
+			_sun_light.light_energy = lerpf(0.55, 1.45, pow(day_factor, 0.6))
+			var golden_hour_color := Color(1.0, 0.72, 0.38)
+			var noon_color := Color(1.0, 0.98, 0.92)
+			_sun_light.light_color = golden_hour_color.lerp(noon_color, clampf(sun_height * 2.4 - 0.2, 0.0, 1.0))
+			_sun_light.light_volumetric_fog_energy = lerpf(2.6, 1.6, day_factor)
 		else:
 			# Moonlight at night
 			_sun_light.rotation = Vector3(-(sun_phase + PI), deg_to_rad(-32.0), 0.0)
-			_sun_light.light_energy = 0.18
+			_sun_light.light_energy = 0.22
 			_sun_light.light_color = Color(0.55, 0.68, 0.95)
+			_sun_light.light_volumetric_fog_energy = 1.0
 
 	if _world_env != null and _world_env.environment != null:
 		var env: Environment = _world_env.environment
@@ -150,6 +152,7 @@ func _apply_lighting(hour: float) -> void:
 
 		env.fog_light_color = horizon_col
 		env.ambient_light_color = Color(0.18, 0.22, 0.34).lerp(Color(0.75, 0.80, 0.88), daylight)
+		env.volumetric_fog_albedo = Color(0.12, 0.16, 0.30).lerp(Color(0.96, 0.88, 0.76), daylight).lerp(Color(1.0, 0.70, 0.45), twilight * 0.75)
 
 		if env.sky != null and env.sky.sky_material is ProceduralSkyMaterial:
 			var sky_mat := env.sky.sky_material as ProceduralSkyMaterial

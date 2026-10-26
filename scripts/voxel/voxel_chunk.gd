@@ -779,6 +779,8 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 					solid_faces += 1
 					col_faces += 1
 
+	if solid_faces > 0:
+		st_solid.generate_tangents()
 	var solid_mesh: ArrayMesh = st_solid.commit() if solid_faces > 0 else null
 	var col_mesh: ArrayMesh = st_col.commit() if col_faces > 0 else null
 	var water_mesh: ArrayMesh = st_water.commit() if water_faces > 0 else null
