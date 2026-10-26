@@ -36,7 +36,7 @@ static func get_shared_voxel_material() -> StandardMaterial3D:
 	var norm_tex: ImageTexture = get_atlas_normal_texture()
 	if norm_tex != null:
 		material.normal_enabled = true
-		material.normal_scale = 1.6
+		material.normal_scale = 0.25
 		material.normal_texture = norm_tex
 
 	_cached_material = material

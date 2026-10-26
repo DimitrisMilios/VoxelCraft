@@ -729,39 +729,39 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 				if block_id == BlockRegistry.BlockId.AIR:
 					continue
 
-				if BlockRegistry.is_liquid(block_id):
+				if BlockRegistry.is_water(block_id):
 					var h00: float = _compute_water_corner_height(lx, ly, lz, -1, -1)
 					var h10: float = _compute_water_corner_height(lx, ly, lz, 1, -1)
 					var h11: float = _compute_water_corner_height(lx, ly, lz, 1, 1)
 					var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
 
 					var nb_top: int = _get_neighbor_id(lx, ly + 1, lz)
-					if not BlockRegistry.is_liquid(nb_top):
+					if not BlockRegistry.is_water(nb_top):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
 						water_faces += 1
 
 					var nb_bottom: int = _get_neighbor_id(lx, ly - 1, lz)
-					if not BlockRegistry.is_liquid(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
+					if not BlockRegistry.is_water(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
 						water_faces += 1
 
 					var nb_east: int = _get_neighbor_id(lx + 1, ly, lz)
-					if not BlockRegistry.is_liquid(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
+					if not BlockRegistry.is_water(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
 						water_faces += 1
 
 					var nb_west: int = _get_neighbor_id(lx - 1, ly, lz)
-					if not BlockRegistry.is_liquid(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
+					if not BlockRegistry.is_water(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
 						water_faces += 1
 
 					var nb_south: int = _get_neighbor_id(lx, ly, lz + 1)
-					if not BlockRegistry.is_liquid(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
+					if not BlockRegistry.is_water(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
 						water_faces += 1
 
 					var nb_north: int = _get_neighbor_id(lx, ly, lz - 1)
-					if not BlockRegistry.is_liquid(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
+					if not BlockRegistry.is_water(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
 						water_faces += 1
 					continue
@@ -805,36 +805,43 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						col_faces += 6
 					continue
 
+				var is_passable: bool = BlockRegistry.is_passable_block(block_id)
 				if not _is_neighbor_solid(lx, ly + 1, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
-					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
 					solid_faces += 1
-					col_faces += 1
+					if not is_passable:
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id)
+						col_faces += 1
 				if not _is_neighbor_solid(lx, ly - 1, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
-					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
 					solid_faces += 1
-					col_faces += 1
+					if not is_passable:
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id)
+						col_faces += 1
 				if not _is_neighbor_solid(lx + 1, ly, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
-					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
 					solid_faces += 1
-					col_faces += 1
+					if not is_passable:
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id)
+						col_faces += 1
 				if not _is_neighbor_solid(lx - 1, ly, lz):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
-					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
 					solid_faces += 1
-					col_faces += 1
+					if not is_passable:
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id)
+						col_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz + 1):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
-					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
 					solid_faces += 1
-					col_faces += 1
+					if not is_passable:
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id)
+						col_faces += 1
 				if not _is_neighbor_solid(lx, ly, lz - 1):
 					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
-					_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
 					solid_faces += 1
-					col_faces += 1
+					if not is_passable:
+						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id)
+						col_faces += 1
 
 	if solid_faces > 0:
 		st_solid.generate_tangents()
@@ -914,7 +921,7 @@ func _build_single_sub_chunk_water_only(sub_idx: int) -> ArrayMesh:
 		for lx in range(CHUNK_SIZE_X):
 			for lz in range(CHUNK_SIZE_Z):
 				var block_id: int = get_block_local(lx, ly, lz)
-				if not BlockRegistry.is_liquid(block_id):
+				if not BlockRegistry.is_water(block_id):
 					continue
 
 				var h00: float = _compute_water_corner_height(lx, ly, lz, -1, -1)
@@ -923,32 +930,32 @@ func _build_single_sub_chunk_water_only(sub_idx: int) -> ArrayMesh:
 				var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
 
 				var nb_top: int = _get_neighbor_id(lx, ly + 1, lz)
-				if not BlockRegistry.is_liquid(nb_top):
+				if not BlockRegistry.is_water(nb_top):
 					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
 					water_faces += 1
 
 				var nb_bottom: int = _get_neighbor_id(lx, ly - 1, lz)
-				if not BlockRegistry.is_liquid(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
+				if not BlockRegistry.is_water(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
 					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
 					water_faces += 1
 
 				var nb_east: int = _get_neighbor_id(lx + 1, ly, lz)
-				if not BlockRegistry.is_liquid(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
+				if not BlockRegistry.is_water(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
 					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
 					water_faces += 1
 
 				var nb_west: int = _get_neighbor_id(lx - 1, ly, lz)
-				if not BlockRegistry.is_liquid(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
+				if not BlockRegistry.is_water(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
 					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
 					water_faces += 1
 
 				var nb_south: int = _get_neighbor_id(lx, ly, lz + 1)
-				if not BlockRegistry.is_liquid(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
+				if not BlockRegistry.is_water(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
 					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
 					water_faces += 1
 
 				var nb_north: int = _get_neighbor_id(lx, ly, lz - 1)
-				if not BlockRegistry.is_liquid(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
+				if not BlockRegistry.is_water(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
 					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
 					water_faces += 1
 

@@ -100,7 +100,7 @@ const EXTENDED_TILE_FALLBACK: Dictionary = {
 
 
 static func is_solid(block_id: int) -> bool:
-	return block_id != BlockId.AIR and not is_liquid(block_id)
+	return block_id != BlockId.AIR and not is_water(block_id)
 
 
 static func is_passable_block(block_id: int) -> bool:
@@ -112,6 +112,7 @@ static func is_passable_block(block_id: int) -> bool:
 		or block_id == BlockId.POTATO_CROPS
 		or block_id == BlockId.SUGAR_CANE
 		or block_id == BlockId.SEAGRASS
+		or block_id == BlockId.LAVA
 	)
 
 
