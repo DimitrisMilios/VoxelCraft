@@ -55,6 +55,7 @@ var is_on_ladder: bool = false
 var is_head_underwater: bool = false
 var water_submersion_depth: float = 0.0
 var water_flow_vector: Vector3 = Vector3.ZERO
+var inventory: InventoryManager = null
 var current_health: int = 20
 var current_hunger: int = 20
 var current_oxygen: int = 10
@@ -281,10 +282,17 @@ func _find_safe_bed_spawn_position(bed_pos: Vector3i) -> Dictionary:
 func take_damage(amount: int) -> void:
 	if is_flying or amount <= 0:
 		return
-	current_health = maxi(0, current_health - amount)
+
+	var final_damage: int = amount
+	var inv: InventoryManager = inventory if inventory != null else (get_tree().get_first_node_in_group("inventory_manager") as InventoryManager if is_inside_tree() and get_tree() != null else null)
+	if inv != null:
+		final_damage = inv.calculate_damage_mitigation(amount)
+		inv.damage_equipped_armor(1)
+
+	current_health = maxi(0, current_health - final_damage)
 	_hurt_roll = deg_to_rad(6.5)
 	_regen_timer = 0.0
-	player_damaged.emit(amount)
+	player_damaged.emit(final_damage)
 	health_changed.emit(current_health, max_health)
 
 	if current_health <= 0:

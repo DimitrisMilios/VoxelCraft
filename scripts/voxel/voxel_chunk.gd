@@ -1,5 +1,6 @@
 class_name VoxelChunk
 extends StaticBody3D
+const VoxelLighting = preload("res://scripts/world/voxel_lighting.gd")
 ## Represents a single 16 x 256 x 16 voxel chunk partitioned into sixteen 16 x 16 x 16
 ## vertical sub-chunks for fast localized remeshing on block break/place.
 
@@ -46,6 +47,8 @@ var _voxels: PackedByteArray = PackedByteArray()
 var _highest_solid_y: int = 0
 ## 4-bit nibble buffer (32,768 bytes) for block metadata (stairs orientation, wool colors, slabs, crops).
 var _metadata: PackedByteArray = PackedByteArray()
+## 4-bit dual-channel lighting buffer (65,536 bytes) storing [High: Skylight 0..15 | Low: Blocklight 0..15].
+var _lighting: PackedByteArray = PackedByteArray()
 
 var _sub_solid_meshes: Array[MeshInstance3D] = []
 var _sub_water_meshes: Array[MeshInstance3D] = []
@@ -1673,37 +1676,85 @@ func _emit_face(
 		var wc: Color = BlockRegistry.WOOL_COLORS[meta]
 		face_color = Color(shade * wc.r, shade * wc.g, shade * wc.b, 1.0)
 
+	var ao_lights: Array[float] = VoxelLighting.calculate_face_ao_and_lighting(self, lx, ly, lz, face_dir, block_id)
+
+	var c0 := Color(face_color.r * ao_lights[0], face_color.g * ao_lights[0], face_color.b * ao_lights[0], 1.0)
+	var c1 := Color(face_color.r * ao_lights[1], face_color.g * ao_lights[1], face_color.b * ao_lights[1], 1.0)
+	var c2 := Color(face_color.r * ao_lights[2], face_color.g * ao_lights[2], face_color.b * ao_lights[2], 1.0)
+	var c3 := Color(face_color.r * ao_lights[3], face_color.g * ao_lights[3], face_color.b * ao_lights[3], 1.0)
+
 	# Triangle 1: 0 -> 1 -> 2
 	st.set_normal(normal)
-	st.set_color(face_color)
+	st.set_color(c0)
 	st.set_uv(uvs[0])
 	st.add_vertex(verts[0])
 
 	st.set_normal(normal)
-	st.set_color(face_color)
+	st.set_color(c1)
 	st.set_uv(uvs[1])
 	st.add_vertex(verts[1])
 
 	st.set_normal(normal)
-	st.set_color(face_color)
+	st.set_color(c2)
 	st.set_uv(uvs[2])
 	st.add_vertex(verts[2])
 
 	# Triangle 2: 0 -> 2 -> 3
 	st.set_normal(normal)
-	st.set_color(face_color)
+	st.set_color(c0)
 	st.set_uv(uvs[0])
 	st.add_vertex(verts[0])
 
 	st.set_normal(normal)
-	st.set_color(face_color)
+	st.set_color(c2)
 	st.set_uv(uvs[2])
 	st.add_vertex(verts[2])
 
 	st.set_normal(normal)
-	st.set_color(face_color)
+	st.set_color(c3)
 	st.set_uv(uvs[3])
 	st.add_vertex(verts[3])
+
+
+func ensure_lighting_buffer() -> void:
+	if _lighting.is_empty():
+		_lighting.resize(CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z)
+
+
+func get_sky_light_local(lx: int, ly: int, lz: int) -> int:
+	if not is_in_bounds(lx, ly, lz):
+		return 15
+	if _lighting.is_empty():
+		return 15 if ly >= _highest_solid_y else 0
+	return (_lighting[_to_index(lx, ly, lz)] >> 4) & 0x0F
+
+
+func set_sky_light_local(lx: int, ly: int, lz: int, val: int) -> void:
+	if not is_in_bounds(lx, ly, lz):
+		return
+	ensure_lighting_buffer()
+	var idx := _to_index(lx, ly, lz)
+	var cur := _lighting[idx]
+	var blk := cur & 0x0F
+	var sky := clampi(val, 0, 15)
+	_lighting[idx] = ((sky << 4) | blk) & 0xFF
+
+
+func get_block_light_local(lx: int, ly: int, lz: int) -> int:
+	if not is_in_bounds(lx, ly, lz) or _lighting.is_empty():
+		return 0
+	return _lighting[_to_index(lx, ly, lz)] & 0x0F
+
+
+func set_block_light_local(lx: int, ly: int, lz: int, val: int) -> void:
+	if not is_in_bounds(lx, ly, lz):
+		return
+	ensure_lighting_buffer()
+	var idx := _to_index(lx, ly, lz)
+	var cur := _lighting[idx]
+	var sky := (cur >> 4) & 0x0F
+	var blk := clampi(val, 0, 15)
+	_lighting[idx] = ((sky << 4) | blk) & 0xFF
 
 
 func is_in_bounds(lx: int, ly: int, lz: int) -> bool:

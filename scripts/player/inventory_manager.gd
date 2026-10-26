@@ -8,6 +8,7 @@ const GameSession = preload("res://scripts/core/game_session.gd")
 
 signal inventory_updated()
 signal furnace_updated()
+signal armor_updated(total_defense_points: int)
 
 const HOTBAR_SIZE: int = 9
 const BACKPACK_SIZE: int = 27
@@ -132,6 +133,16 @@ enum ToolCategory {
 	HOE = 5,
 }
 
+enum ArmorSlot {
+	HELMET = 0,
+	CHESTPLATE = 1,
+	LEGGINGS = 2,
+	BOOTS = 3,
+}
+
+## 4 equipped armor slots (0: Helmet, 1: Chestplate, 2: Leggings, 3: Boots).
+var armor_slots: Array[Dictionary] = []
+
 ## 36 inventory slots (`0..8` hotbar, `9..35` main inventory). Each slot is `{"id": int, "count": int}`.
 var slots: Array[Dictionary] = []
 
@@ -219,9 +230,13 @@ static func get_item_icon_texture(item_id: int) -> Texture2D:
 
 
 func _init() -> void:
+	add_to_group("inventory_manager")
 	slots.resize(TOTAL_SLOTS)
 	for i in range(TOTAL_SLOTS):
 		slots[i] = {"id": 0, "count": 0}
+	armor_slots.resize(4)
+	for i in range(4):
+		armor_slots[i] = {"id": 0, "count": 0, "durability": -1}
 
 
 func _ready() -> void:
@@ -230,6 +245,10 @@ func _ready() -> void:
 		slots.resize(TOTAL_SLOTS)
 		for i in range(TOTAL_SLOTS):
 			slots[i] = {"id": 0, "count": 0}
+	if armor_slots.size() < 4:
+		armor_slots.resize(4)
+		for i in range(4):
+			armor_slots[i] = {"id": 0, "count": 0, "durability": -1}
 
 	set_crafting_grid_dimension(2)
 
@@ -245,6 +264,7 @@ func _ready() -> void:
 func serialize_state() -> Dictionary:
 	return {
 		"slots": slots.duplicate(true),
+		"armor_slots": armor_slots.duplicate(true),
 		"furnace_input": furnace_input.duplicate(true),
 		"furnace_fuel": furnace_fuel.duplicate(true),
 		"furnace_output": furnace_output.duplicate(true),
@@ -262,7 +282,18 @@ func deserialize_state(data: Dictionary) -> void:
 				slots[i] = {
 					"id": int(loaded_slots[i].get("id", 0)),
 					"count": int(loaded_slots[i].get("count", 0)),
+					"durability": int(loaded_slots[i].get("durability", -1)),
 				}
+	if data.has("armor_slots") and data["armor_slots"] is Array:
+		var loaded_armor: Array = data["armor_slots"]
+		for i in range(mini(4, loaded_armor.size())):
+			if loaded_armor[i] is Dictionary:
+				armor_slots[i] = {
+					"id": int(loaded_armor[i].get("id", 0)),
+					"count": int(loaded_armor[i].get("count", 0)),
+					"durability": int(loaded_armor[i].get("durability", -1)),
+				}
+		armor_updated.emit(get_total_defense_points())
 	if data.has("furnace_input") and data["furnace_input"] is Dictionary:
 		furnace_input = {
 			"id": int(data["furnace_input"].get("id", 0)),
@@ -510,6 +541,170 @@ static func get_max_durability(item_id: int) -> int:
 			return 430
 		_:
 			return 0
+
+
+## Returns true if the given item ID is wearable armor.
+static func is_armor_item(item_id: int) -> bool:
+	return get_armor_slot_type(item_id) != -1
+
+
+## Returns the authentic armor slot [0..3] (Helmet, Chestplate, Leggings, Boots) or -1 if not armor.
+static func get_armor_slot_type(item_id: int) -> int:
+	match item_id:
+		ItemId.LEATHER_HELMET, ItemId.IRON_HELMET, ItemId.GOLD_HELMET, ItemId.DIAMOND_HELMET:
+			return ArmorSlot.HELMET
+		ItemId.LEATHER_CHESTPLATE, ItemId.IRON_CHESTPLATE, ItemId.GOLD_CHESTPLATE, ItemId.DIAMOND_CHESTPLATE:
+			return ArmorSlot.CHESTPLATE
+		ItemId.LEATHER_LEGGINGS, ItemId.IRON_LEGGINGS, ItemId.GOLD_LEGGINGS, ItemId.DIAMOND_LEGGINGS:
+			return ArmorSlot.LEGGINGS
+		ItemId.LEATHER_BOOTS, ItemId.IRON_BOOTS, ItemId.GOLD_BOOTS, ItemId.DIAMOND_BOOTS:
+			return ArmorSlot.BOOTS
+		_:
+			return -1
+
+
+## Returns authentic Minecraft Beta 1.7.3 defense points provided by an armor piece.
+static func get_armor_defense_points(item_id: int) -> int:
+	match item_id:
+		ItemId.LEATHER_HELMET: return 1
+		ItemId.LEATHER_CHESTPLATE: return 3
+		ItemId.LEATHER_LEGGINGS: return 2
+		ItemId.LEATHER_BOOTS: return 1
+		ItemId.GOLD_HELMET: return 2
+		ItemId.GOLD_CHESTPLATE: return 5
+		ItemId.GOLD_LEGGINGS: return 3
+		ItemId.GOLD_BOOTS: return 1
+		ItemId.IRON_HELMET: return 2
+		ItemId.IRON_CHESTPLATE: return 6
+		ItemId.IRON_LEGGINGS: return 5
+		ItemId.IRON_BOOTS: return 2
+		ItemId.DIAMOND_HELMET: return 3
+		ItemId.DIAMOND_CHESTPLATE: return 8
+		ItemId.DIAMOND_LEGGINGS: return 6
+		ItemId.DIAMOND_BOOTS: return 3
+		_: return 0
+
+
+## Returns total defense points across all 4 equipped armor slots [0..20].
+func get_total_defense_points() -> int:
+	var total: int = 0
+	for i in range(mini(4, armor_slots.size())):
+		var aid: int = int(armor_slots[i].get("id", 0))
+		if aid > 0:
+			total += get_armor_defense_points(aid)
+	return clampi(total, 0, 20)
+
+
+## Calculates mitigated damage according to authentic Beta 1.7.3 4% mitigation per defense point.
+func calculate_damage_mitigation(incoming_damage: int) -> int:
+	if incoming_damage <= 0:
+		return 0
+	var points: int = get_total_defense_points()
+	if points <= 0:
+		return incoming_damage
+	var reduction: float = float(points) * 0.04
+	var mitigated: int = int(round(float(incoming_damage) * (1.0 - reduction)))
+	return maxi(1, mitigated)
+
+
+## Decrements durability of all equipped armor pieces when player takes damage.
+## Breaks pieces that reach 0 durability with tool break SFX.
+func damage_equipped_armor(damage_points: int = 1) -> void:
+	var any_broken: bool = false
+	for i in range(mini(4, armor_slots.size())):
+		var aid: int = int(armor_slots[i].get("id", 0))
+		if aid > 0:
+			var max_d: int = get_max_durability(aid)
+			var cur_d: int = int(armor_slots[i].get("durability", max_d))
+			cur_d -= damage_points
+			if cur_d <= 0:
+				armor_slots[i] = {"id": 0, "count": 0, "durability": -1}
+				any_broken = true
+			else:
+				armor_slots[i]["durability"] = cur_d
+	if any_broken:
+		if is_inside_tree() and get_tree() != null:
+			var sfx: Node = get_tree().get_first_node_in_group("retro_sfx")
+			if sfx != null and sfx.has_method("play_sfx"):
+				sfx.play_sfx("tool_break", 0.0)
+	armor_updated.emit(get_total_defense_points())
+	inventory_updated.emit()
+
+
+## Equips an armor piece into `slot_idx` [0..3], returning whatever was previously equipped in that slot.
+func equip_armor_piece(slot_idx: int, item_dict: Dictionary) -> Dictionary:
+	if slot_idx < 0 or slot_idx >= 4:
+		return item_dict
+	while armor_slots.size() < 4:
+		armor_slots.append({"id": 0, "count": 0, "durability": -1})
+	var prev: Dictionary = armor_slots[slot_idx].duplicate(true)
+	var new_item: Dictionary = item_dict.duplicate(true)
+	if new_item.get("id", 0) > 0 and int(new_item.get("durability", -1)) <= 0:
+		new_item["durability"] = get_max_durability(new_item["id"])
+	new_item["count"] = 1
+	armor_slots[slot_idx] = new_item
+	armor_updated.emit(get_total_defense_points())
+	inventory_updated.emit()
+	return prev
+
+
+## Unequips the armor piece at `slot_idx`, returning it and clearing the slot.
+func unequip_armor_piece(slot_idx: int) -> Dictionary:
+	if slot_idx < 0 or slot_idx >= armor_slots.size():
+		return {"id": 0, "count": 0, "durability": -1}
+	var prev: Dictionary = armor_slots[slot_idx].duplicate(true)
+	armor_slots[slot_idx] = {"id": 0, "count": 0, "durability": -1}
+	armor_updated.emit(get_total_defense_points())
+	inventory_updated.emit()
+	return prev
+
+
+## Handles mouse click on an armor slot widget in the inventory screen.
+func handle_armor_slot_click(slot_idx: int, _is_right_click: bool = false) -> void:
+	if slot_idx < 0 or slot_idx >= 4:
+		return
+	while armor_slots.size() < 4:
+		armor_slots.append({"id": 0, "count": 0, "durability": -1})
+
+	# Shift-Click un-equips item back to inventory/hotbar
+	if Input.is_key_pressed(KEY_SHIFT):
+		var cur_id: int = int(armor_slots[slot_idx].get("id", 0))
+		if cur_id > 0:
+			var cur_dur: int = int(armor_slots[slot_idx].get("durability", get_max_durability(cur_id)))
+			var unplaced: int = add_item_stack(cur_id, 1, cur_dur)
+			if unplaced == 0:
+				armor_slots[slot_idx] = {"id": 0, "count": 0, "durability": -1}
+				armor_updated.emit(get_total_defense_points())
+				inventory_updated.emit()
+		return
+
+	var cursor_id: int = int(cursor_stack.get("id", 0))
+	var slot_item: Dictionary = armor_slots[slot_idx]
+	var slot_id: int = int(slot_item.get("id", 0))
+
+	# If cursor holds an armor piece matching this slot
+	if cursor_id > 0 and get_armor_slot_type(cursor_id) == slot_idx:
+		var place_item: Dictionary = cursor_stack.duplicate(true)
+		place_item["count"] = 1
+		if slot_id > 0:
+			var prev: Dictionary = slot_item.duplicate(true)
+			armor_slots[slot_idx] = place_item
+			cursor_stack = prev
+		else:
+			armor_slots[slot_idx] = place_item
+			var remaining_cursor: int = int(cursor_stack.get("count", 1)) - 1
+			if remaining_cursor <= 0:
+				cursor_stack = {"id": 0, "count": 0, "durability": -1}
+			else:
+				cursor_stack["count"] = remaining_cursor
+		armor_updated.emit(get_total_defense_points())
+		inventory_updated.emit()
+	# If cursor is empty and slot has an armor piece, pick it up
+	elif cursor_id == 0 and slot_id > 0:
+		cursor_stack = slot_item.duplicate(true)
+		armor_slots[slot_idx] = {"id": 0, "count": 0, "durability": -1}
+		armor_updated.emit(get_total_defense_points())
+		inventory_updated.emit()
 
 
 ## Returns the item ID dropped when `broken_block_id` is broken with `equipped_item_id` (0 if unharvestable).
@@ -1333,7 +1528,23 @@ func click_inventory_slot(slot_idx: int, mouse_button: int) -> void:
 					inventory_updated.emit()
 					return
 
-			# 3. Default Hotbar <-> Backpack transfer
+			# 3. If neither Chest nor Furnace is open, and item is an Armor piece, Shift-Click equips it if the slot is empty!
+			if not is_chest_open and not is_furnace_open and is_armor_item(id):
+				var target_armor_slot: int = get_armor_slot_type(id)
+				if target_armor_slot >= 0 and target_armor_slot < 4:
+					while armor_slots.size() < 4:
+						armor_slots.append({"id": 0, "count": 0, "durability": -1})
+					if int(armor_slots[target_armor_slot].get("id", 0)) == 0:
+						armor_slots[target_armor_slot] = {"id": id, "count": 1, "durability": dur}
+						if cnt <= 1:
+							slots[slot_idx] = {"id": 0, "count": 0}
+						else:
+							slots[slot_idx]["count"] = cnt - 1
+						armor_updated.emit(get_total_defense_points())
+						inventory_updated.emit()
+						return
+
+			# 4. Default Hotbar <-> Backpack transfer
 			var rem: int = 0
 			if slot_idx < HOTBAR_SIZE:
 				rem = _insert_into_range(id, cnt, dur, HOTBAR_SIZE, TOTAL_SLOTS)

@@ -3,6 +3,7 @@ extends Node3D
 const GameSession = preload("res://scripts/core/game_session.gd")
 const FallingBlockClass = preload("res://scripts/entities/falling_block.gd")
 const TNTPrimedClass = preload("res://scripts/entities/tnt_primed.gd")
+const VoxelLighting = preload("res://scripts/world/voxel_lighting.gd")
 ## Manages endless procedural chunk generation, WorkerThreadPool background streaming,
 ## cross-chunk border face culling, cellular-automata water flow, and ChunkStorage persistence.
 
@@ -311,6 +312,8 @@ func _worker_build_chunk(coord: Vector2i) -> void:
 	else:
 		chunk.generate_terrain(_surface_noise, _cave_noise)
 
+	VoxelLighting.compute_chunk_lighting(chunk, self)
+
 	if _is_shutting_down:
 		return
 
@@ -381,6 +384,8 @@ func _spawn_chunk_immediate(coord: Vector2i) -> VoxelChunk:
 		chunk.load_from_buffer(saved_data["voxels"], int(saved_data["highest_y"]), saved_data.get("metadata", PackedByteArray()))
 	else:
 		chunk.generate_terrain(_surface_noise, _cave_noise)
+
+	VoxelLighting.compute_chunk_lighting(chunk, self)
 
 	_mirror_mutex.lock()
 	_chunk_voxel_mirror[coord] = chunk.get_voxels_buffer()
@@ -454,6 +459,49 @@ func get_block_world(world_block_pos: Vector3i) -> int:
 	var lz: int = posmod(world_block_pos.z, VoxelChunk.CHUNK_SIZE_Z)
 	var chunk: VoxelChunk = _active_chunks[chunk_coord]
 	return chunk.get_block_local(lx, world_block_pos.y, lz)
+
+
+func get_sky_light_world(world_block_pos: Vector3i) -> int:
+	if world_block_pos.y < 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
+		return 15
+	var cx: int = floori(float(world_block_pos.x) / float(VoxelChunk.CHUNK_SIZE_X))
+	var cz: int = floori(float(world_block_pos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
+	var chunk_coord := Vector2i(cx, cz)
+	if not _active_chunks.has(chunk_coord):
+		return 15
+	var lx: int = posmod(world_block_pos.x, VoxelChunk.CHUNK_SIZE_X)
+	var lz: int = posmod(world_block_pos.z, VoxelChunk.CHUNK_SIZE_Z)
+	var chunk: VoxelChunk = _active_chunks[chunk_coord]
+	return chunk.get_sky_light_local(lx, world_block_pos.y, lz)
+
+
+func get_block_light_world(world_block_pos: Vector3i) -> int:
+	if world_block_pos.y < 0 or world_block_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
+		return 0
+	var cx: int = floori(float(world_block_pos.x) / float(VoxelChunk.CHUNK_SIZE_X))
+	var cz: int = floori(float(world_block_pos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
+	var chunk_coord := Vector2i(cx, cz)
+	if not _active_chunks.has(chunk_coord):
+		return 0
+	var lx: int = posmod(world_block_pos.x, VoxelChunk.CHUNK_SIZE_X)
+	var lz: int = posmod(world_block_pos.z, VoxelChunk.CHUNK_SIZE_Z)
+	var chunk: VoxelChunk = _active_chunks[chunk_coord]
+	return chunk.get_block_light_local(lx, world_block_pos.y, lz)
+
+
+func get_effective_light_world(world_block_pos: Vector3i) -> int:
+	var sky: int = get_sky_light_world(world_block_pos)
+	var blk: int = get_block_light_world(world_block_pos)
+	var day_factor: float = 1.0
+	var dn: DayNightCycle = get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle if is_inside_tree() and get_tree() != null else null
+	if dn != null:
+		var t: float = dn.time_of_day
+		if t < 0.24 or t > 0.76:
+			day_factor = 0.22
+		else:
+			day_factor = clampf(sin((t - 0.24) / 0.52 * PI), 0.22, 1.0)
+	var eff_sky: int = int(round(float(sky) * day_factor))
+	return maxi(blk, eff_sky)
 
 
 ## Checks whether a world position is illuminated by any nearby light emitters (Torches, Glowstone, Lava, Furnaces).

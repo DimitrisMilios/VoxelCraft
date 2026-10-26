@@ -546,6 +546,24 @@ func _try_interact_or_place_block() -> void:
 			loot_notification.emit("Hunger & Health are already full!")
 		return
 
+	# Equipping Armor Piece directly from hotbar on Right-Click
+	if InventoryManager.is_armor_item(selected_item) and _inventory != null:
+		var is_station: bool = false
+		if has_target:
+			var t_id: int = _world_manager.get_block_world(target_block_pos)
+			if BlockRegistry.is_interactive_station(t_id) or t_id == BlockRegistry.BlockId.BED or t_id == BlockRegistry.BlockId.BED_HEAD or t_id == BlockRegistry.BlockId.DOOR_CLOSED or t_id == BlockRegistry.BlockId.DOOR_OPEN:
+				is_station = true
+		if not is_station:
+			var slot_type: int = InventoryManager.get_armor_slot_type(selected_item)
+			if slot_type >= 0:
+				var current_item: Dictionary = _inventory.slots[selected_slot].duplicate(true)
+				var prev_armor: Dictionary = _inventory.equip_armor_piece(slot_type, current_item)
+				_inventory.slots[selected_slot] = prev_armor
+				_inventory.inventory_updated.emit()
+				mob_interacted.emit(false, 0)
+				loot_notification.emit("Equipped %s!" % InventoryManager.get_item_name(selected_item))
+				return
+
 	# Empty Bucket: Ray-step along look direction to scoop up a Water or Lava Source block
 	if selected_item == InventoryManager.ItemId.BUCKET and _raycast != null:
 		var ray_origin: Vector3 = _raycast.global_position

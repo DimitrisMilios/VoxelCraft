@@ -34,6 +34,10 @@ var _heart_icons: Array[TextureRect] = []
 var _hunger_icons: Array[TextureRect] = []
 var _oxygen_icons: Array[TextureRect] = []
 var _oxygen_hbox: HBoxContainer = null
+var _armor_icons: Array[TextureRect] = []
+var _armor_hbox: HBoxContainer = null
+var _armor_slot_widgets: Array[Dictionary] = []
+var _armor_slot_placeholders: Array[Texture2D] = []
 
 # Cached Blender 5.2 UI & HUD Textures
 var _tex_panel_bg: Texture2D = null
@@ -48,6 +52,7 @@ var _tex_hunger_half: Texture2D = null
 var _tex_hunger_empty: Texture2D = null
 var _tex_bubble_full: Texture2D = null
 var _tex_bubble_empty: Texture2D = null
+var _tex_armor_icon: Texture2D = null
 
 var _debug_label: Label = null
 var _loot_label: Label = null
@@ -126,6 +131,13 @@ func _load_blender_ui_textures() -> void:
 	_tex_hunger_empty = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/hunger_empty.png")
 	_tex_bubble_full = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/bubble_full.png")
 	_tex_bubble_empty = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/bubble_empty.png")
+	_tex_armor_icon = InventoryManager.load_ui_texture("res://assets/ui/hud_icons/armor_chestplate.png")
+	_armor_slot_placeholders = [
+		InventoryManager.load_ui_texture("res://assets/ui/hud_icons/armor_helmet.png"),
+		InventoryManager.load_ui_texture("res://assets/ui/hud_icons/armor_chestplate.png"),
+		InventoryManager.load_ui_texture("res://assets/ui/hud_icons/armor_leggings.png"),
+		InventoryManager.load_ui_texture("res://assets/ui/hud_icons/armor_boots.png"),
+	]
 
 
 ## Loads a PNG UI texture (Faithful 64x HUD/GUI assets) via the shared InventoryManager cache.
@@ -238,12 +250,17 @@ func _bind_references() -> void:
 	_day_night = get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle
 	_inventory = get_tree().get_first_node_in_group("inventory_manager") as InventoryManager
 
-	if _world_manager != null:
+	if _world_manager != null and not _world_manager.world_saved.is_connected(_on_world_saved):
 		_world_manager.world_saved.connect(_on_world_saved)
 
 	if _inventory != null:
-		_inventory.inventory_updated.connect(_refresh_all_slot_visuals)
-		_inventory.furnace_updated.connect(_refresh_furnace_visuals)
+		if not _inventory.inventory_updated.is_connected(_refresh_all_slot_visuals):
+			_inventory.inventory_updated.connect(_refresh_all_slot_visuals)
+		if not _inventory.furnace_updated.is_connected(_refresh_furnace_visuals):
+			_inventory.furnace_updated.connect(_refresh_furnace_visuals)
+		if _inventory.has_signal("armor_updated") and not _inventory.armor_updated.is_connected(update_armor_bar):
+			_inventory.armor_updated.connect(update_armor_bar)
+		update_armor_bar(_inventory.get_total_defense_points())
 
 	if _player != null:
 		_player.health_changed.connect(_on_health_changed)
@@ -515,13 +532,37 @@ func _build_bottom_hud() -> void:
 	_loot_label.visible = false
 	root_vbox.add_child(_loot_label)
 
+	# Top Vitals Row: Left = 10 Armor Icons (above hearts) | Right = 10 Oxygen Bubbles (above hunger)
+	var top_vitals_row := HBoxContainer.new()
+	top_vitals_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	top_vitals_row.add_theme_constant_override("separation", 64)
+	top_vitals_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root_vbox.add_child(top_vitals_row)
+
+	_armor_hbox = HBoxContainer.new()
+	_armor_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	_armor_hbox.add_theme_constant_override("separation", 2)
+	_armor_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_armor_hbox.visible = false
+	top_vitals_row.add_child(_armor_hbox)
+
+	for i in range(HEART_COUNT):
+		var a_icon := TextureRect.new()
+		a_icon.custom_minimum_size = Vector2(20, 20)
+		a_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		a_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		a_icon.texture = _tex_armor_icon
+		a_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_armor_hbox.add_child(a_icon)
+		_armor_icons.append(a_icon)
+
 	# Underwater Oxygen Bubbles Bar (10 Blender-Rendered 3D Bubbles)
 	_oxygen_hbox = HBoxContainer.new()
 	_oxygen_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	_oxygen_hbox.add_theme_constant_override("separation", 3)
+	_oxygen_hbox.add_theme_constant_override("separation", 2)
 	_oxygen_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_oxygen_hbox.visible = false
-	root_vbox.add_child(_oxygen_hbox)
+	top_vitals_row.add_child(_oxygen_hbox)
 
 	for i in range(10):
 		var b_icon := TextureRect.new()
@@ -779,26 +820,15 @@ func _build_2x2_crafting_view() -> Control:
 	armor_vbox.columns = 2
 	armor_vbox.add_theme_constant_override("h_separation", 4)
 	armor_vbox.add_theme_constant_override("v_separation", 4)
-	var armor_icons: Array[String] = [
-		"res://assets/ui/hud_icons/armor_helmet.png",
-		"res://assets/ui/hud_icons/armor_chestplate.png",
-		"res://assets/ui/hud_icons/armor_leggings.png",
-		"res://assets/ui/hud_icons/armor_boots.png",
-	]
-	for armor_path in armor_icons:
-		var a_panel := PanelContainer.new()
-		a_panel.custom_minimum_size = Vector2(46, 46)
-		a_panel.add_theme_stylebox_override("panel", _make_blender_stylebox(_tex_slot_normal, 5.0))
-		var a_icon := TextureRect.new()
-		a_icon.custom_minimum_size = Vector2(30, 30)
-		a_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		a_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		a_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		a_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		a_icon.texture = _load_png_texture(armor_path)
-		a_icon.modulate = Color(1, 1, 1, 0.78)
-		a_panel.add_child(a_icon)
-		armor_vbox.add_child(a_panel)
+	_armor_slot_widgets.clear()
+	for i in range(4):
+		var slot_idx: int = i
+		var slot_ui: Dictionary = _create_interactive_slot_widget(46, 46, func(btn: int) -> void:
+			if _inventory != null:
+				_inventory.handle_armor_slot_click(slot_idx, btn == MOUSE_BUTTON_RIGHT)
+		)
+		armor_vbox.add_child(slot_ui["panel"])
+		_armor_slot_widgets.append(slot_ui)
 	hbox.add_child(armor_vbox)
 
 	# Player Avatar Preview Box
@@ -1185,6 +1215,80 @@ func _refresh_all_slot_visuals() -> void:
 	for i in range(mini(_chest_modal_slots.size(), c_slots.size())):
 		_paint_slot_widget(_chest_modal_slots[i], c_slots[i])
 
+	# 5. Refresh 4 Armor Slots
+	_refresh_armor_visuals()
+
+
+func update_armor_bar(total_defense_points: int) -> void:
+	if _armor_hbox == null:
+		return
+	if total_defense_points <= 0:
+		_armor_hbox.visible = false
+		return
+	_armor_hbox.visible = true
+	for i in range(_armor_icons.size()):
+		var pts: int = total_defense_points - (i * 2)
+		if pts >= 2:
+			_armor_icons[i].modulate = Color(1.0, 1.0, 1.0, 1.0)
+			_armor_icons[i].visible = true
+		elif pts == 1:
+			_armor_icons[i].modulate = Color(0.65, 0.85, 1.0, 0.72)
+			_armor_icons[i].visible = true
+		else:
+			_armor_icons[i].modulate = Color(0.20, 0.20, 0.20, 0.30)
+			_armor_icons[i].visible = true
+
+
+func _refresh_armor_visuals() -> void:
+	if _inventory == null or _armor_slot_widgets.is_empty():
+		return
+	for i in range(mini(4, _armor_slot_widgets.size())):
+		var w: Dictionary = _armor_slot_widgets[i]
+		var item: Dictionary = _inventory.armor_slots[i] if i < _inventory.armor_slots.size() else {}
+		var aid: int = int(item.get("id", 0))
+		var icon_rect: TextureRect = w.get("icon", null) as TextureRect
+		var swatch: ColorRect = w.get("swatch", null) as ColorRect
+		var label: Label = w.get("label", null) as Label
+		var dur_bar: ColorRect = w.get("dur_bar", null) as ColorRect
+		var panel: PanelContainer = w.get("panel", null) as PanelContainer
+
+		if aid > 0:
+			if panel != null:
+				panel.tooltip_text = InventoryManager.get_item_name(aid)
+			var tex: Texture2D = InventoryManager.get_item_icon_texture(aid)
+			if icon_rect != null:
+				if tex != null:
+					icon_rect.texture = tex
+					icon_rect.visible = true
+					icon_rect.modulate = Color(1, 1, 1, 1.0)
+					if swatch != null: swatch.visible = false
+				else:
+					icon_rect.visible = false
+					if swatch != null:
+						swatch.visible = true
+						swatch.color = InventoryManager.get_item_color(aid)
+			if dur_bar != null:
+				_update_durability_bar(dur_bar, aid, int(item.get("durability", -1)), 38.0)
+			if label != null:
+				label.text = ""
+		else:
+			if panel != null:
+				panel.tooltip_text = ""
+			if icon_rect != null:
+				if i < _armor_slot_placeholders.size() and _armor_slot_placeholders[i] != null:
+					icon_rect.texture = _armor_slot_placeholders[i]
+					icon_rect.visible = true
+					icon_rect.modulate = Color(1, 1, 1, 0.40)
+				else:
+					icon_rect.texture = null
+					icon_rect.visible = false
+			if swatch != null:
+				swatch.visible = false
+			if dur_bar != null:
+				dur_bar.visible = false
+			if label != null:
+				label.text = ""
+
 
 func _refresh_furnace_visuals() -> void:
 	if _inventory == null or _furnace_in_slot.is_empty():
@@ -1383,7 +1487,7 @@ func _build_pause_menu() -> void:
 	)
 	vbox.add_child(slider)
 
-	var sun: DirectionalLight3D = get_tree().root.find_child("SunLight", true, false) as DirectionalLight3D
+	var sun: DirectionalLight3D = get_tree().root.find_child("SunLight", true, false) as DirectionalLight3D if is_inside_tree() and get_tree() != null and get_tree().root != null else null
 	var shadow_btn := Button.new()
 	var shadow_state: bool = sun.shadow_enabled if sun != null else true
 	shadow_btn.text = "Dynamic Shadows: %s" % ("ON" if shadow_state else "OFF (Fastest)")
@@ -1437,7 +1541,7 @@ func _build_pause_menu() -> void:
 	)
 	vbox.add_child(time_btn)
 
-	var music_mgr: Node = get_node_or_null("/root/MusicManager")
+	var music_mgr: Node = get_node_or_null("/root/MusicManager") if is_inside_tree() else null
 	var music_btn := Button.new()
 	var is_music_on: bool = music_mgr.is_music_enabled() if music_mgr != null else true
 	music_btn.text = "Background Music: %s" % ("ON" if is_music_on else "OFF")
