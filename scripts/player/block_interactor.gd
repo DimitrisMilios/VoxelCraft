@@ -1,5 +1,7 @@
 class_name BlockInteractor
 extends Node3D
+const FallingBlockClass = preload("res://scripts/entities/falling_block.gd")
+const ArrowProjectileClass = preload("res://scripts/entities/arrow_projectile.gd")
 ## Handles raycast block targeting, authentic Minecraft tool-tier mining mechanics,
 ## 9-slot hotbar selection (keys 1-9), block placement from inventory stacks,
 ## and opening the Player 2x2 Inventory (E), 3x3 Crafting Table, or Furnace Oven.
@@ -20,6 +22,8 @@ var has_target: bool = false
 var target_block_pos: Vector3i = Vector3i.ZERO
 var place_block_pos: Vector3i = Vector3i.ZERO
 var mining_progress: float = 0.0
+var is_drawing_bow: bool = false
+var bow_draw_time: float = 0.0
 
 var _raycast: RayCast3D = null
 var _player_body: PlayerController = null
@@ -58,6 +62,7 @@ func _on_inventory_updated() -> void:
 func _process(delta: float) -> void:
 	_update_raycast_target()
 	_process_continuous_mining(delta)
+	_process_bow_draw(delta)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -95,19 +100,88 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toss_selected_item()
 
 	# Mouse buttons & scroll wheel
-	if event is InputEventMouseButton and event.pressed:
-		match event.button_index:
-			MOUSE_BUTTON_LEFT:
-				_on_left_click_pressed()
-			MOUSE_BUTTON_RIGHT:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_on_left_click_pressed()
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			if event.pressed:
+				var held_item: int = get_selected_item_id()
+				if held_item == InventoryManager.ItemId.BOW:
+					var is_creative: bool = _player_body != null and _player_body.is_flying
+					var arrow_count: int = _inventory.get_total_count(InventoryManager.ItemId.ARROW) if _inventory != null else 0
+					if is_creative or arrow_count > 0:
+						is_drawing_bow = true
+						bow_draw_time = 0.0
+						return
+					else:
+						loot_notification.emit("No Arrows in inventory!")
+						return
 				_try_interact_or_place_block()
-			MOUSE_BUTTON_WHEEL_UP:
-				select_slot(posmod(selected_slot - 1, InventoryManager.HOTBAR_SIZE))
-			MOUSE_BUTTON_WHEEL_DOWN:
-				select_slot(posmod(selected_slot + 1, InventoryManager.HOTBAR_SIZE))
+			else:
+				# Right click released: fire bow if drawn
+				if is_drawing_bow:
+					_fire_bow()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			select_slot(posmod(selected_slot - 1, InventoryManager.HOTBAR_SIZE))
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			select_slot(posmod(selected_slot + 1, InventoryManager.HOTBAR_SIZE))
+
+
+func _process_bow_draw(delta: float) -> void:
+	if not is_drawing_bow:
+		return
+	var held_item: int = get_selected_item_id()
+	if held_item != InventoryManager.ItemId.BOW or Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED or not Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		_fire_bow()
+		return
+	bow_draw_time = minf(bow_draw_time + delta, 1.0)
+
+
+func _fire_bow() -> void:
+	if not is_drawing_bow:
+		return
+	is_drawing_bow = false
+
+	var charge: float = clampf(bow_draw_time / 0.8, 0.15, 1.0)
+	bow_draw_time = 0.0
+
+	var is_creative: bool = _player_body != null and _player_body.is_flying
+	if not is_creative and _inventory != null:
+		var has_arrow: bool = _inventory.consume_item_anywhere(InventoryManager.ItemId.ARROW, 1)
+		if not has_arrow:
+			loot_notification.emit("No Arrows in inventory!")
+			return
+		if _inventory.damage_hotbar_tool(selected_slot, 1):
+			loot_notification.emit("Your Bow broke!")
+
+	var eye_pos: Vector3 = Vector3.ZERO
+	var look_dir := Vector3.FORWARD
+	if _raycast != null and _raycast.is_inside_tree():
+		eye_pos = _raycast.global_position
+		look_dir = -_raycast.global_transform.basis.z.normalized()
+	elif _player_body != null:
+		var p_pos: Vector3 = _player_body.global_position if _player_body.is_inside_tree() else _player_body.position
+		eye_pos = p_pos + Vector3(0.0, 1.62, 0.0)
+		var p_basis: Basis = _player_body.global_transform.basis if _player_body.is_inside_tree() else _player_body.transform.basis
+		look_dir = -p_basis.z.normalized()
+
+	var launch_vel: Vector3 = look_dir * lerpf(14.0, 34.0, charge)
+	var spawn_pos: Vector3 = eye_pos + look_dir * 0.5
+	var parent_node: Node = _world_manager if _world_manager != null else self
+
+	ArrowProjectileClass.spawn_arrow(parent_node, spawn_pos, launch_vel, charge, _player_body)
+
+	var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() else null
+	if sfx != null and sfx.has_method("play_sfx_at_pos"):
+		sfx.play_sfx_at_pos("bow_shoot", eye_pos, 0.0)
+
+	mob_interacted.emit(false, 0)
 
 
 func select_slot(slot_index: int) -> void:
+	if is_drawing_bow:
+		is_drawing_bow = false
+		bow_draw_time = 0.0
 	if slot_index < 0 or slot_index >= InventoryManager.HOTBAR_SIZE:
 		return
 	selected_slot = slot_index
@@ -638,8 +712,11 @@ func _try_interact_or_place_block() -> void:
 		_update_raycast_target()
 		return
 
-	# Right-clicking TNT ignites a 3-second flashing fuse & crater explosion!
+	# Right-clicking TNT ignites an authentic primed TNT physics entity
 	if targeted_id == BlockRegistry.BlockId.TNT:
+		if not is_creative and selected_item == InventoryManager.ItemId.FLINT_AND_STEEL and _inventory != null:
+			if _inventory.damage_hotbar_tool(selected_slot, 1):
+				loot_notification.emit("Your Flint and Steel broke!")
 		_world_manager.ignite_tnt_at(target_block_pos)
 		loot_notification.emit("TNT Ignited! Stand back!")
 		mob_interacted.emit(false, 0)
@@ -748,6 +825,18 @@ func _try_interact_or_place_block() -> void:
 			placed_meta = 2 # South
 		elif facing == Vector3i(0, 0, -1):
 			placed_meta = 3 # North
+
+	# Special placement: Gravity falling blocks (Sand, Gravel)
+	if BlockRegistry.is_gravity_block(selected_item):
+		var below_coord := placed_pos + Vector3i(0, -1, 0)
+		var below_bid: int = _world_manager.get_block_world(below_coord)
+		if below_bid == BlockRegistry.BlockId.AIR or BlockRegistry.is_liquid(below_bid) or BlockRegistry.is_passable_block(below_bid):
+			if not is_creative and _inventory != null:
+				_inventory.consume_from_hotbar_slot(selected_slot, 1)
+			FallingBlockClass.spawn_falling_block(_world_manager, placed_pos, selected_item, placed_meta)
+			loot_notification.emit("Placed %s!" % BlockRegistry.get_block_name(selected_item))
+			_update_raycast_target()
+			return
 
 	if _world_manager.set_block_world(placed_pos, selected_item, 2, placed_meta):
 		if not is_creative and _inventory != null:

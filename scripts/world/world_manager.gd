@@ -1,6 +1,8 @@
 class_name WorldManager
 extends Node3D
 const GameSession = preload("res://scripts/core/game_session.gd")
+const FallingBlockClass = preload("res://scripts/entities/falling_block.gd")
+const TNTPrimedClass = preload("res://scripts/entities/tnt_primed.gd")
 ## Manages endless procedural chunk generation, WorkerThreadPool background streaming,
 ## cross-chunk border face culling, cellular-automata water flow, and ChunkStorage persistence.
 
@@ -572,7 +574,29 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 	# Enqueue 6-connected neighborhood for finite 8-level water flow & drainage
 	_enqueue_water_neighborhood(world_block_pos)
 
+	# If this block became AIR, check if gravity-affected block directly above should fall
+	if actual_block_id == BlockRegistry.BlockId.AIR:
+		check_falling_block(world_block_pos + Vector3i(0, 1, 0))
+
 	return true
+
+
+## Checks if block at world_pos is gravity-affected (Sand, Gravel) and triggers falling block.
+func check_falling_block(world_pos: Vector3i) -> bool:
+	if world_pos.y <= 0 or world_pos.y >= VoxelChunk.CHUNK_SIZE_Y:
+		return false
+	var bid: int = get_block_world(world_pos)
+	if not BlockRegistry.is_gravity_block(bid):
+		return false
+	var below_pos := world_pos + Vector3i(0, -1, 0)
+	var below_bid: int = get_block_world(below_pos)
+	if below_bid == BlockRegistry.BlockId.AIR or BlockRegistry.is_liquid(below_bid) or BlockRegistry.is_passable_block(below_bid):
+		var meta: int = get_metadata_world(world_pos)
+		set_block_world(world_pos, BlockRegistry.BlockId.AIR)
+		FallingBlockClass.spawn_falling_block(self, world_pos, bid, meta)
+		check_falling_block(world_pos + Vector3i(0, 1, 0))
+		return true
+	return false
 
 
 func get_metadata_world(world_block_pos: Vector3i) -> int:
@@ -1014,45 +1038,28 @@ func get_surface_height_at(wx: int, wz: int) -> int:
 	return VoxelChunk.sample_surface_height(_surface_noise, wx, wz)
 
 
-## Ignites a placed TNT block into a 3.0-second flashing primed entity that blasts a spherical crater.
-func ignite_tnt_at(world_block_pos: Vector3i) -> void:
+## Ignites a placed TNT block into an authentic physics-driven primed TNT entity.
+func ignite_tnt_at(world_block_pos: Vector3i, custom_fuse: float = 4.0, initial_vel: Vector3 = Vector3(0.0, 2.0, 0.0)) -> void:
 	if get_block_world(world_block_pos) != BlockRegistry.BlockId.TNT:
 		return
 	set_block_world(world_block_pos, BlockRegistry.BlockId.AIR)
 
-	var sound_pos := Vector3(world_block_pos) + Vector3(0.5, 0.5, 0.5)
+	var sound_pos := Vector3(world_block_pos) + Vector3(0.5, 0.05, 0.5)
 	var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if get_tree() != null else null
 	if sfx != null and sfx.has_method("play_sfx_at_pos"):
-		sfx.play_sfx_at_pos("fuse", sound_pos, 2.0, 1.0, 36.0)
+		sfx.play_sfx_at_pos("fuse", sound_pos, 2.5, 1.0, 36.0)
 
-	var tnt_mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(0.96, 0.96, 0.96)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0, 0.25, 0.20)
-	box.material = mat
-	tnt_mi.mesh = box
-	tnt_mi.position = sound_pos
-	add_child(tnt_mi)
-
-	var tw: Tween = create_tween()
-	for i in range(6):
-		tw.tween_property(mat, "albedo_color", Color(1.0, 1.0, 1.0), 0.22)
-		tw.tween_property(mat, "albedo_color", Color(0.95, 0.20, 0.16), 0.22)
-	tw.tween_callback(_detonate_tnt_at.bind(world_block_pos, tnt_mi))
-
-
-func _detonate_tnt_at(center: Vector3i, visual_node: Node3D) -> void:
-	if is_instance_valid(visual_node):
-		visual_node.queue_free()
-	create_explosion(Vector3(center) + Vector3(0.5, 0.5, 0.5), 3.2, true, true)
+	TNTPrimedClass.spawn_primed_tnt(self, sound_pos, initial_vel, custom_fuse)
 
 
 ## High-performance batched explosion that destroys voxels with minimal sub-chunk mesh rebuilds,
 ## pooled entity drops, chained TNT, and realistic radial falloff damage.
-func create_explosion(center: Vector3, radius: float = 3.2, is_tnt: bool = true, damage_player: bool = true) -> void:
-	if get_tree() != null:
-		var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
+## Accords with TrueCraft/Beta 1.7.3 rules: Bedrock and Obsidian resist blasts,
+## submerged water explosions protect terrain while dealing knockback, and overhangs collapse.
+func create_explosion(center: Vector3, radius: float = 3.8, is_tnt: bool = true, damage_player: bool = true) -> void:
+	var tree: SceneTree = get_tree() if is_inside_tree() else null
+	if tree != null:
+		var sfx: Node = tree.get_first_node_in_group("sfx_player")
 		if sfx != null and sfx.has_method("play_sfx_at_pos"):
 			sfx.play_sfx_at_pos("explosion", center, 5.0, 1.0, 60.0)
 
@@ -1060,46 +1067,64 @@ func create_explosion(center: Vector3, radius: float = 3.2, is_tnt: bool = true,
 	var rad_int: int = int(ceil(radius))
 	var rad_sq: float = radius * radius
 
+	# In TrueCraft & Minecraft Beta, explosions submerged in water deal knockback/damage but protect terrain
+	var center_bid: int = get_block_world(center_i)
+	var submerged_in_water: bool = BlockRegistry.is_liquid(center_bid)
+
 	# 1. Gather all blocks to destroy and group by chunk coordinate
 	var affected_chunks: Dictionary = {} # Vector2i -> Array[Dictionary]
 	var tnt_to_chain: Array[Vector3i] = []
 	var drop_candidates: Array[int] = []
+	var cleared_positions: Array[Vector3i] = []
 
-	for dy in range(-rad_int, rad_int + 1):
-		var wy: int = center_i.y + dy
-		if wy <= 1 or wy >= VoxelChunk.CHUNK_SIZE_Y - 1:
-			continue
-		for dx in range(-rad_int, rad_int + 1):
-			for dz in range(-rad_int, rad_int + 1):
-				var dsq: float = float(dx * dx + dy * dy + dz * dz)
-				if dsq <= rad_sq:
+	if not submerged_in_water:
+		for dy in range(-rad_int, rad_int + 1):
+			var wy: int = center_i.y + dy
+			if wy <= 1 or wy >= VoxelChunk.CHUNK_SIZE_Y - 1:
+				continue
+			for dx in range(-rad_int, rad_int + 1):
+				for dz in range(-rad_int, rad_int + 1):
+					var dsq: float = float(dx * dx + dy * dy + dz * dz)
+					if dsq <= rad_sq:
+						var bpos := center_i + Vector3i(dx, dy, dz)
+						var bid: int = get_block_world(bpos)
+						if bid == BlockRegistry.BlockId.AIR:
+							continue
+						# Bedrock and Obsidian possess immense blast resistance and are impervious to explosions
+						if bid == BlockRegistry.BlockId.BEDROCK or bid == BlockRegistry.BlockId.OBSIDIAN:
+							continue
+						if bid == BlockRegistry.BlockId.TNT:
+							tnt_to_chain.append(bpos)
+							continue
+						if BlockRegistry.is_solid(bid):
+							cleared_positions.append(bpos)
+							if randf() < 0.30:
+								var drop_id: int = InventoryManager.get_dropped_item_for_block(bid, InventoryManager.ItemId.DIAMOND_PICKAXE)
+								if drop_id > 0:
+									drop_candidates.append(drop_id)
+
+							var cx: int = floori(float(bpos.x) / float(VoxelChunk.CHUNK_SIZE_X))
+							var cz: int = floori(float(bpos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
+							var c_coord := Vector2i(cx, cz)
+							if not affected_chunks.has(c_coord):
+								affected_chunks[c_coord] = []
+							var lx: int = posmod(bpos.x, VoxelChunk.CHUNK_SIZE_X)
+							var lz: int = posmod(bpos.z, VoxelChunk.CHUNK_SIZE_Z)
+							affected_chunks[c_coord].append({
+								"lx": lx,
+								"ly": wy,
+								"lz": lz,
+								"wx": bpos.x,
+								"wz": bpos.z,
+							})
+	else:
+		# If submerged, still check for chained TNT in radius
+		for dy in range(-rad_int, rad_int + 1):
+			for dx in range(-rad_int, rad_int + 1):
+				for dz in range(-rad_int, rad_int + 1):
 					var bpos := center_i + Vector3i(dx, dy, dz)
-					var bid: int = get_block_world(bpos)
-					if bid == BlockRegistry.BlockId.AIR:
-						continue
-					if bid == BlockRegistry.BlockId.TNT:
+					if get_block_world(bpos) == BlockRegistry.BlockId.TNT:
 						tnt_to_chain.append(bpos)
-						continue
-					if BlockRegistry.is_solid(bid):
-						if randf() < 0.28:
-							var drop_id: int = InventoryManager.get_dropped_item_for_block(bid, InventoryManager.ItemId.DIAMOND_PICKAXE)
-							if drop_id > 0:
-								drop_candidates.append(drop_id)
-
-						var cx: int = floori(float(bpos.x) / float(VoxelChunk.CHUNK_SIZE_X))
-						var cz: int = floori(float(bpos.z) / float(VoxelChunk.CHUNK_SIZE_Z))
-						var c_coord := Vector2i(cx, cz)
-						if not affected_chunks.has(c_coord):
-							affected_chunks[c_coord] = []
-						var lx: int = posmod(bpos.x, VoxelChunk.CHUNK_SIZE_X)
-						var lz: int = posmod(bpos.z, VoxelChunk.CHUNK_SIZE_Z)
-						affected_chunks[c_coord].append({
-							"lx": lx,
-							"ly": wy,
-							"lz": lz,
-							"wx": bpos.x,
-							"wz": bpos.z,
-						})
 
 	# 2. Batch apply block clearance & rebuild only unique sub-chunks
 	for c_coord_var in affected_chunks:
@@ -1147,13 +1172,14 @@ func create_explosion(center: Vector3, radius: float = 3.2, is_tnt: bool = true,
 		_chunk_voxel_mirror[c_coord] = v_buf
 		_mirror_mutex.unlock()
 
-		_storage.store_modified_chunk(
-			c_coord,
-			v_buf,
-			chunk.get_highest_solid_y(),
-			chunk.get_metadata_buffer(),
-			false
-		)
+		if _storage != null:
+			_storage.store_modified_chunk(
+				c_coord,
+				v_buf,
+				chunk.get_highest_solid_y(),
+				chunk.get_metadata_buffer(),
+				false
+			)
 
 		# Rebuild unique sub-chunks in this chunk
 		chunk._ensure_child_nodes()
@@ -1168,16 +1194,38 @@ func create_explosion(center: Vector3, radius: float = 3.2, is_tnt: bool = true,
 				for s_idx in neighbor_rebuild[n_coord].keys():
 					n_chunk._apply_single_sub_chunk(s_idx, n_chunk._build_single_sub_chunk_data(s_idx))
 
-	# 3. Spawn pooled drops (capped to max 8 to prevent physics entity lag)
-	var max_drops := mini(8, drop_candidates.size())
+	# 3. Spawn pooled drops (capped to max 12 to prevent physics entity lag)
+	var max_drops := mini(12, drop_candidates.size())
 	for i in range(max_drops):
 		var drop_item_id: int = drop_candidates[i]
 		var spawn_pos: Vector3 = center + Vector3(randf_range(-1.2, 1.2), randf_range(0.2, 1.2), randf_range(-1.2, 1.2))
 		DroppedItem.spawn_drop(self, spawn_pos, drop_item_id, 1)
 
-	# 4. Chain TNT
+	# 4. Chain TNT with authentic directional physics velocity & short fuse
 	for tnt_pos in tnt_to_chain:
-		ignite_tnt_at(tnt_pos)
+		var tnt_center := Vector3(tnt_pos) + Vector3(0.5, 0.5, 0.5)
+		var out_dir: Vector3 = (tnt_center - center).normalized()
+		if out_dir.length_squared() < 0.01:
+			out_dir = Vector3.UP
+		var blast_vel: Vector3 = out_dir * randf_range(5.0, 9.0) + Vector3(0.0, randf_range(2.5, 4.5), 0.0)
+		ignite_tnt_at(tnt_pos, randf_range(0.5, 1.4), blast_vel)
+
+	# 4b. Knockback nearby primed TNT entities
+	var primed_list: Array = tree.get_nodes_in_group("primed_tnt") if tree != null else []
+	for p in primed_list:
+		if is_instance_valid(p) and p is Node3D and p.is_in_group("primed_tnt"):
+			var p_tnt: Node3D = p
+			var t_pos: Vector3 = p_tnt.global_position
+			var dist: float = t_pos.distance_to(center)
+			if dist > 0.1 and dist <= radius * 2.0:
+				var push: Vector3 = (t_pos - center).normalized()
+				var strength: float = (1.0 - (dist / (radius * 2.0))) * 12.0
+				if "velocity" in p_tnt:
+					p_tnt.velocity += push * strength + Vector3(0.0, 3.0, 0.0)
+
+	# 4c. Trigger falling block collapse for any overhang gravity blocks above cleared blast crater
+	for bpos in cleared_positions:
+		check_falling_block(bpos + Vector3i(0, 1, 0))
 
 	# 5. Entity Damage & Knockback to Player
 	if damage_player and _player != null and is_instance_valid(_player) and _player is PlayerController:
@@ -1194,7 +1242,7 @@ func create_explosion(center: Vector3, radius: float = 3.2, is_tnt: bool = true,
 			p_ctrl.velocity += push_dir * 11.0 + Vector3(0.0, 5.5, 0.0)
 
 	# 6. Entity Damage & Knockback to nearby Mobs
-	var mobs: Array = get_tree().get_nodes_in_group("mobs") if get_tree() != null else []
+	var mobs: Array = tree.get_nodes_in_group("mobs") if tree != null else []
 	for m in mobs:
 		if is_instance_valid(m) and m is PassiveMob:
 			var m_mob := m as PassiveMob

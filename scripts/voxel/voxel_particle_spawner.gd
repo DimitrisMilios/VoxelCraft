@@ -6,6 +6,7 @@ var _shared_debris_mesh: BoxMesh = null
 
 
 func _ready() -> void:
+	add_to_group("particle_spawner")
 	_shared_debris_mesh = BoxMesh.new()
 	_shared_debris_mesh.size = Vector3(0.16, 0.16, 0.16)
 	call_deferred("_connect_player_interactor")
@@ -79,3 +80,11 @@ func _spawn_burst(
 	add_child(particles)
 	particles.finished.connect(particles.queue_free)
 	particles.emitting = true
+
+
+## Spawns explosive shockwave and smoke/fire debris particles for TNT & Creeper detonations.
+func spawn_explosion_burst(center: Vector3, radius: float = 3.8) -> void:
+	# 1. Fire / shockwave burst
+	_spawn_burst(center, Color(1.0, 0.45, 0.12), 40, 5.0, 10.0)
+	# 2. Dark smoke debris cloud
+	_spawn_burst(center + Vector3(0.0, 0.4, 0.0), Color(0.25, 0.25, 0.26), 28, 2.5, 6.0)

@@ -61,6 +61,8 @@ var _sound_groups: Dictionary = {
 	"slot_tick": ["sounds_node_step_hard.1.ogg"],
 	"item_pickup": ["sounds_balloon_pop.ogg", "sounds_coin.ogg"],
 	"tool_break": ["sounds_tool_break.1.ogg", "sounds_tool_break.2.ogg"],
+	"bow_shoot": ["sounds_woosh_01.ogg", "sounds_woosh_02.ogg", "sounds_woosh_03.ogg"],
+	"bow_hit": ["sounds_entity_hit.ogg", "sounds_woodpecker_peck.ogg"],
 
 	# Containers & Environment
 	"door_open": ["sounds_door_open.ogg", "sounds_door_creak.ogg"],

@@ -171,6 +171,10 @@ static func is_solid(block_id: int) -> bool:
 	return block_id != BlockId.AIR and not is_water(block_id) and not is_passable_block(block_id)
 
 
+static func is_gravity_block(block_id: int) -> bool:
+	return block_id == BlockId.SAND or block_id == BlockId.GRAVEL
+
+
 static func is_passable_block(block_id: int) -> bool:
 	return (
 		block_id == BlockId.TORCH
