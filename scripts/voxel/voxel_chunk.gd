@@ -804,6 +804,12 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						BlockRegistry.BlockId.WHEAT_CROPS, BlockRegistry.BlockId.POTATO_CROPS:
 							min_b = Vector3(0.06, 0.0, 0.06)
 							max_b = Vector3(0.94, 0.88, 0.94)
+						BlockRegistry.BlockId.WHEAT_SPROUT, BlockRegistry.BlockId.POTATO_SPROUT:
+							min_b = Vector3(0.12, 0.0, 0.12)
+							max_b = Vector3(0.88, 0.38, 0.88)
+						BlockRegistry.BlockId.SUGAR_CANE, BlockRegistry.BlockId.SEAGRASS:
+							min_b = Vector3(0.10, 0.0, 0.10)
+							max_b = Vector3(0.90, 0.95, 0.90)
 					_emit_custom_box(st_solid, lx, ly, lz, min_b, max_b, block_id)
 					solid_faces += 6
 					if not BlockRegistry.is_passable_block(block_id):

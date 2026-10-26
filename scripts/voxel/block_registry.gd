@@ -48,6 +48,8 @@ enum BlockId {
 	SUGAR_CANE = 44,
 	SEAGRASS = 45,
 	BED_HEAD = 46,
+	WHEAT_SPROUT = 47,
+	POTATO_SPROUT = 48,
 }
 
 enum FaceDir {
@@ -97,6 +99,12 @@ const EXTENDED_TILE_FALLBACK: Dictionary = {
 	33: 25, # TNT Bottom -> TNT Side
 	34: 26, # Sandstone Top -> Sandstone Side
 	35: 28, # Cactus Top -> Cactus Side
+	36: 0,  # Wool -> Grass
+	37: 2,  # Farmland -> Dirt
+	38: 0,  # Wheat -> Grass
+	39: 0,  # Potato -> Grass
+	44: 0,  # Wheat Sprout -> Grass
+	45: 0,  # Potato Sprout -> Grass
 }
 
 
@@ -110,9 +118,20 @@ static func is_passable_block(block_id: int) -> bool:
 		or block_id == BlockId.LADDER
 		or block_id == BlockId.WHEAT_CROPS
 		or block_id == BlockId.POTATO_CROPS
+		or block_id == BlockId.WHEAT_SPROUT
+		or block_id == BlockId.POTATO_SPROUT
 		or block_id == BlockId.SUGAR_CANE
 		or block_id == BlockId.SEAGRASS
 		or block_id == BlockId.LAVA
+	)
+
+
+static func is_crop(block_id: int) -> bool:
+	return (
+		block_id == BlockId.WHEAT_CROPS
+		or block_id == BlockId.POTATO_CROPS
+		or block_id == BlockId.WHEAT_SPROUT
+		or block_id == BlockId.POTATO_SPROUT
 	)
 
 
@@ -129,6 +148,8 @@ static func is_opaque_full_cube(block_id: int) -> bool:
 		or block_id == BlockId.FARMLAND
 		or block_id == BlockId.WHEAT_CROPS
 		or block_id == BlockId.POTATO_CROPS
+		or block_id == BlockId.WHEAT_SPROUT
+		or block_id == BlockId.POTATO_SPROUT
 		or block_id == BlockId.SUGAR_CANE
 		or block_id == BlockId.SEAGRASS
 	):
@@ -228,6 +249,8 @@ static func get_block_hardness(block_id: int) -> float:
 	match block_id:
 		BlockId.TORCH, BlockId.TNT, BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS, BlockId.SUGAR_CANE, BlockId.SEAGRASS:
 			return 0.10
+		BlockId.WHEAT_SPROUT, BlockId.POTATO_SPROUT:
+			return 0.05
 		BlockId.WOOL:
 			return 0.35
 		BlockId.FARMLAND:
@@ -318,6 +341,10 @@ static func get_block_name(block_id: int) -> String:
 			return "Wheat"
 		BlockId.POTATO_CROPS:
 			return "Potatoes"
+		BlockId.WHEAT_SPROUT:
+			return "Wheat Sprout"
+		BlockId.POTATO_SPROUT:
+			return "Potato Sprout"
 		BlockId.LAVA:
 			return "Lava"
 		BlockId.OBSIDIAN:
@@ -392,6 +419,10 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(0.85, 0.78, 0.25)
 		BlockId.POTATO_CROPS:
 			return Color(0.35, 0.65, 0.25)
+		BlockId.WHEAT_SPROUT:
+			return Color(0.40, 0.78, 0.22)
+		BlockId.POTATO_SPROUT:
+			return Color(0.38, 0.72, 0.24)
 		BlockId.LAVA:
 			return Color(1.0, 0.38, 0.08)
 		BlockId.OBSIDIAN:
@@ -501,6 +532,10 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 			return 38
 		BlockId.POTATO_CROPS:
 			return 39
+		BlockId.WHEAT_SPROUT:
+			return 44
+		BlockId.POTATO_SPROUT:
+			return 45
 		BlockId.LAVA:
 			return 40
 		BlockId.OBSIDIAN:

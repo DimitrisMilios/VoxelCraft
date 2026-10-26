@@ -386,6 +386,10 @@ static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: i
 			return ItemId.WHEAT
 		BlockRegistry.BlockId.POTATO_CROPS:
 			return ItemId.POTATO
+		BlockRegistry.BlockId.WHEAT_SPROUT:
+			return ItemId.WHEAT_SEEDS
+		BlockRegistry.BlockId.POTATO_SPROUT:
+			return ItemId.POTATO
 		_:
 			return broken_block_id
 

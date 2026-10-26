@@ -376,6 +376,39 @@ static func _sample_tile_pixel(
 				return _tint(Color(0.22, 0.48, 0.20), jitter * 0.5)
 			return _tint(cobble_base, jitter)
 
+		37: # Farmland Moist (Tilled rich dark soil with furrow lines)
+			var furrow: float = -0.06 if (y % 4 == 0) else 0.02
+			return _tint(Color(0.34, 0.20, 0.10), jitter * 0.4 + furrow)
+
+		38: # Wheat Crops (Mature golden wheat stalks with full grain heads)
+			var is_stalk: bool = (x % 3 == 1)
+			if y >= 8:
+				# Golden wheat grain ears
+				var ear_color := Color(0.92, 0.82, 0.24) if is_stalk else Color(0.84, 0.74, 0.20)
+				return _tint(ear_color, jitter * 0.3)
+			else:
+				var stalk_color := Color(0.76, 0.68, 0.22) if is_stalk else Color(0.32, 0.20, 0.10)
+				return _tint(stalk_color, jitter * 0.3)
+
+		39: # Potato Crops (Mature green leafy foliage with potato flowers)
+			if (x == 7 or x == 8) and (y == 12 or y == 13):
+				return _tint(Color(0.96, 0.94, 0.88), jitter * 0.1) # Flower petal
+			var is_leaf: bool = (x + y) % 3 != 0
+			var leaf_col := Color(0.22, 0.54, 0.18) if is_leaf else Color(0.18, 0.42, 0.14)
+			return _tint(leaf_col, jitter * 0.4)
+
+		44: # Wheat Sprout (Young light-green sprouting shoots emerging from soil)
+			var is_shoot: bool = (y <= 7) and ((x == 4 or x == 5) or (x == 10 or x == 11) or (y <= 3 and x % 4 == 2))
+			if is_shoot:
+				return _tint(Color(0.42, 0.84, 0.22), jitter * 0.3)
+			return _tint(Color(0.30, 0.18, 0.08), jitter * 0.3)
+
+		45: # Potato Sprout (Small twin leafy green sprouts on soil)
+			var is_sprout: bool = (y <= 6) and ((x >= 3 and x <= 6) or (x >= 9 and x <= 12))
+			if is_sprout:
+				return _tint(Color(0.34, 0.72, 0.20), jitter * 0.3)
+			return _tint(Color(0.30, 0.18, 0.08), jitter * 0.3)
+
 		_:
 			return _tint(stone_base, jitter)
 

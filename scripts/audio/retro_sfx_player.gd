@@ -107,15 +107,17 @@ func _ready() -> void:
 	# Initialize 2D stereo players pool
 	for i in range(POOL_2D_SIZE):
 		var p2 := AudioStreamPlayer.new()
-		p2.volume_db = -4.0
+		p2.bus = "Master"
+		p2.volume_db = -1.0
 		add_child(p2)
 		_players_2d.append(p2)
 
 	# Initialize 3D positional players pool
 	for i in range(POOL_3D_SIZE):
 		var p3 := AudioStreamPlayer3D.new()
-		p3.unit_size = 2.0
-		p3.max_distance = 42.0
+		p3.bus = "Master"
+		p3.unit_size = 4.0
+		p3.max_distance = 48.0
 		p3.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		add_child(p3)
 		_players_3d.append(p3)
@@ -135,26 +137,52 @@ func _exit_tree() -> void:
 	_stream_cache.clear()
 
 
+func _process(_delta: float) -> void:
+	if _player == null or _interactor == null or _world_manager == null:
+		_bind_signals()
+
+
 func _bind_signals() -> void:
-	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
-	if _world_manager != null:
-		_world_manager.world_saved.connect(_on_world_saved)
+	if not is_inside_tree():
+		return
 
-	_player = get_tree().get_first_node_in_group("player") as PlayerController
+	if _world_manager == null:
+		_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
+		if _world_manager == null and get_parent() != null:
+			_world_manager = get_parent().get_node_or_null("WorldManager") as WorldManager
+		if _world_manager != null and not _world_manager.world_saved.is_connected(_on_world_saved):
+			_world_manager.world_saved.connect(_on_world_saved)
+
+	if _player == null:
+		_player = get_tree().get_first_node_in_group("player") as PlayerController
+		if _player == null and get_parent() != null:
+			_player = get_parent().get_node_or_null("Player") as PlayerController
+
 	if _player != null:
-		_player.step_taken.connect(_on_step_taken)
-		_player.jumped.connect(_on_player_jumped)
-		_player.water_state_changed.connect(_on_water_state_changed)
-		_player.player_damaged.connect(_on_player_damaged)
+		if not _player.step_taken.is_connected(_on_step_taken):
+			_player.step_taken.connect(_on_step_taken)
+		if not _player.jumped.is_connected(_on_player_jumped):
+			_player.jumped.connect(_on_player_jumped)
+		if not _player.water_state_changed.is_connected(_on_water_state_changed):
+			_player.water_state_changed.connect(_on_water_state_changed)
+		if not _player.player_damaged.is_connected(_on_player_damaged):
+			_player.player_damaged.connect(_on_player_damaged)
 
-		_interactor = _player.get_node_or_null("BlockInteractor") as BlockInteractor
+		if _interactor == null:
+			_interactor = _player.get_node_or_null("BlockInteractor") as BlockInteractor
 		if _interactor != null:
-			_interactor.block_broken.connect(_on_block_broken)
-			_interactor.block_placed.connect(_on_block_placed)
-			_interactor.hotbar_slot_changed.connect(_on_hotbar_slot_changed)
-			_interactor.mob_interacted.connect(_on_mob_interacted)
-			_interactor.mining_progress_changed.connect(_on_mining_progress_changed)
-			_interactor.station_opened.connect(_on_station_opened)
+			if not _interactor.block_broken.is_connected(_on_block_broken):
+				_interactor.block_broken.connect(_on_block_broken)
+			if not _interactor.block_placed.is_connected(_on_block_placed):
+				_interactor.block_placed.connect(_on_block_placed)
+			if not _interactor.hotbar_slot_changed.is_connected(_on_hotbar_slot_changed):
+				_interactor.hotbar_slot_changed.connect(_on_hotbar_slot_changed)
+			if not _interactor.mob_interacted.is_connected(_on_mob_interacted):
+				_interactor.mob_interacted.connect(_on_mob_interacted)
+			if not _interactor.mining_progress_changed.is_connected(_on_mining_progress_changed):
+				_interactor.mining_progress_changed.connect(_on_mining_progress_changed)
+			if not _interactor.station_opened.is_connected(_on_station_opened):
+				_interactor.station_opened.connect(_on_station_opened)
 
 
 ## Plays a non-positional stereo sound effect.
@@ -214,10 +242,17 @@ func _load_cached_stream(file_name: String) -> AudioStream:
 		return _stream_cache[file_name]
 
 	var full_path: String = SOUND_DIR + file_name
-	if not FileAccess.file_exists(full_path):
-		return null
+	var stream: AudioStream = null
 
-	var stream: AudioStreamOggVorbis = AudioStreamOggVorbis.load_from_file(full_path)
+	# In Godot 4 (both Editor and Exported Standalone PCK), imported audio is loaded via ResourceLoader/load()
+	if ResourceLoader.exists(full_path):
+		stream = load(full_path) as AudioStream
+	elif FileAccess.file_exists(full_path):
+		stream = AudioStreamOggVorbis.load_from_file(full_path)
+
+	if stream == null:
+		stream = load(full_path) as AudioStream
+
 	if stream != null:
 		_stream_cache[file_name] = stream
 	return stream
@@ -303,7 +338,7 @@ func get_place_sfx_for_block(block_id: int) -> String:
 
 func _on_step_taken(in_water: bool) -> void:
 	if in_water:
-		play_sfx("step_water", -6.0)
+		play_sfx("step_water", -2.0)
 		return
 
 	var ground_id: int = BlockRegistry.BlockId.GRASS
@@ -316,30 +351,30 @@ func _on_step_taken(in_water: bool) -> void:
 			ground_id = _world_manager.get_block_world(Vector3i(wx, feet_y - 1, wz))
 
 	var step_group: String = get_step_sfx_for_block(ground_id)
-	play_sfx(step_group, -8.0)
+	play_sfx(step_group, -2.0)
 
 
 func _on_player_jumped() -> void:
-	play_sfx("jump", -8.0)
+	play_sfx("jump", -2.0)
 
 
 func _on_water_state_changed(in_water: bool) -> void:
 	if in_water:
-		play_sfx("splash", -4.0)
+		play_sfx("splash", -1.0)
 
 
 func _on_player_damaged(_amount: int) -> void:
-	play_sfx("hurt", -2.0)
+	play_sfx("hurt", 1.0)
 
 
 func _on_block_broken(world_pos: Vector3i, block_id: int) -> void:
 	var sfx: String = get_break_sfx_for_block(block_id)
-	play_sfx_at_pos(sfx, Vector3(world_pos) + Vector3(0.5, 0.5, 0.5), -2.0)
+	play_sfx_at_pos(sfx, Vector3(world_pos) + Vector3(0.5, 0.5, 0.5), 1.0)
 
 
 func _on_block_placed(world_pos: Vector3i, block_id: int) -> void:
 	var sfx: String = get_place_sfx_for_block(block_id)
-	play_sfx_at_pos(sfx, Vector3(world_pos) + Vector3(0.5, 0.5, 0.5), -3.0)
+	play_sfx_at_pos(sfx, Vector3(world_pos) + Vector3(0.5, 0.5, 0.5), 0.5)
 
 
 func _on_mining_progress_changed(progress: float, _target_name: String, _can_harvest: bool) -> void:
@@ -353,34 +388,34 @@ func _on_mining_progress_changed(progress: float, _target_name: String, _can_har
 			var target_pos: Vector3i = _interactor.get_targeted_block_pos() if _interactor.has_method("get_targeted_block_pos") else _interactor.target_block_pos
 			var target_id: int = _world_manager.get_block_world(target_pos)
 			var dig_sfx: String = get_dig_sfx_for_block(target_id)
-			play_sfx_at_pos(dig_sfx, Vector3(target_pos) + Vector3(0.5, 0.5, 0.5), -5.0)
+			play_sfx_at_pos(dig_sfx, Vector3(target_pos) + Vector3(0.5, 0.5, 0.5), -1.0)
 
 
 func _on_hotbar_slot_changed(_slot_index: int, _block_id: int) -> void:
-	play_sfx("slot_tick", -10.0)
+	play_sfx("slot_tick", -3.5)
 
 
 func _on_station_opened(station_id: int) -> void:
 	if station_id == BlockRegistry.BlockId.CHEST:
-		play_sfx("door_open", -2.0)
+		play_sfx("door_open", 1.0)
 	elif station_id == BlockRegistry.BlockId.DOOR_OPEN:
-		play_sfx("door_open", -2.0)
+		play_sfx("door_open", 1.0)
 	elif station_id == BlockRegistry.BlockId.DOOR_CLOSED:
-		play_sfx("door_close", -3.0)
+		play_sfx("door_close", 0.0)
 	else:
-		play_sfx("door_close", -4.0)
+		play_sfx("door_close", -1.0)
 
 
 func _on_mob_interacted(is_hit: bool, mob_variant: int) -> void:
 	if is_hit:
-		play_sfx("hurt", -2.0)
+		play_sfx("hurt", 1.0)
 	else:
 		match mob_variant:
 			0:
-				play_sfx("pig_ambient", -3.0)
+				play_sfx("pig_ambient", 0.0)
 			1:
-				play_sfx("cow_ambient", -3.0)
+				play_sfx("cow_ambient", 0.0)
 
 
 func _on_world_saved(_saved_chunk_count: int) -> void:
-	play_sfx("item_pickup", -4.0, 1.25)
+	play_sfx("item_pickup", 0.0, 1.25)

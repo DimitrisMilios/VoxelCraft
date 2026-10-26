@@ -88,21 +88,21 @@ func _register_soundtrack_tracks() -> void:
 	# 2. Ambient choral and acoustic melodies
 	for i in range(1, 6):
 		var ogg_path: String = "res://assets/audio/sounds/sounds_mermaid_song_0%d.ogg" % i
-		if FileAccess.file_exists(ogg_path):
+		if ResourceLoader.exists(ogg_path) or FileAccess.file_exists(ogg_path):
 			_tracks.append({
 				"name": "Halcyon Melody %d" % i,
 				"path": ogg_path,
-				"is_resource": false,
+				"is_resource": true,
 				"volume_offset": -2.0
 			})
 
 	# 3. Scott Joplin / Minecraft retro piano piece
 	var piano_path := "res://assets/audio/sounds/sounds_piano.ogg"
-	if FileAccess.file_exists(piano_path):
+	if ResourceLoader.exists(piano_path) or FileAccess.file_exists(piano_path):
 		_tracks.append({
 			"name": "Dry Hands Piano",
 			"path": piano_path,
-			"is_resource": false,
+			"is_resource": true,
 			"volume_offset": -3.0
 		})
 
@@ -164,12 +164,14 @@ func play_random_track(fade_in_time: float = FADE_DURATION) -> void:
 
 func _load_track_stream(track_info: Dictionary) -> AudioStream:
 	var path: String = str(track_info.get("path", ""))
-	var is_res: bool = bool(track_info.get("is_resource", false))
-
-	if is_res:
-		return load(path) as AudioStream
-	else:
-		return AudioStreamOggVorbis.load_from_file(path)
+	var stream: AudioStream = null
+	if ResourceLoader.exists(path):
+		stream = load(path) as AudioStream
+	elif FileAccess.file_exists(path):
+		stream = AudioStreamOggVorbis.load_from_file(path)
+	if stream == null:
+		stream = load(path) as AudioStream
+	return stream
 
 
 func _on_track_finished() -> void:

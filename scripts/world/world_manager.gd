@@ -40,6 +40,10 @@ var _water_flow_queue: Array[Vector3i] = []
 var _water_flow_pending: Dictionary = {}
 var _water_tick_timer: float = 0.0
 
+## Active crop growth tracker (`Vector3i` -> seconds elapsed)
+var _active_crops: Dictionary = {}
+var _crop_tick_timer: float = 0.0
+
 var _storage: ChunkStorage = null
 var _surface_noise: FastNoiseLite = FastNoiseLite.new()
 var _cave_noise: FastNoiseLite = FastNoiseLite.new()
@@ -151,6 +155,7 @@ func _process(delta: float) -> void:
 	_dispatch_background_tasks()
 	_apply_completed_builds()
 	_process_water_flow(delta)
+	_process_crop_growth(delta)
 	VoxelAtlasBuilder.update_water_animation(delta)
 
 
@@ -517,6 +522,20 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 				if sfx != null and sfx.has_method("play_sfx_at_pos"):
 					sfx.play_sfx_at_pos("lava_cool", Vector3(nb_pos) + Vector3(0.5, 0.5, 0.5), 1.0)
 
+	# If Farmland is destroyed, pop any crop sitting directly above it into dropped seeds
+	var previous_id: int = get_block_world(world_block_pos)
+	if previous_id == BlockRegistry.BlockId.FARMLAND and actual_block_id != BlockRegistry.BlockId.FARMLAND:
+		var above_pos := world_block_pos + Vector3i(0, 1, 0)
+		var above_id: int = get_block_world(above_pos)
+		if BlockRegistry.is_crop(above_id):
+			set_block_world(above_pos, BlockRegistry.BlockId.AIR)
+			DroppedItem.spawn_drop(self, Vector3(above_pos) + Vector3(0.5, 0.3, 0.5), InventoryManager.ItemId.WHEAT_SEEDS, 1)
+
+	if actual_block_id == BlockRegistry.BlockId.WHEAT_SPROUT or actual_block_id == BlockRegistry.BlockId.POTATO_SPROUT:
+		_active_crops[world_block_pos] = 0.0
+	elif _active_crops.has(world_block_pos):
+		_active_crops.erase(world_block_pos)
+
 	chunk.set_block_local(lx, world_block_pos.y, lz, actual_block_id, false)
 
 	_mirror_mutex.lock()
@@ -829,6 +848,34 @@ func _process_water_flow(delta: float) -> void:
 		var y_dict: Dictionary = dirty_water_chunks[ch]
 		for y_val in y_dict.keys():
 			(ch as VoxelChunk).rebuild_water_at_local_y(int(y_val))
+
+
+## Automatically ticks crop growth, transitioning young sprouts to mature crops over ~12 seconds.
+func _process_crop_growth(delta: float) -> void:
+	if _active_crops.is_empty():
+		return
+	_crop_tick_timer += delta
+	if _crop_tick_timer < 1.0:
+		return
+	_crop_tick_timer = 0.0
+
+	var matured_crops: Array[Vector3i] = []
+	for c_pos in _active_crops.keys():
+		var pos_i: Vector3i = c_pos as Vector3i
+		var current_id: int = get_block_world(pos_i)
+		if current_id != BlockRegistry.BlockId.WHEAT_SPROUT and current_id != BlockRegistry.BlockId.POTATO_SPROUT:
+			matured_crops.append(pos_i)
+			continue
+
+		var progress: float = float(_active_crops[pos_i]) + 1.0
+		_active_crops[pos_i] = progress
+		if progress >= 12.0: # 12 seconds to fully mature
+			var mature_id: int = BlockRegistry.BlockId.WHEAT_CROPS if current_id == BlockRegistry.BlockId.WHEAT_SPROUT else BlockRegistry.BlockId.POTATO_CROPS
+			set_block_world(pos_i, mature_id)
+			matured_crops.append(pos_i)
+
+	for m_pos in matured_crops:
+		_active_crops.erase(m_pos)
 
 
 ## Returns the 3D directional water current vector at `world_pos` (pointing downhill / toward corners & waterfalls).

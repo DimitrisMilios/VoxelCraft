@@ -133,51 +133,88 @@ func _update_raycast_target() -> void:
 	if _raycast == null:
 		return
 
-	_raycast.force_raycast_update()
-	if not _raycast.is_colliding():
-		has_target = false
-		_targeted_mob = null
-		_reset_mining_progress()
-		if _selection_box != null:
-			_selection_box.visible = false
-		return
+	if _raycast.is_inside_tree():
+		_raycast.force_raycast_update()
 
-	var collider: Object = _raycast.get_collider()
-	if collider is PassiveMob:
-		_targeted_mob = collider as PassiveMob
-		has_target = false
-		_reset_mining_progress()
-		if _selection_box != null:
-			_selection_box.visible = false
-		return
-
+	# 1. Check if looking directly at a mob
+	if _raycast.is_inside_tree() and _raycast.is_colliding():
+		var collider: Object = _raycast.get_collider()
+		if collider is PassiveMob:
+			_targeted_mob = collider as PassiveMob
+			has_target = false
+			_reset_mining_progress()
+			if _selection_box != null:
+				_selection_box.visible = false
+			return
 	_targeted_mob = null
-	var hit_point: Vector3 = _raycast.get_collision_point()
-	var hit_normal: Vector3 = _raycast.get_collision_normal()
 
-	var inside_pos: Vector3 = hit_point - hit_normal * 0.02
-	var outside_pos: Vector3 = hit_point + hit_normal * 0.02
+	var ray_origin: Vector3 = Vector3.ZERO
+	var ray_dir := Vector3.FORWARD
+	if _raycast.is_inside_tree():
+		ray_origin = _raycast.global_position
+		ray_dir = -_raycast.global_transform.basis.z.normalized()
+	elif _player_body != null:
+		ray_origin = _player_body.position + Vector3(0.0, 1.62, 0.0)
+		ray_dir = -_raycast.transform.basis.z.normalized() if not _raycast.transform.basis.z.is_zero_approx() else Vector3(0.0, -0.2, 1.0).normalized()
 
-	target_block_pos = Vector3i(
-		floori(inside_pos.x),
-		floori(inside_pos.y),
-		floori(inside_pos.z)
-	)
-	place_block_pos = Vector3i(
-		floori(outside_pos.x),
-		floori(outside_pos.y),
-		floori(outside_pos.z)
-	)
+	var solid_hit: bool = _raycast.is_colliding() if _raycast.is_inside_tree() else false
+	var hit_dist: float = 5.2
+	var solid_target_pos := Vector3i.ZERO
+	var solid_place_pos := Vector3i.ZERO
+
+	if solid_hit:
+		var hit_point: Vector3 = _raycast.get_collision_point()
+		var hit_normal: Vector3 = _raycast.get_collision_normal()
+		hit_dist = ray_origin.distance_to(hit_point)
+
+		var inside_pos: Vector3 = hit_point - hit_normal * 0.02
+		var outside_pos: Vector3 = hit_point + hit_normal * 0.02
+		solid_target_pos = Vector3i(floori(inside_pos.x), floori(inside_pos.y), floori(inside_pos.z))
+		solid_place_pos = Vector3i(floori(outside_pos.x), floori(outside_pos.y), floori(outside_pos.z))
+
+	# 2. Ray-march through voxels from eye position up to solid hit distance (or 5.2m)
+	# to check for passable blocks (Crops, Sprouts, Torches, Sugar Cane, Seagrass)
+	var found_passable: bool = false
+	var passable_pos := Vector3i.ZERO
+	if _world_manager != null:
+		var step_dist: float = 0.35
+		var max_search_dist: float = minf(hit_dist, 5.2)
+		while step_dist < max_search_dist:
+			var sample_p: Vector3 = ray_origin + ray_dir * step_dist
+			var vpos := Vector3i(floori(sample_p.x), floori(sample_p.y), floori(sample_p.z))
+			var bid: int = _world_manager.get_block_world(vpos)
+			if BlockRegistry.is_passable_block(bid) and bid != BlockRegistry.BlockId.AIR and not BlockRegistry.is_liquid(bid):
+				found_passable = true
+				passable_pos = vpos
+				break
+			step_dist += 0.08
+
+	if found_passable:
+		target_block_pos = passable_pos
+		place_block_pos = passable_pos
+		has_target = true
+	elif solid_hit:
+		target_block_pos = solid_target_pos
+		place_block_pos = solid_place_pos
+		has_target = true
+	else:
+		has_target = false
+		_reset_mining_progress()
+		if _selection_box != null:
+			_selection_box.visible = false
+		return
 
 	if target_block_pos != _last_mining_pos:
 		_reset_mining_progress()
 		_last_mining_pos = target_block_pos
 
-	has_target = true
 	if _selection_box != null:
 		_selection_box.visible = true
-		_selection_box.global_position = Vector3(target_block_pos)
-		_selection_box.global_rotation = Vector3.ZERO
+		if _selection_box.is_inside_tree():
+			_selection_box.global_position = Vector3(target_block_pos)
+			_selection_box.global_rotation = Vector3.ZERO
+		else:
+			_selection_box.position = Vector3(target_block_pos)
 
 
 func _on_left_click_pressed() -> void:
@@ -313,13 +350,14 @@ func _complete_break_block() -> void:
 					InventoryManager.ItemId.APPLE,
 					1
 				)
-			elif previous_id == BlockRegistry.BlockId.GRASS and randf() < 0.22:
+			elif previous_id == BlockRegistry.BlockId.GRASS and randf() < 0.40:
 				DroppedItem.spawn_drop(
 					_world_manager,
 					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
 					InventoryManager.ItemId.WHEAT_SEEDS,
 					1
 				)
+				loot_notification.emit("Found Wheat Seeds!")
 			elif previous_id == BlockRegistry.BlockId.WHEAT_CROPS:
 				DroppedItem.spawn_drop(
 					_world_manager,
@@ -327,6 +365,9 @@ func _complete_break_block() -> void:
 					InventoryManager.ItemId.WHEAT_SEEDS,
 					randi_range(1, 2)
 				)
+				loot_notification.emit("Harvested Wheat & Seeds!")
+			elif previous_id == BlockRegistry.BlockId.WHEAT_SPROUT:
+				loot_notification.emit("Harvested Wheat Seeds!")
 			elif previous_id == BlockRegistry.BlockId.POTATO_CROPS:
 				DroppedItem.spawn_drop(
 					_world_manager,
@@ -334,6 +375,7 @@ func _complete_break_block() -> void:
 					InventoryManager.ItemId.POTATO,
 					randi_range(1, 2)
 				)
+				loot_notification.emit("Harvested Potatoes!")
 		else:
 			loot_notification.emit("Broken! (Requires proper Pickaxe tier to harvest)")
 
@@ -394,8 +436,14 @@ func _try_interact_or_place_block() -> void:
 	if _world_manager == null:
 		return
 
-	# Eating Food Item on Right-Click
-	if InventoryManager.is_food_item(selected_item) and _player_body != null and _inventory != null:
+	# Eating Food Item on Right-Click (unless aiming at Farmland to plant crops)
+	var is_planting_on_farmland: bool = (
+		has_target
+		and _world_manager != null
+		and _world_manager.get_block_world(target_block_pos) == BlockRegistry.BlockId.FARMLAND
+		and (selected_item == InventoryManager.ItemId.POTATO or selected_item == InventoryManager.ItemId.WHEAT_SEEDS)
+	)
+	if not is_planting_on_farmland and InventoryManager.is_food_item(selected_item) and _player_body != null and _inventory != null:
 		var nutrition: int = InventoryManager.get_food_nutrition(selected_item)
 		if _player_body.eat_food(nutrition):
 			_inventory.consume_from_hotbar_slot(selected_slot, 1)
@@ -486,6 +534,57 @@ func _try_interact_or_place_block() -> void:
 			_world_manager.save_complete_world()
 		return
 
+	# Right-clicking a mature Wheat crop harvests it and automatically replants a sprout!
+	if targeted_id == BlockRegistry.BlockId.WHEAT_CROPS:
+		var extra_seeds: int = randi_range(1, 2)
+		var added_wheat: bool = false
+		if _inventory != null and not is_creative:
+			added_wheat = _inventory.add_item(InventoryManager.ItemId.WHEAT, 1)
+			_inventory.add_item(InventoryManager.ItemId.WHEAT_SEEDS, extra_seeds)
+		if not added_wheat:
+			DroppedItem.spawn_drop(_world_manager, Vector3(target_block_pos) + Vector3(0.5, 0.4, 0.5), InventoryManager.ItemId.WHEAT, 1)
+			DroppedItem.spawn_drop(_world_manager, Vector3(target_block_pos) + Vector3(0.5, 0.4, 0.5), InventoryManager.ItemId.WHEAT_SEEDS, extra_seeds)
+		_world_manager.set_block_world(target_block_pos, BlockRegistry.BlockId.WHEAT_SPROUT)
+		loot_notification.emit("Harvested Wheat! (+1 Wheat, +%d Seeds)" % extra_seeds)
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() else null
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			sfx.play_sfx_at_pos("place_soft", Vector3(target_block_pos) + Vector3(0.5, 0.5, 0.5), 0.0)
+		block_placed.emit(target_block_pos, BlockRegistry.BlockId.WHEAT_SPROUT)
+		_update_raycast_target()
+		return
+
+	# Right-clicking a mature Potato crop harvests potatoes and replants a sprout!
+	if targeted_id == BlockRegistry.BlockId.POTATO_CROPS:
+		var pot_count: int = randi_range(2, 3)
+		var added_pot: bool = false
+		if _inventory != null and not is_creative:
+			added_pot = _inventory.add_item(InventoryManager.ItemId.POTATO, pot_count)
+		if not added_pot:
+			DroppedItem.spawn_drop(_world_manager, Vector3(target_block_pos) + Vector3(0.5, 0.4, 0.5), InventoryManager.ItemId.POTATO, pot_count)
+		_world_manager.set_block_world(target_block_pos, BlockRegistry.BlockId.POTATO_SPROUT)
+		loot_notification.emit("Harvested Potatoes! (+%d Potatoes)" % pot_count)
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() else null
+		if sfx != null and sfx.has_method("play_sfx_at_pos"):
+			sfx.play_sfx_at_pos("place_soft", Vector3(target_block_pos) + Vector3(0.5, 0.5, 0.5), 0.0)
+		block_placed.emit(target_block_pos, BlockRegistry.BlockId.POTATO_SPROUT)
+		_update_raycast_target()
+		return
+
+	# Right-clicking a young Sprout with Seeds or Stick fertilizes it to full maturity!
+	if targeted_id == BlockRegistry.BlockId.WHEAT_SPROUT or targeted_id == BlockRegistry.BlockId.POTATO_SPROUT:
+		if selected_item == InventoryManager.ItemId.WHEAT_SEEDS or selected_item == InventoryManager.ItemId.STICK:
+			var mature_id: int = BlockRegistry.BlockId.WHEAT_CROPS if targeted_id == BlockRegistry.BlockId.WHEAT_SPROUT else BlockRegistry.BlockId.POTATO_CROPS
+			_world_manager.set_block_world(target_block_pos, mature_id)
+			if not is_creative and _inventory != null and selected_item == InventoryManager.ItemId.WHEAT_SEEDS:
+				_inventory.consume_from_hotbar_slot(selected_slot, 1)
+			loot_notification.emit("Fertilized crop to full maturity!")
+			var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() else null
+			if sfx != null and sfx.has_method("play_sfx_at_pos"):
+				sfx.play_sfx_at_pos("place_soft", Vector3(target_block_pos) + Vector3(0.5, 0.5, 0.5), 0.0)
+			block_placed.emit(target_block_pos, mature_id)
+			_update_raycast_target()
+			return
+
 	# Right-clicking Grass or Dirt with a Shovel or Stick tills it into Farmland
 	var is_hoe_or_shovel: bool = (
 		InventoryManager.get_tool_category(selected_item) == InventoryManager.ToolCategory.SHOVEL
@@ -506,19 +605,19 @@ func _try_interact_or_place_block() -> void:
 		var above_id: int = _world_manager.get_block_world(above_crop_pos)
 		if above_id == BlockRegistry.BlockId.AIR:
 			if selected_item == InventoryManager.ItemId.WHEAT_SEEDS:
-				if _world_manager.set_block_world(above_crop_pos, BlockRegistry.BlockId.WHEAT_CROPS):
+				if _world_manager.set_block_world(above_crop_pos, BlockRegistry.BlockId.WHEAT_SPROUT):
 					if not is_creative and _inventory != null:
 						_inventory.consume_from_hotbar_slot(selected_slot, 1)
-					loot_notification.emit("Planted Wheat Seeds!")
-					block_placed.emit(above_crop_pos, BlockRegistry.BlockId.WHEAT_CROPS)
+					loot_notification.emit("Planted Wheat Sprout!")
+					block_placed.emit(above_crop_pos, BlockRegistry.BlockId.WHEAT_SPROUT)
 					_update_raycast_target()
 				return
 			elif selected_item == InventoryManager.ItemId.POTATO:
-				if _world_manager.set_block_world(above_crop_pos, BlockRegistry.BlockId.POTATO_CROPS):
+				if _world_manager.set_block_world(above_crop_pos, BlockRegistry.BlockId.POTATO_SPROUT):
 					if not is_creative and _inventory != null:
 						_inventory.consume_from_hotbar_slot(selected_slot, 1)
-					loot_notification.emit("Planted Potato!")
-					block_placed.emit(above_crop_pos, BlockRegistry.BlockId.POTATO_CROPS)
+					loot_notification.emit("Planted Potato Sprout!")
+					block_placed.emit(above_crop_pos, BlockRegistry.BlockId.POTATO_SPROUT)
 					_update_raycast_target()
 				return
 
