@@ -124,7 +124,7 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			# Deterministic tree, cactus, boulder, or mountain waterfall spring placement
 			if surface_y > WATER_LEVEL + 1 and lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
 				var surface_id: int = get_block_local(lx, surface_y, lz)
-				var biome: int = sample_biome(wx, wz)
+				var biome: int = sample_biome(wx, wz, surface_noise.seed if surface_noise != null else 0)
 				if biome == Biome.DESERT and surface_id == BlockRegistry.BlockId.SAND:
 					if _should_spawn_tree(wx, wz, biome):
 						_place_cactus(lx, surface_y + 1, lz)
@@ -158,18 +158,21 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 
 
 ## Deterministic 2D climate biome sampler (Plains, Forest, Desert, Snowy Taiga).
-static func sample_biome(wx: int, wz: int) -> int:
-	var fx: float = float(wx)
-	var fz: float = float(wz)
-	var warp_x: float = fx + sin(fz * 0.012) * 24.0
-	var warp_z: float = fz + cos(fx * 0.012) * 24.0
-	var temp: float = sin(warp_x * 0.0065 + cos(warp_z * 0.0052) * 1.3) + cos(warp_z * 0.0060)
-	var humid: float = cos(warp_x * 0.0058 - warp_z * 0.0068) + sin(warp_x * 0.011) * 0.35
-	if temp > 0.72:
+## Seeded per world so every seed produces unique, diverse climate and biome distributions.
+static func sample_biome(wx: int, wz: int, world_seed: int = 0) -> int:
+	var seed_x: float = float(int(world_seed * 1664525 + 1013904223) % 40000)
+	var seed_z: float = float(int(world_seed * 214013 + 2531011) % 40000)
+	var fx: float = float(wx) + seed_x
+	var fz: float = float(wz) + seed_z
+	var warp_x: float = fx + sin(fz * 0.008) * 32.0
+	var warp_z: float = fz + cos(fx * 0.008) * 32.0
+	var temp: float = sin(warp_x * 0.0042 + cos(warp_z * 0.0035) * 1.4) + cos(warp_z * 0.0038)
+	var humid: float = cos(warp_x * 0.0040 - warp_z * 0.0045) + sin(warp_x * 0.008) * 0.40
+	if temp > 0.65:
 		return Biome.DESERT
-	if temp < -0.70:
+	if temp < -0.65:
 		return Biome.SNOWY_TAIGA
-	if humid > 0.18:
+	if humid > 0.12:
 		return Biome.FOREST
 	return Biome.PLAINS
 
@@ -299,7 +302,8 @@ static func sample_terrain_voxel(
 	if surface_y <= WATER_LEVEL + 1 and ly >= surface_y - 2:
 		return BlockRegistry.BlockId.SAND
 
-	var biome: int = sample_biome(wx, wz)
+	var world_seed: int = (cave_noise.seed - 7919) if cave_noise != null else 0
+	var biome: int = sample_biome(wx, wz, world_seed)
 	if biome == Biome.DESERT and surface_y > WATER_LEVEL:
 		if ly == surface_y or ly == surface_y - 1:
 			return BlockRegistry.BlockId.SAND
@@ -483,7 +487,8 @@ func _generate_chunk_structures(surface_noise: FastNoiseLite) -> void:
 	if center_y <= WATER_LEVEL + 1 or center_y >= SEA_LEVEL + 7:
 		return
 
-	var biome: int = sample_biome(center_wx, center_wz)
+	var world_seed: int = surface_noise.seed if surface_noise != null else 0
+	var biome: int = sample_biome(center_wx, center_wz, world_seed)
 	if biome == Biome.PLAINS and chunk_hash % 7 == 0:
 		_build_village_house(2, center_y, 2, chunk_hash)
 		_build_village_farm(9, center_y, 9, chunk_hash)

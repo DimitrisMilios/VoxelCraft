@@ -93,9 +93,26 @@ func _ready() -> void:
 			_spawn_chunk_immediate(start_chunk + Vector2i(dx, dz))
 
 	if _player != null and not has_saved_pos:
-		var spawn_wx: int = int(floor(_player.global_position.x))
-		var spawn_wz: int = int(floor(_player.global_position.z))
+		var spawn_wx: int = 8
+		var spawn_wz: int = 8
 		var surface_y: int = get_surface_height_at(spawn_wx, spawn_wz)
+		# If initial origin is underwater in an ocean, spiral outward to find solid dry land
+		if surface_y <= VoxelChunk.WATER_LEVEL + 1:
+			var found: bool = false
+			for r in range(1, 8):
+				for angle in range(8):
+					var rad: float = float(angle) * (PI / 4.0)
+					var test_x: int = int(round(8.0 + cos(rad) * float(r * 12)))
+					var test_z: int = int(round(8.0 + sin(rad) * float(r * 12)))
+					var test_y: int = get_surface_height_at(test_x, test_z)
+					if test_y > VoxelChunk.WATER_LEVEL + 1:
+						spawn_wx = test_x
+						spawn_wz = test_z
+						surface_y = test_y
+						found = true
+						break
+				if found:
+					break
 		_player.global_position = Vector3(float(spawn_wx) + 0.5, float(surface_y) + 2.5, float(spawn_wz) + 0.5)
 
 	_update_chunk_targets(start_chunk)
