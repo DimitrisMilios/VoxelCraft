@@ -1354,19 +1354,20 @@ func _build_pause_menu() -> void:
 	)
 	vbox.add_child(resume_btn)
 
+	var init_dist: int = _world_manager.render_distance if _world_manager != null else 10
 	_render_dist_label = Label.new()
-	_render_dist_label.text = "Render Distance: 5 Chunks"
+	_render_dist_label.text = "Render Distance: %d Chunks (%dm)" % [init_dist, init_dist * 16]
 	_render_dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_render_dist_label)
 
 	var slider := HSlider.new()
-	slider.min_value = 2
-	slider.max_value = 8
+	slider.min_value = 3
+	slider.max_value = 16
 	slider.step = 1
-	slider.value = 5
+	slider.value = init_dist
 	slider.value_changed.connect(func(val: float) -> void:
 		var dist: int = int(val)
-		_render_dist_label.text = "Render Distance: %d Chunks" % dist
+		_render_dist_label.text = "Render Distance: %d Chunks (%dm)" % [dist, dist * 16]
 		if _world_manager != null:
 			_world_manager.set_render_distance(dist)
 	)

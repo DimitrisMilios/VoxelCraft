@@ -13,6 +13,7 @@ func _initialize() -> void:
 	_ensure_dirs()
 	_build_block_atlas()
 	_build_water_texture()
+	_build_water_wave_normals()
 	_copy_destroy_stages()
 	_build_hud_and_gui_assets()
 	_copy_2d_item_icons()
@@ -274,6 +275,8 @@ func _build_block_atlas() -> void:
 		_load_tile_64("block/potatoes_stage3.png"),          # 39: Potato Crops
 		_load_tile_64("block/lava_still.png"),               # 40: Lava
 		_load_tile_64("block/obsidian.png"),                 # 41: Obsidian
+		_tint_image(_load_tile_64("block/sugar_cane.png"), Color(0.55, 0.82, 0.35, 1.0)), # 42: Sugar Cane
+		_tint_image(_load_tile_64("block/seagrass.png"), Color(0.32, 0.76, 0.28, 1.0)),   # 43: Seagrass
 	]
 
 	var atlas := Image.create(tiles.size() * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
@@ -349,6 +352,8 @@ func _build_normal_atlas(tiles: Array[Image]) -> void:
 				strength = 2.8
 			41: # Obsidian (volcanic glass fracture ridges)
 				strength = 3.2
+			42, 43: # Sugar Cane, Seagrass (foliage surface depth)
+				strength = 1.6
 			0, 1, 2, 37: # Grass, Dirt, Farmland
 				strength = 2.0
 			6: # Leaves
@@ -434,6 +439,9 @@ func _build_roughness_atlas(tiles: Array[Image]) -> void:
 			41: # Obsidian (glassy polish, high specular glint)
 				base_rough = 0.12
 				variation = 0.08
+			42, 43: # Sugar Cane, Seagrass (sub-surface foliage gloss)
+				base_rough = 0.65
+				variation = 0.15
 
 		var rough_tile := _generate_roughness_tile(tile, base_rough, variation)
 		rough_atlas.blit_rect(rough_tile, Rect2i(0, 0, TILE_SIZE, TILE_SIZE), Vector2i(idx * TILE_SIZE, 0))
@@ -579,6 +587,77 @@ func _build_water_texture() -> void:
 	print("[Faithful64xBuilder] Saved Faithful 64x Water Texture -> ", out_path)
 
 
+func _build_water_wave_normals() -> void:
+	const SIZE: int = 256
+	var tex_dir_1: String = ProjectSettings.globalize_path("res://assets/textures/")
+	var tex_dir_2: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/textures/")
+
+	# Normal map 1
+	var norm1 := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	var heights1 := PackedFloat32Array()
+	heights1.resize(SIZE * SIZE)
+
+	for y in range(SIZE):
+		var v: float = (float(y) / float(SIZE)) * TAU
+		for x in range(SIZE):
+			var u: float = (float(x) / float(SIZE)) * TAU
+			var h: float = (
+				sin(3.0 * u + 2.0 * v) * 0.40
+				+ cos(2.0 * u - 4.0 * v) * 0.30
+				+ sin(5.0 * u + 1.0 * v) * 0.18
+				+ cos(1.0 * u + 6.0 * v) * 0.12
+			)
+			heights1[y * SIZE + x] = h
+
+	var strength1: float = 3.6
+	for y in range(SIZE):
+		var ym1: int = (y - 1 + SIZE) % SIZE
+		var yp1: int = (y + 1) % SIZE
+		for x in range(SIZE):
+			var xm1: int = (x - 1 + SIZE) % SIZE
+			var xp1: int = (x + 1) % SIZE
+			var dx: float = (heights1[y * SIZE + xp1] - heights1[y * SIZE + xm1]) * strength1
+			var dy: float = (heights1[yp1 * SIZE + x] - heights1[ym1 * SIZE + x]) * strength1
+			var n := Vector3(-dx, -dy, 1.0).normalized()
+			norm1.set_pixel(x, y, Color(n.x * 0.5 + 0.5, n.y * 0.5 + 0.5, n.z * 0.5 + 0.5, 1.0))
+
+	norm1.save_png(tex_dir_1 + "water_wave_normal_1.png")
+	norm1.save_png(tex_dir_2 + "water_wave_normal_1.png")
+
+	# Normal map 2 (cross waves)
+	var norm2 := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	var heights2 := PackedFloat32Array()
+	heights2.resize(SIZE * SIZE)
+
+	for y in range(SIZE):
+		var v: float = (float(y) / float(SIZE)) * TAU
+		for x in range(SIZE):
+			var u: float = (float(x) / float(SIZE)) * TAU
+			var h: float = (
+				sin(2.0 * u - 3.0 * v) * 0.42
+				+ cos(4.0 * u + 3.0 * v) * 0.28
+				+ sin(1.0 * u - 5.0 * v) * 0.18
+				+ cos(6.0 * u - 2.0 * v) * 0.12
+			)
+			heights2[y * SIZE + x] = h
+
+	var strength2: float = 3.4
+	for y in range(SIZE):
+		var ym1: int = (y - 1 + SIZE) % SIZE
+		var yp1: int = (y + 1) % SIZE
+		for x in range(SIZE):
+			var xm1: int = (x - 1 + SIZE) % SIZE
+			var xp1: int = (x + 1) % SIZE
+			var dx: float = (heights2[y * SIZE + xp1] - heights2[y * SIZE + xm1]) * strength2
+			var dy: float = (heights2[yp1 * SIZE + x] - heights2[ym1 * SIZE + x]) * strength2
+			var n := Vector3(-dx, -dy, 1.0).normalized()
+			norm2.set_pixel(x, y, Color(n.x * 0.5 + 0.5, n.y * 0.5 + 0.5, n.z * 0.5 + 0.5, 1.0))
+
+	norm2.save_png(tex_dir_1 + "water_wave_normal_2.png")
+	norm2.save_png(tex_dir_2 + "water_wave_normal_2.png")
+	print("[Faithful64xBuilder] Generated seamless water wave normal maps (1 and 2).")
+
+
 func _copy_destroy_stages() -> void:
 	for stage in range(10):
 		var src: Image = _load_tile_64("block/destroy_stage_%d.png" % stage)
@@ -684,12 +763,15 @@ func _build_hud_and_gui_assets() -> void:
 
 func _copy_2d_item_icons() -> void:
 	var icon_dir: String = ProjectSettings.globalize_path("res://assets/packs/faithful_64x/ui/item_icons/")
+	var fallback_dir: String = ProjectSettings.globalize_path("res://assets/ui/item_icons/")
 	var item_map: Dictionary = {
 		# Placeable Non-Full-Block Items
 		19: "block/torch.png",
 		21: "item/oak_door.png",
 		22: "item/oak_door.png",
 		23: "block/ladder.png",
+		44: "item/sugar_cane.png",
+		45: "item/seagrass.png",
 
 		# Resources & Food (Matching InventoryManager.ItemId exactly)
 		100: "item/stick.png",
@@ -738,6 +820,7 @@ func _copy_2d_item_icons() -> void:
 		var rel_path: String = item_map[item_id]
 		var img: Image = _load_tile_64(rel_path)
 		img.save_png(icon_dir + ("item_%d.png" % int(item_id)))
+		img.save_png(fallback_dir + ("item_%d.png" % int(item_id)))
 
 	print("[Faithful64xBuilder] Copied %d Faithful 64x 2D Item & Tool icons." % item_map.size())
 

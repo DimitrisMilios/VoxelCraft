@@ -11,7 +11,7 @@ const MAX_WATER_SPREAD_PER_TICK: int = 48
 
 @export_group("World Generation")
 @export var world_seed: int = 2027
-@export var render_distance: int = 5
+@export var render_distance: int = 10
 @export var max_concurrent_tasks: int = 4
 @export var max_main_thread_applies_per_frame: int = 3
 
@@ -137,7 +137,7 @@ func _process(delta: float) -> void:
 
 ## Dynamically updates chunk render distance at runtime (e.g. from the Pause Menu).
 func set_render_distance(new_distance: int) -> void:
-	var clamped: int = clampi(new_distance, 2, 8)
+	var clamped: int = clampi(new_distance, 3, 16)
 	if clamped == render_distance:
 		return
 	render_distance = clamped

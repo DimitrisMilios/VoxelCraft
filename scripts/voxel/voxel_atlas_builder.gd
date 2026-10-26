@@ -3,7 +3,7 @@ extends RefCounted
 ## Generates a crisp 16x16 per-tile retro pixel-art texture atlas and shared chunk material.
 
 static var _cached_material: StandardMaterial3D = null
-static var _cached_water_material: StandardMaterial3D = null
+static var _cached_water_material: Material = null
 static var _cached_texture: ImageTexture = null
 static var _cached_normal_texture: ImageTexture = null
 static var _cached_roughness_texture: ImageTexture = null
@@ -17,6 +17,9 @@ static func get_shared_voxel_material() -> StandardMaterial3D:
 	material.albedo_texture = get_atlas_texture()
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	material.alpha_scissor_threshold = 0.5
+	material.cull_mode = BaseMaterial3D.CULL_BACK
 
 	# PBR Roughness map for tuned matte/gloss physical response
 	var rough_tex: ImageTexture = get_atlas_roughness_texture()
@@ -39,13 +42,38 @@ static func get_shared_voxel_material() -> StandardMaterial3D:
 	return _cached_material
 
 
-static func get_shared_water_material() -> StandardMaterial3D:
+static func get_shared_water_material() -> Material:
 	if _cached_water_material != null:
+		return _cached_water_material
+
+	var shader: Shader = load("res://shaders/water.gdshader") as Shader
+	if shader != null:
+		var s_mat := ShaderMaterial.new()
+		s_mat.shader = shader
+
+		# Set realistic shallow and deep colors (matching reference image RTX / SEUS PTGI lake water)
+		s_mat.set_shader_parameter("shallow_color", Color(0.24, 0.74, 0.82, 0.40))
+		s_mat.set_shader_parameter("deep_color", Color(0.04, 0.30, 0.56, 0.90))
+		s_mat.set_shader_parameter("depth_distance", 5.5)
+		s_mat.set_shader_parameter("beer_factor", 1.25)
+		s_mat.set_shader_parameter("roughness", 0.04)
+		s_mat.set_shader_parameter("metallic", 0.05)
+		s_mat.set_shader_parameter("specular", 0.95)
+		s_mat.set_shader_parameter("refraction_strength", 0.02)
+		s_mat.set_shader_parameter("normal_strength", 0.85)
+
+		var wave1_img: Image = TexturePack.load_image("res://assets/textures/water_wave_normal_1.png")
+		if wave1_img != null:
+			s_mat.set_shader_parameter("wave_normal_1", ImageTexture.create_from_image(wave1_img))
+		var wave2_img: Image = TexturePack.load_image("res://assets/textures/water_wave_normal_2.png")
+		if wave2_img != null:
+			s_mat.set_shader_parameter("wave_normal_2", ImageTexture.create_from_image(wave2_img))
+
+		_cached_water_material = s_mat
 		return _cached_water_material
 
 	var water_tex: ImageTexture = null
 	var water_uv_scale: float = 0.32
-	# Optional local texture pack water (e.g. Faithful 64x); see TexturePack.
 	var loaded_water: Image = TexturePack.load_image("res://assets/textures/water_still_64.png")
 	if loaded_water != null:
 		water_tex = ImageTexture.create_from_image(loaded_water)
@@ -86,11 +114,13 @@ static func get_shared_water_material() -> StandardMaterial3D:
 static func update_water_animation(delta: float) -> void:
 	if _cached_water_material == null:
 		return
-	var offset: Vector3 = _cached_water_material.uv1_offset
-	offset.x = fmod(offset.x + delta * 0.18, 1.0)
-	offset.y = fmod(offset.y - delta * 0.42, 1.0)
-	offset.z = fmod(offset.z + delta * 0.22, 1.0)
-	_cached_water_material.uv1_offset = offset
+	if _cached_water_material is StandardMaterial3D:
+		var std_mat := _cached_water_material as StandardMaterial3D
+		var offset: Vector3 = std_mat.uv1_offset
+		offset.x = fmod(offset.x + delta * 0.18, 1.0)
+		offset.y = fmod(offset.y - delta * 0.42, 1.0)
+		offset.z = fmod(offset.z + delta * 0.22, 1.0)
+		std_mat.uv1_offset = offset
 
 
 static func get_atlas_texture() -> ImageTexture:

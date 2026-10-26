@@ -55,7 +55,7 @@ func _ensure_child_nodes() -> void:
 		return
 
 	var solid_mat: StandardMaterial3D = VoxelAtlasBuilder.get_shared_voxel_material()
-	var water_mat: StandardMaterial3D = VoxelAtlasBuilder.get_shared_water_material()
+	var water_mat: Material = VoxelAtlasBuilder.get_shared_water_material()
 
 	for sub_idx in range(SUB_CHUNK_COUNT):
 		var solid_mi := MeshInstance3D.new()
@@ -132,6 +132,24 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 						_place_tree(lx, surface_y + 1, lz)
 				elif (biome == Biome.FOREST or biome == Biome.SNOWY_TAIGA) and _should_spawn_boulder(wx, wz) and surface_id != BlockRegistry.BlockId.AIR:
 					_place_mossy_boulder(lx, surface_y, lz)
+
+			# Shoreline Sugar Cane reeds along water banks (matching realistic lake shores)
+			if (surface_y == WATER_LEVEL or surface_y == WATER_LEVEL + 1) and (surface_y + 3 < CHUNK_SIZE_Y):
+				var surf_id: int = get_block_local(lx, surface_y, lz)
+				if surf_id == BlockRegistry.BlockId.SAND or surf_id == BlockRegistry.BlockId.GRASS or surf_id == BlockRegistry.BlockId.DIRT:
+					var cane_hash: int = absi((wx * 374761393) ^ (wz * 668265263)) % 100
+					if cane_hash < 24:
+						var cane_height: int = 3 if (cane_hash % 2 == 0) else 2
+						for ch in range(1, cane_height + 1):
+							_set_voxel_raw(lx, surface_y + ch, lz, BlockRegistry.BlockId.SUGAR_CANE)
+						if surface_y + cane_height > _highest_solid_y:
+							_highest_solid_y = surface_y + cane_height
+
+			# Underwater Seagrass on shallow lake beds
+			elif surface_y < WATER_LEVEL and surface_y >= WATER_LEVEL - 3 and (surface_y + 1 < CHUNK_SIZE_Y):
+				var sea_hash: int = absi((wx * 15485863) ^ (wz * 32452843)) % 100
+				if sea_hash < 32:
+					_set_voxel_raw(lx, surface_y + 1, lz, BlockRegistry.BlockId.SEAGRASS)
 
 	_generate_chunk_structures(surface_noise)
 
@@ -715,6 +733,12 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 						water_faces += 1
 					continue
 
+				# Custom foliage blocks (Sugar Cane, Seagrass cross quads)
+				if block_id == BlockRegistry.BlockId.SUGAR_CANE or block_id == BlockRegistry.BlockId.SEAGRASS:
+					_emit_cross_quad(st_solid, lx, ly, lz, block_id)
+					solid_faces += 4
+					continue
+
 				# Custom non-cube functional blocks (Torches, Beds, Doors, Ladders)
 				if not BlockRegistry.is_opaque_full_cube(block_id):
 					var min_b := Vector3(0.0, 0.0, 0.0)
@@ -862,6 +886,87 @@ func _get_neighbor_id(lx: int, ly: int, lz: int) -> int:
 
 func _is_neighbor_solid(lx: int, ly: int, lz: int) -> bool:
 	return BlockRegistry.is_opaque_full_cube(_get_neighbor_id(lx, ly, lz))
+
+
+func _emit_cross_quad(
+	st: SurfaceTool,
+	lx: int,
+	ly: int,
+	lz: int,
+	block_id: int
+) -> void:
+	var origin := Vector3(float(lx), float(ly), float(lz))
+	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, BlockRegistry.FaceDir.NORTH)
+	var u0: float = uv_rect.position.x
+	var v0: float = uv_rect.position.y
+	var u1: float = uv_rect.position.x + uv_rect.size.x
+	var v1: float = uv_rect.position.y + uv_rect.size.y
+
+	# Diagonal 1: (0, 0, 0) to (1, 1, 1)
+	var d1_p0 := origin + Vector3(0.0, 0.0, 0.0)
+	var d1_p1 := origin + Vector3(1.0, 0.0, 1.0)
+	var d1_p2 := origin + Vector3(1.0, 1.0, 1.0)
+	var d1_p3 := origin + Vector3(0.0, 1.0, 0.0)
+
+	# Diagonal 2: (0, 0, 1) to (1, 1, 0)
+	var d2_p0 := origin + Vector3(0.0, 0.0, 1.0)
+	var d2_p1 := origin + Vector3(1.0, 0.0, 0.0)
+	var d2_p2 := origin + Vector3(1.0, 1.0, 0.0)
+	var d2_p3 := origin + Vector3(0.0, 1.0, 1.0)
+
+	var normal1 := Vector3(-0.7071, 0.0, 0.7071)
+	var normal2 := Vector3(0.7071, 0.0, 0.7071)
+	var col := Color(0.94, 0.94, 0.94, 1.0)
+
+	# Diagonal 1 (Front & Back)
+	for pass_idx in range(2):
+		var n: Vector3 = normal1 if pass_idx == 0 else -normal1
+		var a: Vector3 = d1_p0 if pass_idx == 0 else d1_p1
+		var b: Vector3 = d1_p1 if pass_idx == 0 else d1_p0
+		var c: Vector3 = d1_p2 if pass_idx == 0 else d1_p3
+		var d: Vector3 = d1_p3 if pass_idx == 0 else d1_p2
+
+		st.set_color(col)
+		st.set_normal(n)
+
+		st.set_uv(Vector2(u0, v1))
+		st.add_vertex(a)
+		st.set_uv(Vector2(u1, v1))
+		st.add_vertex(b)
+		st.set_uv(Vector2(u1, v0))
+		st.add_vertex(c)
+
+		st.set_uv(Vector2(u0, v1))
+		st.add_vertex(a)
+		st.set_uv(Vector2(u1, v0))
+		st.add_vertex(c)
+		st.set_uv(Vector2(u0, v0))
+		st.add_vertex(d)
+
+	# Diagonal 2 (Front & Back)
+	for pass_idx in range(2):
+		var n: Vector3 = normal2 if pass_idx == 0 else -normal2
+		var a: Vector3 = d2_p0 if pass_idx == 0 else d2_p1
+		var b: Vector3 = d2_p1 if pass_idx == 0 else d2_p0
+		var c: Vector3 = d2_p2 if pass_idx == 0 else d2_p3
+		var d: Vector3 = d2_p3 if pass_idx == 0 else d2_p2
+
+		st.set_color(col)
+		st.set_normal(n)
+
+		st.set_uv(Vector2(u0, v1))
+		st.add_vertex(a)
+		st.set_uv(Vector2(u1, v1))
+		st.add_vertex(b)
+		st.set_uv(Vector2(u1, v0))
+		st.add_vertex(c)
+
+		st.set_uv(Vector2(u0, v1))
+		st.add_vertex(a)
+		st.set_uv(Vector2(u1, v0))
+		st.add_vertex(c)
+		st.set_uv(Vector2(u0, v0))
+		st.add_vertex(d)
 
 
 func _emit_custom_box(

@@ -45,6 +45,8 @@ enum BlockId {
 	LAVA = 41,
 	POTATO_CROPS = 42,
 	OBSIDIAN = 43,
+	SUGAR_CANE = 44,
+	SEAGRASS = 45,
 }
 
 enum FaceDir {
@@ -108,6 +110,8 @@ static func is_passable_block(block_id: int) -> bool:
 		or block_id == BlockId.LADDER
 		or block_id == BlockId.WHEAT_CROPS
 		or block_id == BlockId.POTATO_CROPS
+		or block_id == BlockId.SUGAR_CANE
+		or block_id == BlockId.SEAGRASS
 	)
 
 
@@ -123,6 +127,8 @@ static func is_opaque_full_cube(block_id: int) -> bool:
 		or block_id == BlockId.FARMLAND
 		or block_id == BlockId.WHEAT_CROPS
 		or block_id == BlockId.POTATO_CROPS
+		or block_id == BlockId.SUGAR_CANE
+		or block_id == BlockId.SEAGRASS
 	):
 		return false
 	return true
@@ -218,7 +224,7 @@ static func get_block_hardness(block_id: int) -> float:
 	if is_liquid(block_id) or block_id == BlockId.AIR:
 		return 0.0
 	match block_id:
-		BlockId.TORCH, BlockId.TNT, BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS:
+		BlockId.TORCH, BlockId.TNT, BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS, BlockId.SUGAR_CANE, BlockId.SEAGRASS:
 			return 0.10
 		BlockId.WOOL:
 			return 0.35
@@ -314,6 +320,10 @@ static func get_block_name(block_id: int) -> String:
 			return "Lava"
 		BlockId.OBSIDIAN:
 			return "Obsidian"
+		BlockId.SUGAR_CANE:
+			return "Sugar Cane"
+		BlockId.SEAGRASS:
+			return "Seagrass"
 		_:
 			return "Unknown"
 
@@ -384,6 +394,10 @@ static func get_block_color(block_id: int) -> Color:
 			return Color(1.0, 0.38, 0.08)
 		BlockId.OBSIDIAN:
 			return Color(0.12, 0.08, 0.18)
+		BlockId.SUGAR_CANE:
+			return Color(0.58, 0.82, 0.35)
+		BlockId.SEAGRASS:
+			return Color(0.28, 0.72, 0.25)
 		_:
 			return Color.GRAY
 
@@ -489,6 +503,10 @@ static func get_tile_index(block_id: int, face_dir: int) -> int:
 			return 40
 		BlockId.OBSIDIAN:
 			return 41
+		BlockId.SUGAR_CANE:
+			return 42
+		BlockId.SEAGRASS:
+			return 43
 		_:
 			return 3
 

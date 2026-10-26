@@ -44,12 +44,12 @@ glow_intensity = 0.65
 glow_bloom = 0.12
 fog_enabled = true
 fog_light_color = Color(0.68, 0.84, 0.96, 1)
-fog_density = 0.003
+fog_density = 0.0006
 volumetric_fog_enabled = true
-volumetric_fog_density = 0.008
+volumetric_fog_density = 0.0035
 volumetric_fog_albedo = Color(0.96, 0.88, 0.76, 1)
 volumetric_fog_anisotropy = 0.65
-volumetric_fog_length = 96.0
+volumetric_fog_length = 260.0
 volumetric_fog_ambient_inject = 0.08
 
 [node name="Main" type="Node3D"]
@@ -66,7 +66,7 @@ directional_shadow_split_1 = 0.07
 directional_shadow_split_2 = 0.2
 directional_shadow_split_3 = 0.55
 directional_shadow_blend_splits = true
-directional_shadow_max_distance = 160.0
+directional_shadow_max_distance = 250.0
 directional_shadow_fade_start = 0.8
 light_energy = 1.35
 light_volumetric_fog_energy = 2.2
@@ -76,7 +76,7 @@ script = ExtResource("5_day_night")
 
 [node name="WorldManager" type="Node3D" parent="."]
 script = ExtResource("2_world_manager")
-render_distance = 5
+render_distance = 10
 player_path = NodePath("../Player")
 
 [node name="VoxelParticleSpawner" type="Node3D" parent="."]
