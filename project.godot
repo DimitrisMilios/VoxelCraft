@@ -28,10 +28,10 @@ window/vsync/vsync_mode=1
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
+renderer/rendering_method="mobile"
 textures/canvas_textures/default_texture_filter=0
-lights_and_shadows/directional_shadow/size=2048
-lights_and_shadows/directional_shadow/soft_shadow_filter_quality=2
+lights_and_shadows/directional_shadow/size=1024
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1
 environment/ssao/quality=2
 environment/ssil/quality=1
 environment/volumetric_fog/volume_depth=64

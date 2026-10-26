@@ -27,20 +27,12 @@ ambient_light_sky_contribution = 0.5
 tonemap_mode = 3
 tonemap_exposure = 1.05
 tonemap_white = 1.0
-ssao_enabled = true
-ssao_radius = 1.4
-ssao_intensity = 2.0
-ssao_power = 1.5
-ssao_detail = 0.5
-ssao_horizon = 0.06
-ssao_sharpness = 0.9
+ssao_enabled = false
 ssil_enabled = false
-glow_enabled = true
-glow_intensity = 0.45
-glow_bloom = 0.08
+glow_enabled = false
 fog_enabled = true
 fog_light_color = Color(0.68, 0.84, 0.96, 1)
-fog_density = 0.0012
+fog_density = 0.0016
 volumetric_fog_enabled = false
 
 [node name="Main" type="Node3D"]
@@ -51,15 +43,12 @@ environment = SubResource("Environment_retro")
 [node name="SunLight" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.819152, -0.40558, 0.40558, 0, 0.707107, 0.707107, -0.573576, -0.579228, 0.579228, 0, 80, 0)
 shadow_enabled = true
-shadow_blur = 1.5
-directional_shadow_mode = 2
-directional_shadow_split_1 = 0.1
-directional_shadow_split_2 = 0.28
-directional_shadow_split_3 = 0.6
-directional_shadow_blend_splits = true
-directional_shadow_max_distance = 120.0
+shadow_blur = 1.0
+directional_shadow_mode = 1
+directional_shadow_split_1 = 0.25
+directional_shadow_max_distance = 64.0
 directional_shadow_fade_start = 0.85
-light_energy = 1.35
+light_energy = 1.25
 
 [node name="DayNightCycle" type="Node" parent="."]
 script = ExtResource("5_day_night")
@@ -67,7 +56,7 @@ day_length_seconds = 1800.0
 
 [node name="WorldManager" type="Node3D" parent="."]
 script = ExtResource("2_world_manager")
-render_distance = 6
+render_distance = 4
 player_path = NodePath("../Player")
 
 [node name="VoxelParticleSpawner" type="Node3D" parent="."]

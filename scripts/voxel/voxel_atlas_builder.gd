@@ -19,6 +19,7 @@ static func get_shared_voxel_material() -> StandardMaterial3D:
 	material.vertex_color_use_as_albedo = true
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	material.alpha_scissor_threshold = 0.5
+	material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	material.cull_mode = BaseMaterial3D.CULL_BACK
 
 	# PBR Roughness map for tuned matte/gloss physical response

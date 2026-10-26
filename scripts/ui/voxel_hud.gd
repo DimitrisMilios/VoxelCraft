@@ -1373,6 +1373,36 @@ func _build_pause_menu() -> void:
 	)
 	vbox.add_child(slider)
 
+	var sun: DirectionalLight3D = get_tree().root.find_child("SunLight", true, false) as DirectionalLight3D
+	var shadow_btn := Button.new()
+	var shadow_state: bool = sun.shadow_enabled if sun != null else true
+	shadow_btn.text = "Dynamic Shadows: %s" % ("ON" if shadow_state else "OFF (Fastest)")
+	shadow_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(shadow_btn)
+	shadow_btn.pressed.connect(func() -> void:
+		if sun != null:
+			sun.shadow_enabled = not sun.shadow_enabled
+			shadow_btn.text = "Dynamic Shadows: %s" % ("ON" if sun.shadow_enabled else "OFF (Fastest)")
+			_pause_status_label.text = "Shadows %s" % ("ENABLED" if sun.shadow_enabled else "DISABLED")
+	)
+	vbox.add_child(shadow_btn)
+
+	var perf_btn := Button.new()
+	perf_btn.text = "Preset: Optimize for 60+ FPS (1-Click)"
+	perf_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(perf_btn)
+	perf_btn.pressed.connect(func() -> void:
+		if _world_manager != null:
+			_world_manager.set_render_distance(4)
+			slider.value = 4
+			_render_dist_label.text = "Render Distance: 4 Chunks (64m)"
+		if sun != null:
+			sun.shadow_enabled = false
+			shadow_btn.text = "Dynamic Shadows: OFF (Fastest)"
+		_pause_status_label.text = "Configured for Smooth 60+ FPS!"
+	)
+	vbox.add_child(perf_btn)
+
 	var fly_btn := Button.new()
 	fly_btn.text = "Toggle Creative Fly Mode (F)"
 	fly_btn.custom_minimum_size = Vector2(0, 32)

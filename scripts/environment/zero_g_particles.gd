@@ -21,12 +21,12 @@ func _setup() -> void:
 func _create_particles() -> void:
 	_particles = GPUParticles3D.new()
 	_particles.name = "ZeroGParticles"
-	_particles.amount = 280
-	_particles.lifetime = 7.5
-	_particles.preprocess = 4.0
+	_particles.amount = 45
+	_particles.lifetime = 6.0
+	_particles.preprocess = 2.0
 	_particles.explosiveness = 0.0
-	_particles.randomness = 0.6
-	_particles.visibility_aabb = AABB(Vector3(-35, -20, -35), Vector3(70, 40, 70))
+	_particles.randomness = 0.5
+	_particles.visibility_aabb = AABB(Vector3(-25, -15, -25), Vector3(50, 30, 50))
 
 	# Unshaded additive emission material for luminous bloom
 	var mat := StandardMaterial3D.new()
@@ -62,10 +62,8 @@ func _create_particles() -> void:
 	p_mat.scale_max = 1.3
 	p_mat.color = Color(1.0, 0.90, 0.60, 0.85)
 
-	# Subtle turbulence for floating eddies in zero-g
-	p_mat.turbulence_enabled = true
-	p_mat.turbulence_noise_strength = 0.14
-	p_mat.turbulence_noise_scale = 3.8
+	# Lightweight floating drift without GPU turbulence compute
+	p_mat.turbulence_enabled = false
 
 	_particles.process_material = p_mat
 	add_child(_particles)
