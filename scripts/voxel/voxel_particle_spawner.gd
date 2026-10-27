@@ -1,15 +1,48 @@
 class_name VoxelParticleSpawner
 extends Node3D
-## Spawns 3D retro voxel cube debris bursts when blocks are broken or placed.
+## Spawns 3D retro voxel cube debris bursts when blocks are broken or placed using a fixed reusable pool.
 
-var _shared_debris_mesh: BoxMesh = null
+const POOL_SIZE: int = 8
+var _pool: Array[CPUParticles3D] = []
+var _pool_index: int = 0
 
 
 func _ready() -> void:
 	add_to_group("particle_spawner")
-	_shared_debris_mesh = BoxMesh.new()
-	_shared_debris_mesh.size = Vector3(0.16, 0.16, 0.16)
+	_init_pool()
 	call_deferred("_connect_player_interactor")
+
+
+func _init_pool() -> void:
+	for i in range(POOL_SIZE):
+		var p := CPUParticles3D.new()
+		p.emitting = false
+		p.one_shot = true
+		p.amount = 22
+		p.lifetime = 0.55
+		p.explosiveness = 0.95
+
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(0.16, 0.16, 0.16)
+		var mat := StandardMaterial3D.new()
+		mat.roughness = 0.95
+		mat.vertex_color_use_as_albedo = true
+		mesh.material = mat
+		p.mesh = mesh
+
+		p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		p.emission_box_extents = Vector3(0.32, 0.32, 0.32)
+		p.direction = Vector3(0.0, 1.0, 0.0)
+		p.spread = 180.0
+		p.gravity = Vector3(0.0, -14.0, 0.0)
+		p.initial_velocity_min = 2.0
+		p.initial_velocity_max = 4.0
+		p.scale_amount_min = 0.65
+		p.scale_amount_max = 1.15
+		p.color = Color.WHITE
+
+		add_child(p)
+		_pool.append(p)
 
 
 func _connect_player_interactor() -> void:
@@ -49,37 +82,20 @@ func _spawn_burst(
 	min_vel: float,
 	max_vel: float
 ) -> void:
-	var particles := CPUParticles3D.new()
-	particles.position = center
-	particles.emitting = false
-	particles.one_shot = true
-	particles.amount = amount
-	particles.lifetime = 0.55
-	particles.explosiveness = 0.95
+	if _pool.is_empty():
+		return
+	var p: CPUParticles3D = _pool[_pool_index]
+	_pool_index = (_pool_index + 1) % POOL_SIZE
 
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = block_color
-	mat.roughness = 0.95
-	mat.vertex_color_use_as_albedo = true
-
-	var mesh_instance := _shared_debris_mesh.duplicate() as BoxMesh
-	mesh_instance.material = mat
-	particles.mesh = mesh_instance
-
-	particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-	particles.emission_box_extents = Vector3(0.32, 0.32, 0.32)
-	particles.direction = Vector3(0.0, 1.0, 0.0)
-	particles.spread = 180.0
-	particles.gravity = Vector3(0.0, -14.0, 0.0)
-	particles.initial_velocity_min = min_vel
-	particles.initial_velocity_max = max_vel
-	particles.scale_amount_min = 0.65
-	particles.scale_amount_max = 1.15
-	particles.color = Color.WHITE
-
-	add_child(particles)
-	particles.finished.connect(particles.queue_free)
-	particles.emitting = true
+	p.position = center
+	var mat: StandardMaterial3D = (p.mesh as BoxMesh).material as StandardMaterial3D
+	if mat != null:
+		mat.albedo_color = block_color
+	p.amount = amount
+	p.initial_velocity_min = min_vel
+	p.initial_velocity_max = max_vel
+	p.restart()
+	p.emitting = true
 
 
 ## Spawns explosive shockwave and smoke/fire debris particles for TNT & Creeper detonations.

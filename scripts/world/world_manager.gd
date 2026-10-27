@@ -606,16 +606,16 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 	if rebuild_mode == 2:
 		chunk.rebuild_at_local_y(world_block_pos.y)
 
-		# If near a chunk boundary (within 1 block for shared water corner vertices), rebuild neighbor sub-chunk
-		if lx <= 1 and _active_chunks.has(chunk_coord + Vector2i(-1, 0)):
-			(_active_chunks[chunk_coord + Vector2i(-1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
-		elif lx >= VoxelChunk.CHUNK_SIZE_X - 2 and _active_chunks.has(chunk_coord + Vector2i(1, 0)):
-			(_active_chunks[chunk_coord + Vector2i(1, 0)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
+		# Rebuild neighbor sub-chunk asynchronously if block was on the literal chunk border
+		if lx == 0 and _active_chunks.has(chunk_coord + Vector2i(-1, 0)):
+			(_active_chunks[chunk_coord + Vector2i(-1, 0)] as VoxelChunk).rebuild_at_local_y_async(world_block_pos.y)
+		elif lx == VoxelChunk.CHUNK_SIZE_X - 1 and _active_chunks.has(chunk_coord + Vector2i(1, 0)):
+			(_active_chunks[chunk_coord + Vector2i(1, 0)] as VoxelChunk).rebuild_at_local_y_async(world_block_pos.y)
 
-		if lz <= 1 and _active_chunks.has(chunk_coord + Vector2i(0, -1)):
-			(_active_chunks[chunk_coord + Vector2i(0, -1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
-		elif lz >= VoxelChunk.CHUNK_SIZE_Z - 2 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
-			(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_at_local_y(world_block_pos.y)
+		if lz == 0 and _active_chunks.has(chunk_coord + Vector2i(0, -1)):
+			(_active_chunks[chunk_coord + Vector2i(0, -1)] as VoxelChunk).rebuild_at_local_y_async(world_block_pos.y)
+		elif lz == VoxelChunk.CHUNK_SIZE_Z - 1 and _active_chunks.has(chunk_coord + Vector2i(0, 1)):
+			(_active_chunks[chunk_coord + Vector2i(0, 1)] as VoxelChunk).rebuild_at_local_y_async(world_block_pos.y)
 	elif rebuild_mode == 1:
 		chunk.rebuild_water_at_local_y(world_block_pos.y)
 

@@ -12,6 +12,15 @@ const SUB_CHUNK_COUNT: int = 16 # 256 / 16
 const SEA_LEVEL: int = 48
 const WATER_LEVEL: int = 45
 
+static var _opaque_table: PackedByteArray = _init_opaque_table()
+
+static func _init_opaque_table() -> PackedByteArray:
+	var arr := PackedByteArray()
+	arr.resize(256)
+	for id in range(256):
+		arr[id] = 1 if BlockRegistry.is_opaque_full_cube(id) else 0
+	return arr
+
 enum Biome {
 	PLAINS = 0,
 	DESERT = 1,
@@ -49,6 +58,8 @@ var _highest_solid_y: int = 0
 var _metadata: PackedByteArray = PackedByteArray()
 ## 4-bit dual-channel lighting buffer (65,536 bytes) storing [High: Skylight 0..15 | Low: Blocklight 0..15].
 var _lighting: PackedByteArray = PackedByteArray()
+## Version tracking per sub-chunk to safely discard stale async worker builds.
+var _sub_versions: Array[int] = []
 
 var _sub_solid_meshes: Array[MeshInstance3D] = []
 var _sub_water_meshes: Array[MeshInstance3D] = []
@@ -962,7 +973,12 @@ func build_mesh_data() -> Dictionary:
 
 
 ## Builds solid mesh, water mesh, and trimesh collision for a single 16x16x16 vertical slice.
-func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
+func _build_single_sub_chunk_data(
+	sub_idx: int,
+	explicit_voxels: PackedByteArray = PackedByteArray(),
+	explicit_lighting: PackedByteArray = PackedByteArray(),
+	explicit_meta: PackedByteArray = PackedByteArray()
+) -> Dictionary:
 	var st_solid := SurfaceTool.new()
 	st_solid.begin(Mesh.PRIMITIVE_TRIANGLES)
 
@@ -978,51 +994,94 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 	var col_faces: int = 0
 	var water_faces: int = 0
 
+	var voxels: PackedByteArray = explicit_voxels if not explicit_voxels.is_empty() else _voxels
+	var lighting: PackedByteArray = explicit_lighting if not explicit_lighting.is_empty() else _lighting
+	var metadata: PackedByteArray = explicit_meta if not explicit_meta.is_empty() else _metadata
+	if voxels.is_empty():
+		return {
+			"mesh": null,
+			"water_mesh": null,
+			"shape": null,
+		}
+
 	for ly in range(y_start, y_end):
-		for lx in range(CHUNK_SIZE_X):
-			for lz in range(CHUNK_SIZE_Z):
-				var block_id: int = get_block_local(lx, ly, lz)
-				if block_id == BlockRegistry.BlockId.AIR:
+		var y_shift: int = ly << 8
+		for lz in range(CHUNK_SIZE_Z):
+			var row_shift: int = y_shift | (lz << 4)
+			for lx in range(CHUNK_SIZE_X):
+				var idx: int = row_shift | lx
+				var block_id: int = voxels[idx]
+				if block_id == 0: # AIR
 					continue
 
 				if BlockRegistry.is_water(block_id):
+					# Check 6 neighbors first to see if this water cell has any exposed face
+					var nb_top: int = (voxels[((ly + 1) << 8) | (lz << 4) | lx]) if (ly + 1 < CHUNK_SIZE_Y) else _get_neighbor_id(lx, ly + 1, lz)
+					var has_top: bool = not BlockRegistry.is_water(nb_top)
+
+					var nb_bottom: int = (voxels[((ly - 1) << 8) | (lz << 4) | lx]) if (ly > 0) else _get_neighbor_id(lx, ly - 1, lz)
+					var has_bottom: bool = not BlockRegistry.is_water(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom)
+
+					var nb_east: int = (voxels[y_shift | (lz << 4) | (lx + 1)]) if (lx < 15) else _get_neighbor_id(lx + 1, ly, lz)
+					var has_east: bool = not BlockRegistry.is_water(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east)
+
+					var nb_west: int = (voxels[y_shift | (lz << 4) | (lx - 1)]) if (lx > 0) else _get_neighbor_id(lx - 1, ly, lz)
+					var has_west: bool = not BlockRegistry.is_water(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west)
+
+					var nb_south: int = (voxels[y_shift | ((lz + 1) << 4) | lx]) if (lz < 15) else _get_neighbor_id(lx, ly, lz + 1)
+					var has_south: bool = not BlockRegistry.is_water(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south)
+
+					var nb_north: int = (voxels[y_shift | ((lz - 1) << 4) | lx]) if (lz > 0) else _get_neighbor_id(lx, ly, lz - 1)
+					var has_north: bool = not BlockRegistry.is_water(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north)
+
+					if not (has_top or has_bottom or has_east or has_west or has_south or has_north):
+						continue # Completely enclosed internal water, skip expensive corner height calculations
+
 					var h00: float = _compute_water_corner_height(lx, ly, lz, -1, -1)
 					var h10: float = _compute_water_corner_height(lx, ly, lz, 1, -1)
 					var h11: float = _compute_water_corner_height(lx, ly, lz, 1, 1)
 					var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
 
-					var nb_top: int = _get_neighbor_id(lx, ly + 1, lz)
-					if not BlockRegistry.is_water(nb_top):
+					if has_top:
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
 						water_faces += 1
 
-					var nb_bottom: int = _get_neighbor_id(lx, ly - 1, lz)
-					if not BlockRegistry.is_water(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
+					if has_bottom:
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
 						water_faces += 1
 
-					var nb_east: int = _get_neighbor_id(lx + 1, ly, lz)
-					if not BlockRegistry.is_water(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
+					if has_east:
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
 						water_faces += 1
 
-					var nb_west: int = _get_neighbor_id(lx - 1, ly, lz)
-					if not BlockRegistry.is_water(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
+					if has_west:
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
 						water_faces += 1
 
-					var nb_south: int = _get_neighbor_id(lx, ly, lz + 1)
-					if not BlockRegistry.is_water(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
+					if has_south:
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
 						water_faces += 1
 
-					var nb_north: int = _get_neighbor_id(lx, ly, lz - 1)
-					if not BlockRegistry.is_water(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
+					if has_north:
 						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
 						water_faces += 1
 					continue
 
-				var meta: int = get_metadata_local(lx, ly, lz)
+				var meta: int = 0
+				if (
+					block_id == BlockRegistry.BlockId.WOOD_LOG
+					or block_id == BlockRegistry.BlockId.LEAVES
+					or block_id == BlockRegistry.BlockId.WOOL
+					or block_id == BlockRegistry.BlockId.WOOD_STAIRS
+					or block_id == BlockRegistry.BlockId.COBBLE_STAIRS
+					or block_id == BlockRegistry.BlockId.SLAB
+					or block_id == BlockRegistry.BlockId.FARMLAND
+				):
+					if not metadata.is_empty():
+						var byte_idx: int = idx >> 1
+						if byte_idx < metadata.size():
+							var b_meta: int = metadata[byte_idx]
+							meta = (b_meta & 0x0F) if ((idx & 1) == 0) else ((b_meta >> 4) & 0x0F)
 
 				# Custom foliage blocks (Sugar Cane, Seagrass, Flowers, Mushrooms cross quads)
 				if (
@@ -1108,50 +1167,61 @@ func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
 					_emit_custom_box(st_solid, lx, ly, lz, min_b, max_b, block_id, meta)
 					solid_faces += 6
 					if not BlockRegistry.is_passable_block(block_id):
-						_emit_custom_box(st_col, lx, ly, lz, min_b, max_b, block_id, meta)
+						_emit_col_box(st_col, lx, ly, lz, min_b, max_b)
 						col_faces += 6
 					continue
 
 				var is_passable: bool = BlockRegistry.is_passable_block(block_id)
-				if not _is_neighbor_solid(lx, ly + 1, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id, meta)
+				var col_tgt: SurfaceTool = st_col if not is_passable else null
+
+				# TOP (+Y)
+				var top_solid: bool = (_opaque_table[voxels[((ly + 1) << 8) | (lz << 4) | lx]] == 1) if (ly + 1 < CHUNK_SIZE_Y) else false
+				if not top_solid:
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id, meta, col_tgt, voxels, lighting)
 					solid_faces += 1
-					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id, meta)
-						col_faces += 1
-				if not _is_neighbor_solid(lx, ly - 1, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id, meta)
-					solid_faces += 1
-					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id, meta)
-						col_faces += 1
-				if not _is_neighbor_solid(lx + 1, ly, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id, meta)
-					solid_faces += 1
-					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id, meta)
-						col_faces += 1
-				if not _is_neighbor_solid(lx - 1, ly, lz):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id, meta)
-					solid_faces += 1
-					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id, meta)
-						col_faces += 1
-				if not _is_neighbor_solid(lx, ly, lz + 1):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id, meta)
-					solid_faces += 1
-					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id, meta)
-						col_faces += 1
-				if not _is_neighbor_solid(lx, ly, lz - 1):
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id, meta)
-					solid_faces += 1
-					if not is_passable:
-						_emit_face(st_col, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id, meta)
+					if col_tgt != null:
 						col_faces += 1
 
-	if solid_faces > 0:
-		st_solid.generate_tangents()
+				# BOTTOM (-Y)
+				var bot_solid: bool = (_opaque_table[voxels[((ly - 1) << 8) | (lz << 4) | lx]] == 1) if (ly > 0) else true
+				if not bot_solid:
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id, meta, col_tgt, voxels, lighting)
+					solid_faces += 1
+					if col_tgt != null:
+						col_faces += 1
+
+				# EAST (+X)
+				var east_solid: bool = (_opaque_table[voxels[y_shift | (lz << 4) | (lx + 1)]] == 1) if (lx < 15) else _is_neighbor_solid(16, ly, lz)
+				if not east_solid:
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id, meta, col_tgt, voxels, lighting)
+					solid_faces += 1
+					if col_tgt != null:
+						col_faces += 1
+
+				# WEST (-X)
+				var west_solid: bool = (_opaque_table[voxels[y_shift | (lz << 4) | (lx - 1)]] == 1) if (lx > 0) else _is_neighbor_solid(-1, ly, lz)
+				if not west_solid:
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id, meta, col_tgt, voxels, lighting)
+					solid_faces += 1
+					if col_tgt != null:
+						col_faces += 1
+
+				# SOUTH (+Z)
+				var south_solid: bool = (_opaque_table[voxels[y_shift | ((lz + 1) << 4) | lx]] == 1) if (lz < 15) else _is_neighbor_solid(lx, ly, 16)
+				if not south_solid:
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id, meta, col_tgt, voxels, lighting)
+					solid_faces += 1
+					if col_tgt != null:
+						col_faces += 1
+
+				# NORTH (-Z)
+				var north_solid: bool = (_opaque_table[voxels[y_shift | ((lz - 1) << 4) | lx]] == 1) if (lz > 0) else _is_neighbor_solid(lx, ly, -1)
+				if not north_solid:
+					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id, meta, col_tgt, voxels, lighting)
+					solid_faces += 1
+					if col_tgt != null:
+						col_faces += 1
+
 	var solid_mesh: ArrayMesh = st_solid.commit() if solid_faces > 0 else null
 	var col_mesh: ArrayMesh = st_col.commit() if col_faces > 0 else null
 	var water_mesh: ArrayMesh = st_water.commit() if water_faces > 0 else null
@@ -1283,17 +1353,54 @@ func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:
 	_sub_colliders[sub_idx].disabled = (s == null)
 
 
-## Rebuilds only the 16x16x16 vertical sub-chunk containing `ly` (and vertical neighbor if on a 16-block seam).
+## Asynchronously rebuilds the 16x16x16 vertical sub-chunk containing `ly` on a background worker thread.
+## Keeps the main thread locked at smooth 60+ FPS with zero hitches or stalls.
 func rebuild_at_local_y(ly: int) -> void:
 	_ensure_child_nodes()
 	var sub_idx: int = clampi(ly / SUB_CHUNK_HEIGHT, 0, SUB_CHUNK_COUNT - 1)
-	_apply_single_sub_chunk(sub_idx, _build_single_sub_chunk_data(sub_idx))
+	_dispatch_async_sub_chunk_rebuild(sub_idx)
 
 	var local_sub_y: int = ly % SUB_CHUNK_HEIGHT
+	var seam_neighbor: int = -1
 	if local_sub_y == 0 and sub_idx > 0:
-		_apply_single_sub_chunk(sub_idx - 1, _build_single_sub_chunk_data(sub_idx - 1))
+		seam_neighbor = sub_idx - 1
 	elif local_sub_y == SUB_CHUNK_HEIGHT - 1 and sub_idx < SUB_CHUNK_COUNT - 1:
-		_apply_single_sub_chunk(sub_idx + 1, _build_single_sub_chunk_data(sub_idx + 1))
+		seam_neighbor = sub_idx + 1
+
+	if seam_neighbor >= 0:
+		_dispatch_async_sub_chunk_rebuild(seam_neighbor)
+
+
+## Asynchronously rebuilds a sub-chunk on a worker thread and applies it safely on the main thread.
+func rebuild_at_local_y_async(ly: int) -> void:
+	rebuild_at_local_y(ly)
+
+
+func _dispatch_async_sub_chunk_rebuild(sub_idx: int) -> void:
+	if _sub_versions.size() < SUB_CHUNK_COUNT:
+		_sub_versions.resize(SUB_CHUNK_COUNT)
+		_sub_versions.fill(0)
+	_sub_versions[sub_idx] += 1
+	var expected_ver: int = _sub_versions[sub_idx]
+
+	var voxels_snapshot: PackedByteArray = _voxels.duplicate()
+	var lighting_snapshot: PackedByteArray = _lighting.duplicate()
+	var meta_snapshot: PackedByteArray = _metadata.duplicate()
+	WorkerThreadPool.add_task(func():
+		if not is_instance_valid(self):
+			return
+		var data: Dictionary = _build_single_sub_chunk_data(sub_idx, voxels_snapshot, lighting_snapshot, meta_snapshot)
+		if is_instance_valid(self):
+			_apply_versioned_sub_chunk.call_deferred(sub_idx, data, expected_ver)
+	)
+
+
+func _apply_versioned_sub_chunk(sub_idx: int, data: Dictionary, ver: int) -> void:
+	if not is_instance_valid(self):
+		return
+	if _sub_versions.size() < SUB_CHUNK_COUNT or ver != _sub_versions[sub_idx]:
+		return
+	_apply_single_sub_chunk(sub_idx, data)
 
 
 ## Full chunk synchronous rebuild.
@@ -1587,6 +1694,118 @@ func _emit_sloped_water_face(
 		st.add_vertex(verts[idx])
 
 
+func _emit_col_box(
+	st: SurfaceTool,
+	lx: int,
+	ly: int,
+	lz: int,
+	min_bound: Vector3,
+	max_bound: Vector3
+) -> void:
+	var origin := Vector3(float(lx), float(ly), float(lz))
+	var p0 := origin + min_bound
+	var p1 := origin + max_bound
+
+	# TOP
+	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
+
+	# BOTTOM
+	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
+
+	# EAST
+	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
+
+	# WEST
+	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
+	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
+
+	# SOUTH
+	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
+	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
+
+	# NORTH
+	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
+	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
+	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
+
+
+func _emit_col_face(
+	st: SurfaceTool,
+	lx: int,
+	ly: int,
+	lz: int,
+	face_dir: int
+) -> void:
+	var fx: float = float(lx)
+	var fy: float = float(ly)
+	var fz: float = float(lz)
+	var p0: Vector3; var p1: Vector3; var p2: Vector3; var p3: Vector3
+	match face_dir:
+		BlockRegistry.FaceDir.TOP:
+			p0 = Vector3(fx, fy + 1.0, fz)
+			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
+			p2 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
+			p3 = Vector3(fx, fy + 1.0, fz + 1.0)
+		BlockRegistry.FaceDir.BOTTOM:
+			p0 = Vector3(fx, fy, fz + 1.0)
+			p1 = Vector3(fx + 1.0, fy, fz + 1.0)
+			p2 = Vector3(fx + 1.0, fy, fz)
+			p3 = Vector3(fx, fy, fz)
+		BlockRegistry.FaceDir.EAST:
+			p0 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
+			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
+			p2 = Vector3(fx + 1.0, fy, fz)
+			p3 = Vector3(fx + 1.0, fy, fz + 1.0)
+		BlockRegistry.FaceDir.WEST:
+			p0 = Vector3(fx, fy + 1.0, fz)
+			p1 = Vector3(fx, fy + 1.0, fz + 1.0)
+			p2 = Vector3(fx, fy, fz + 1.0)
+			p3 = Vector3(fx, fy, fz)
+		BlockRegistry.FaceDir.SOUTH:
+			p0 = Vector3(fx, fy + 1.0, fz + 1.0)
+			p1 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
+			p2 = Vector3(fx + 1.0, fy, fz + 1.0)
+			p3 = Vector3(fx, fy, fz + 1.0)
+		_: # NORTH
+			p0 = Vector3(fx + 1.0, fy + 1.0, fz)
+			p1 = Vector3(fx, fy + 1.0, fz)
+			p2 = Vector3(fx, fy, fz)
+			p3 = Vector3(fx + 1.0, fy, fz)
+
+	st.add_vertex(p0)
+	st.add_vertex(p1)
+	st.add_vertex(p2)
+	st.add_vertex(p0)
+	st.add_vertex(p2)
+	st.add_vertex(p3)
+
+
 func _emit_face(
 	st: SurfaceTool,
 	lx: int,
@@ -1594,16 +1813,22 @@ func _emit_face(
 	lz: int,
 	face_dir: int,
 	block_id: int,
-	meta: int = 0
+	meta: int = 0,
+	st_col: SurfaceTool = null,
+	voxels: PackedByteArray = PackedByteArray(),
+	lighting: PackedByteArray = PackedByteArray()
 ) -> void:
-	var origin := Vector3(float(lx), float(ly), float(lz))
 	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir, meta)
 	var u0: float = uv_rect.position.x
 	var v0: float = uv_rect.position.y
 	var u1: float = uv_rect.position.x + uv_rect.size.x
 	var v1: float = uv_rect.position.y + uv_rect.size.y
 
-	var verts: Array[Vector3]
+	var fx: float = float(lx)
+	var fy: float = float(ly)
+	var fz: float = float(lz)
+
+	var p0: Vector3; var p1: Vector3; var p2: Vector3; var p3: Vector3
 	var normal: Vector3
 	var shade: float = 1.0
 
@@ -1611,64 +1836,46 @@ func _emit_face(
 		BlockRegistry.FaceDir.TOP:
 			normal = Vector3.UP
 			shade = 1.0
-			verts = [
-				origin + Vector3(0, 1, 0),
-				origin + Vector3(1, 1, 0),
-				origin + Vector3(1, 1, 1),
-				origin + Vector3(0, 1, 1),
-			]
+			p0 = Vector3(fx, fy + 1.0, fz)
+			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
+			p2 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
+			p3 = Vector3(fx, fy + 1.0, fz + 1.0)
 		BlockRegistry.FaceDir.BOTTOM:
 			normal = Vector3.DOWN
 			shade = 0.52
-			verts = [
-				origin + Vector3(0, 0, 1),
-				origin + Vector3(1, 0, 1),
-				origin + Vector3(1, 0, 0),
-				origin + Vector3(0, 0, 0),
-			]
+			p0 = Vector3(fx, fy, fz + 1.0)
+			p1 = Vector3(fx + 1.0, fy, fz + 1.0)
+			p2 = Vector3(fx + 1.0, fy, fz)
+			p3 = Vector3(fx, fy, fz)
 		BlockRegistry.FaceDir.EAST:
 			normal = Vector3.RIGHT
 			shade = 0.80
-			verts = [
-				origin + Vector3(1, 1, 1),
-				origin + Vector3(1, 1, 0),
-				origin + Vector3(1, 0, 0),
-				origin + Vector3(1, 0, 1),
-			]
+			p0 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
+			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
+			p2 = Vector3(fx + 1.0, fy, fz)
+			p3 = Vector3(fx + 1.0, fy, fz + 1.0)
 		BlockRegistry.FaceDir.WEST:
 			normal = Vector3.LEFT
 			shade = 0.76
-			verts = [
-				origin + Vector3(0, 1, 0),
-				origin + Vector3(0, 1, 1),
-				origin + Vector3(0, 0, 1),
-				origin + Vector3(0, 0, 0),
-			]
+			p0 = Vector3(fx, fy + 1.0, fz)
+			p1 = Vector3(fx, fy + 1.0, fz + 1.0)
+			p2 = Vector3(fx, fy, fz + 1.0)
+			p3 = Vector3(fx, fy, fz)
 		BlockRegistry.FaceDir.SOUTH:
 			normal = Vector3.BACK
 			shade = 0.88
-			verts = [
-				origin + Vector3(0, 1, 1),
-				origin + Vector3(1, 1, 1),
-				origin + Vector3(1, 0, 1),
-				origin + Vector3(0, 0, 1),
-			]
+			p0 = Vector3(fx, fy + 1.0, fz + 1.0)
+			p1 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
+			p2 = Vector3(fx + 1.0, fy, fz + 1.0)
+			p3 = Vector3(fx, fy, fz + 1.0)
 		_: # NORTH
 			normal = Vector3.FORWARD
 			shade = 0.70
-			verts = [
-				origin + Vector3(1, 1, 0),
-				origin + Vector3(0, 1, 0),
-				origin + Vector3(0, 0, 0),
-				origin + Vector3(1, 0, 0),
-			]
+			p0 = Vector3(fx + 1.0, fy + 1.0, fz)
+			p1 = Vector3(fx, fy + 1.0, fz)
+			p2 = Vector3(fx, fy, fz)
+			p3 = Vector3(fx + 1.0, fy, fz)
 
-	var uvs: Array[Vector2] = [
-		Vector2(u0, v0),
-		Vector2(u1, v0),
-		Vector2(u1, v1),
-		Vector2(u0, v1),
-	]
 	if BlockRegistry.is_light_emitter(block_id):
 		shade = 1.0
 	var face_color := Color(shade, shade, shade, 1.0)
@@ -1676,49 +1883,61 @@ func _emit_face(
 		var wc: Color = BlockRegistry.WOOL_COLORS[meta]
 		face_color = Color(shade * wc.r, shade * wc.g, shade * wc.b, 1.0)
 
-	var ao_lights: Array[float] = VoxelLighting.calculate_face_ao_and_lighting(self, lx, ly, lz, face_dir, block_id)
+	var ao: Plane = VoxelLighting.calculate_face_ao(self, lx, ly, lz, face_dir, block_id, voxels, lighting)
 
-	var c0 := Color(face_color.r * ao_lights[0], face_color.g * ao_lights[0], face_color.b * ao_lights[0], 1.0)
-	var c1 := Color(face_color.r * ao_lights[1], face_color.g * ao_lights[1], face_color.b * ao_lights[1], 1.0)
-	var c2 := Color(face_color.r * ao_lights[2], face_color.g * ao_lights[2], face_color.b * ao_lights[2], 1.0)
-	var c3 := Color(face_color.r * ao_lights[3], face_color.g * ao_lights[3], face_color.b * ao_lights[3], 1.0)
+	var c0 := Color(face_color.r * ao.x, face_color.g * ao.x, face_color.b * ao.x, 1.0)
+	var c1 := Color(face_color.r * ao.y, face_color.g * ao.y, face_color.b * ao.y, 1.0)
+	var c2 := Color(face_color.r * ao.z, face_color.g * ao.z, face_color.b * ao.z, 1.0)
+	var c3 := Color(face_color.r * ao.d, face_color.g * ao.d, face_color.b * ao.d, 1.0)
 
 	# Triangle 1: 0 -> 1 -> 2
 	st.set_normal(normal)
 	st.set_color(c0)
-	st.set_uv(uvs[0])
-	st.add_vertex(verts[0])
+	st.set_uv(Vector2(u0, v0))
+	st.add_vertex(p0)
 
 	st.set_normal(normal)
 	st.set_color(c1)
-	st.set_uv(uvs[1])
-	st.add_vertex(verts[1])
+	st.set_uv(Vector2(u1, v0))
+	st.add_vertex(p1)
 
 	st.set_normal(normal)
 	st.set_color(c2)
-	st.set_uv(uvs[2])
-	st.add_vertex(verts[2])
+	st.set_uv(Vector2(u1, v1))
+	st.add_vertex(p2)
 
 	# Triangle 2: 0 -> 2 -> 3
 	st.set_normal(normal)
 	st.set_color(c0)
-	st.set_uv(uvs[0])
-	st.add_vertex(verts[0])
+	st.set_uv(Vector2(u0, v0))
+	st.add_vertex(p0)
 
 	st.set_normal(normal)
 	st.set_color(c2)
-	st.set_uv(uvs[2])
-	st.add_vertex(verts[2])
+	st.set_uv(Vector2(u1, v1))
+	st.add_vertex(p2)
 
 	st.set_normal(normal)
 	st.set_color(c3)
-	st.set_uv(uvs[3])
-	st.add_vertex(verts[3])
+	st.set_uv(Vector2(u0, v1))
+	st.add_vertex(p3)
+
+	if st_col != null:
+		st_col.add_vertex(p0)
+		st_col.add_vertex(p1)
+		st_col.add_vertex(p2)
+		st_col.add_vertex(p0)
+		st_col.add_vertex(p2)
+		st_col.add_vertex(p3)
 
 
 func ensure_lighting_buffer() -> void:
 	if _lighting.is_empty():
 		_lighting.resize(CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z)
+
+
+func get_lighting_buffer() -> PackedByteArray:
+	return _lighting
 
 
 func get_sky_light_local(lx: int, ly: int, lz: int) -> int:

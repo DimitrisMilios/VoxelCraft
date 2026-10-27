@@ -825,7 +825,13 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 			return 3
 
 
+static var _uv_rect_cache: Dictionary = {}
+
 static func get_tile_uv_rect(block_id: int, face_dir: int, meta: int = 0) -> Rect2:
+	var key: int = (block_id << 8) | (face_dir << 4) | (meta & 0x0F)
+	if _uv_rect_cache.has(key):
+		return _uv_rect_cache[key]
+
 	if atlas_columns <= 0:
 		VoxelAtlasBuilder.get_atlas_texture()
 	var cols: int = maxi(atlas_columns, 1)
@@ -838,4 +844,6 @@ static func get_tile_uv_rect(block_id: int, face_dir: int, meta: int = 0) -> Rec
 	var v0: float = uv_margin
 	var u_width: float = u_step - (uv_margin * 2.0)
 	var v_height: float = 1.0 - (uv_margin * 2.0)
-	return Rect2(u0, v0, u_width, v_height)
+	var rect := Rect2(u0, v0, u_width, v_height)
+	_uv_rect_cache[key] = rect
+	return rect
