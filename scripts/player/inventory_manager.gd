@@ -252,6 +252,11 @@ func _ready() -> void:
 
 	set_crafting_grid_dimension(2)
 
+	if GameSession.active_world_data.is_empty():
+		var saved: Array[Dictionary] = GameSession.list_saved_worlds()
+		if not saved.is_empty() and str(saved[0].get("id", "")).length() > 0:
+			GameSession.select_world(str(saved[0]["id"]))
+
 	if not GameSession.active_world_data.is_empty():
 		var inv_data: Dictionary = GameSession.active_world_data.get("inventory", {})
 		if not inv_data.is_empty():

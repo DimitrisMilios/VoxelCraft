@@ -19,7 +19,11 @@ static func get_worlds_dir() -> String:
 ## Returns absolute path to the active world's folder.
 static func get_active_world_dir() -> String:
 	if active_world_id.is_empty():
-		active_world_id = "default_world"
+		var saved: Array[Dictionary] = list_saved_worlds()
+		if not saved.is_empty() and str(saved[0].get("id", "")).length() > 0:
+			select_world(str(saved[0]["id"]))
+		else:
+			active_world_id = "default_world"
 	return get_worlds_dir() + "/" + active_world_id
 
 
@@ -163,7 +167,11 @@ static func save_world_state(
 	world_manager: Node3D
 ) -> void:
 	if active_world_id.is_empty():
-		active_world_id = "default_world"
+		var saved: Array[Dictionary] = list_saved_worlds()
+		if not saved.is_empty() and str(saved[0].get("id", "")).length() > 0:
+			select_world(str(saved[0]["id"]))
+		else:
+			active_world_id = "default_world"
 	var world_dir: String = get_active_world_dir()
 	if not DirAccess.dir_exists_absolute(world_dir):
 		DirAccess.make_dir_recursive_absolute(world_dir + "/chunks")
@@ -173,9 +181,9 @@ static func save_world_state(
 	data["seed"] = active_seed
 	data["last_played"] = Time.get_unix_time_from_system()
 
-	# 1. Player State & Bed Respawn Position
-	var player_dict: Dictionary = {}
+	# 1. Player State & Bed Respawn Position (only overwrite if valid node provided)
 	if player != null and is_instance_valid(player):
+		var player_dict: Dictionary = {}
 		var p_pos: Vector3 = player.global_position if (player is Node3D and player.is_inside_tree()) else (player.position if player is Node3D else Vector3.ZERO)
 		player_dict["has_saved_pos"] = true
 		player_dict["pos"] = [p_pos.x, p_pos.y, p_pos.z]
@@ -192,34 +200,45 @@ static func save_world_state(
 		if has_bed:
 			var b_pos: Vector3 = player.get("custom_respawn_pos")
 			player_dict["bed_pos"] = [b_pos.x, b_pos.y, b_pos.z]
-	data["player"] = player_dict
+		data["player"] = player_dict
 
-	# 2. Inventory & Furnace State
-	var inv_dict: Dictionary = {}
+	# 2. Inventory & Furnace State (only overwrite if valid node provided)
 	if inventory != null and is_instance_valid(inventory):
-		inv_dict["slots"] = inventory.get("slots")
-		inv_dict["furnace_input"] = inventory.get("furnace_input")
-		inv_dict["furnace_fuel"] = inventory.get("furnace_fuel")
-		inv_dict["furnace_output"] = inventory.get("furnace_output")
-		inv_dict["furnace_burn_remaining"] = float(inventory.get("furnace_burn_remaining"))
-		inv_dict["furnace_burn_max"] = float(inventory.get("furnace_burn_max"))
-		inv_dict["furnace_cook_progress"] = float(inventory.get("furnace_cook_progress"))
+		# Return cursor stack and crafting grid items into main inventory first
+		if inventory.has_method("return_crafting_grid_to_inventory"):
+			inventory.return_crafting_grid_to_inventory()
+
+		if inventory.has_method("serialize_state"):
+			data["inventory"] = inventory.serialize_state()
+		else:
+			var inv_dict: Dictionary = {}
+			inv_dict["slots"] = inventory.get("slots")
+			inv_dict["armor_slots"] = inventory.get("armor_slots")
+			inv_dict["furnace_input"] = inventory.get("furnace_input")
+			inv_dict["furnace_fuel"] = inventory.get("furnace_fuel")
+			inv_dict["furnace_output"] = inventory.get("furnace_output")
+			inv_dict["furnace_burn_remaining"] = float(inventory.get("furnace_burn_remaining"))
+			inv_dict["furnace_burn_max"] = float(inventory.get("furnace_burn_max"))
+			inv_dict["furnace_cook_progress"] = float(inventory.get("furnace_cook_progress"))
+			data["inventory"] = inv_dict
 
 		# 3. Placed World Chests
-		var chests: Dictionary = inventory.get("world_chests")
-		var chest_serialized: Dictionary = {}
-		for c_pos in chests.keys():
-			var key_str: String = "%d,%d,%d" % [c_pos.x, c_pos.y, c_pos.z]
-			chest_serialized[key_str] = chests[c_pos]
-		data["world_chests"] = chest_serialized
-	data["inventory"] = inv_dict
+		if inventory.has_method("serialize_chests"):
+			data["world_chests"] = inventory.serialize_chests()
+		else:
+			var chests: Dictionary = inventory.get("world_chests")
+			var chest_serialized: Dictionary = {}
+			for c_pos in chests.keys():
+				var key_str: String = "%d,%d,%d" % [c_pos.x, c_pos.y, c_pos.z]
+				chest_serialized[key_str] = chests[c_pos]
+			data["world_chests"] = chest_serialized
 
-	# 4. Day / Night Cycle
-	var dn_dict: Dictionary = {}
+	# 4. Day / Night Cycle (only overwrite if valid node provided)
 	if day_night != null and is_instance_valid(day_night):
+		var dn_dict: Dictionary = {}
 		dn_dict["hour"] = float(day_night.get("current_hour"))
 		dn_dict["day"] = int(day_night.get("day_number"))
-	data["day_night"] = dn_dict
+		data["day_night"] = dn_dict
 
 	active_world_data = data
 	_write_json_file(world_dir + "/level.json", data)

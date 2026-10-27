@@ -81,6 +81,8 @@ var _hurt_roll: float = 0.0
 
 
 func _ready() -> void:
+	add_to_group("player")
+	inventory = get_node_or_null("InventoryManager") as InventoryManager
 	current_health = max_health
 	current_hunger = max_hunger
 	current_oxygen = max_oxygen

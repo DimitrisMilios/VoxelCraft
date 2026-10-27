@@ -56,6 +56,14 @@ var _last_player_chunk: Vector2i = Vector2i(999999, 999999)
 
 func _ready() -> void:
 	add_to_group("world_manager")
+	if get_tree() != null:
+		get_tree().set_auto_accept_quit(false)
+
+	if GameSession.active_world_id.is_empty():
+		var saved: Array[Dictionary] = GameSession.list_saved_worlds()
+		if not saved.is_empty() and str(saved[0].get("id", "")).length() > 0:
+			GameSession.select_world(str(saved[0]["id"]))
+
 	if not GameSession.active_world_id.is_empty():
 		world_seed = GameSession.active_seed
 		_storage = ChunkStorage.new(GameSession.get_active_chunk_dir())
@@ -140,6 +148,8 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_is_shutting_down = true
 		save_complete_world()
+		if is_inside_tree() and get_tree() != null:
+			get_tree().quit()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1059,8 +1069,10 @@ func save_all_modified_chunks() -> int:
 
 func save_complete_world() -> int:
 	var count: int = save_all_modified_chunks()
-	var inv: Node = get_node_or_null("../InventoryManager")
-	if inv == null and is_inside_tree() and get_tree() != null:
+	var inv: Node = null
+	if _player != null and is_instance_valid(_player):
+		inv = _player.get_node_or_null("InventoryManager")
+	if (inv == null or not is_instance_valid(inv)) and is_inside_tree() and get_tree() != null:
 		inv = get_tree().get_first_node_in_group("inventory_manager")
 	var dn: Node = get_node_or_null("../DayNightCycle")
 	if dn == null and is_inside_tree() and get_tree() != null:

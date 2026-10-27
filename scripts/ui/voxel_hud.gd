@@ -249,6 +249,8 @@ func _bind_references() -> void:
 	_world_manager = get_tree().get_first_node_in_group("world_manager") as WorldManager
 	_day_night = get_tree().get_first_node_in_group("day_night_cycle") as DayNightCycle
 	_inventory = get_tree().get_first_node_in_group("inventory_manager") as InventoryManager
+	if _inventory == null and _player != null:
+		_inventory = _player.get_node_or_null("InventoryManager") as InventoryManager
 
 	if _world_manager != null and not _world_manager.world_saved.is_connected(_on_world_saved):
 		_world_manager.world_saved.connect(_on_world_saved)

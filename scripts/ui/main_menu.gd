@@ -25,6 +25,7 @@ var _options_view: Control = null
 # World Select UI
 var _world_list_vbox: VBoxContainer = null
 var _selected_world_id: String = ""
+var _play_selected_btn: Button = null
 
 # Create World Inputs
 var _world_name_input: LineEdit = null
@@ -311,12 +312,22 @@ func _build_world_select_view() -> void:
 
 	var bottom_row := HBoxContainer.new()
 	bottom_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	bottom_row.add_theme_constant_override("separation", 16)
+	bottom_row.add_theme_constant_override("separation", 14)
 	vbox.add_child(bottom_row)
+
+	_play_selected_btn = Button.new()
+	_play_selected_btn.text = "Play Selected World"
+	_play_selected_btn.custom_minimum_size = Vector2(200, 38)
+	_style_faithful_button(_play_selected_btn)
+	_play_selected_btn.pressed.connect(func() -> void:
+		if not _selected_world_id.is_empty():
+			_launch_world(_selected_world_id)
+	)
+	bottom_row.add_child(_play_selected_btn)
 
 	var create_btn := Button.new()
 	create_btn.text = "Create New World"
-	create_btn.custom_minimum_size = Vector2(240, 38)
+	create_btn.custom_minimum_size = Vector2(180, 38)
 	_style_faithful_button(create_btn)
 	create_btn.pressed.connect(func() -> void:
 		_show_view(ViewState.CREATE_WORLD)
@@ -325,7 +336,7 @@ func _build_world_select_view() -> void:
 
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
-	cancel_btn.custom_minimum_size = Vector2(180, 38)
+	cancel_btn.custom_minimum_size = Vector2(130, 38)
 	_style_faithful_button(cancel_btn)
 	cancel_btn.pressed.connect(func() -> void:
 		_show_view(ViewState.TITLE)
@@ -339,6 +350,9 @@ func _refresh_world_list() -> void:
 
 	var worlds: Array[Dictionary] = GameSession.list_saved_worlds()
 	if worlds.is_empty():
+		_selected_world_id = ""
+		if _play_selected_btn != null:
+			_play_selected_btn.disabled = true
 		var empty_lbl := Label.new()
 		empty_lbl.text = "No saved worlds yet.\nClick 'Create New World' to begin your adventure!"
 		empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -347,17 +361,48 @@ func _refresh_world_list() -> void:
 		_world_list_vbox.add_child(empty_lbl)
 		return
 
+	var has_match: bool = false
 	for w in worlds:
+		if str(w.get("id", "")) == _selected_world_id:
+			has_match = true
+			break
+	if not has_match and not worlds.is_empty():
+		_selected_world_id = str(worlds[0].get("id", ""))
+
+	if _play_selected_btn != null:
+		_play_selected_btn.disabled = _selected_world_id.is_empty()
+
+	for w in worlds:
+		var wid: String = str(w.get("id", ""))
+		var is_selected: bool = (wid == _selected_world_id)
+
 		var item_panel := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(0.12, 0.14, 0.18, 0.85)
-		sb.border_color = Color(0.35, 0.38, 0.44, 1.0)
-		sb.border_width_left = 1
-		sb.border_width_right = 1
-		sb.border_width_top = 1
-		sb.border_width_bottom = 1
+		if is_selected:
+			sb.bg_color = Color(0.18, 0.22, 0.32, 0.95)
+			sb.border_color = Color(0.98, 0.88, 0.32, 1.0)
+			sb.border_width_left = 2
+			sb.border_width_right = 2
+			sb.border_width_top = 2
+			sb.border_width_bottom = 2
+		else:
+			sb.bg_color = Color(0.12, 0.14, 0.18, 0.85)
+			sb.border_color = Color(0.35, 0.38, 0.44, 1.0)
+			sb.border_width_left = 1
+			sb.border_width_right = 1
+			sb.border_width_top = 1
+			sb.border_width_bottom = 1
 		sb.set_content_margin_all(10.0)
 		item_panel.add_theme_stylebox_override("panel", sb)
+
+		item_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		item_panel.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+				_selected_world_id = wid
+				_refresh_world_list()
+				if ev.double_click:
+					_launch_world(wid)
+		)
 
 		var hbox := HBoxContainer.new()
 		hbox.add_theme_constant_override("separation", 12)
@@ -370,7 +415,7 @@ func _refresh_world_list() -> void:
 		var name_lbl := Label.new()
 		name_lbl.text = str(w.get("world_name", "World"))
 		name_lbl.add_theme_font_size_override("font_size", 16)
-		name_lbl.add_theme_color_override("font_color", Color(0.98, 0.92, 0.5))
+		name_lbl.add_theme_color_override("font_color", Color(1.0, 0.94, 0.55) if is_selected else Color(0.98, 0.92, 0.5))
 		info_vbox.add_child(name_lbl)
 
 		var meta_lbl := Label.new()
@@ -389,7 +434,6 @@ func _refresh_world_list() -> void:
 		play_btn.text = "Play"
 		play_btn.custom_minimum_size = Vector2(80, 32)
 		_style_faithful_button(play_btn)
-		var wid: String = str(w.get("id", ""))
 		play_btn.pressed.connect(func() -> void:
 			_launch_world(wid)
 		)
@@ -401,6 +445,8 @@ func _refresh_world_list() -> void:
 		_style_faithful_button(del_btn)
 		del_btn.pressed.connect(func() -> void:
 			GameSession.delete_world(wid)
+			if _selected_world_id == wid:
+				_selected_world_id = ""
 			_refresh_world_list()
 		)
 		hbox.add_child(del_btn)
