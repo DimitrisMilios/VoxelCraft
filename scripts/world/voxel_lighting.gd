@@ -1,6 +1,6 @@
 class_name VoxelLighting
 extends RefCounted
-## Authentic TrueCraft & Minecraft Beta 1.7.3 Dual-Channel Voxel Lighting Engine.
+## Authentic Minecraft Beta 1.7.3 Dual-Channel Voxel Lighting Engine.
 ## Features 0..15 Skylight and 0..15 Blocklight channels, 6-direction BFS flood-fill propagation,
 ## block light emission tables, smooth ambient occlusion (AO) vertex shading, and day/night attenuation.
 

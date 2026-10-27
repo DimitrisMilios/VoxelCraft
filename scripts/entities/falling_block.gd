@@ -1,6 +1,6 @@
 class_name FallingBlock
 extends Node3D
-## TrueCraft & Beta 1.7.3 authentic falling gravity block entity (Sand, Gravel).
+## Authentic Beta 1.7.3 falling gravity block entity (Sand, Gravel).
 ## Falls smoothly under gravity, sinks through water, solidifies upon hitting solid ground,
 ## or shatters into dropped items if landing on non-solid obstacles (Torches, Flowers, Sprouts),
 ## triggering upward cascading block collapses.

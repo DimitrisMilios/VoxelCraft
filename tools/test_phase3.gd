@@ -1,5 +1,5 @@
 extends SceneTree
-## TrueCraft Phase 3 Automated Verification Suite
+## Phase 3 Automated Verification Suite
 ## Tests:
 ## 1. Falling blocks (Sand & Gravel gravity, landing/solidification, torch shattering into item drop, cascading)
 ## 2. Ballistic Arrow kinematics (trajectory, block sticking, pickup retrieval, mob collision damage & knockback)
@@ -13,7 +13,7 @@ const ArrowProjectileClass = preload("res://scripts/entities/arrow_projectile.gd
 
 func _init() -> void:
 	print("==================================================")
-	print("--- Running TrueCraft Phase 3 Verification Suite ---")
+	print("--- Running Phase 3 Verification Suite ---")
 	print("==================================================")
 
 	var main_scene: PackedScene = load("res://scenes/main.tscn")
@@ -60,7 +60,7 @@ func _init() -> void:
 
 	print("==================================================")
 	if all_passed:
-		print(">>> ALL TRUECRAFT PHASE 3 TESTS PASSED CLEANLY! <<<")
+		print(">>> ALL PHASE 3 TESTS PASSED CLEANLY! <<<")
 		print("==================================================")
 		quit(0)
 	else:

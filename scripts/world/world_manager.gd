@@ -1114,7 +1114,7 @@ func ignite_tnt_at(world_block_pos: Vector3i, custom_fuse: float = 4.0, initial_
 
 ## High-performance batched explosion that destroys voxels with minimal sub-chunk mesh rebuilds,
 ## pooled entity drops, chained TNT, and realistic radial falloff damage.
-## Accords with TrueCraft/Beta 1.7.3 rules: Bedrock and Obsidian resist blasts,
+## Accords with Minecraft Beta 1.7.3 rules: Bedrock and Obsidian resist blasts,
 ## submerged water explosions protect terrain while dealing knockback, and overhangs collapse.
 func create_explosion(center: Vector3, radius: float = 3.8, is_tnt: bool = true, damage_player: bool = true) -> void:
 	var tree: SceneTree = get_tree() if is_inside_tree() else null
@@ -1127,7 +1127,7 @@ func create_explosion(center: Vector3, radius: float = 3.8, is_tnt: bool = true,
 	var rad_int: int = int(ceil(radius))
 	var rad_sq: float = radius * radius
 
-	# In TrueCraft & Minecraft Beta, explosions submerged in water deal knockback/damage but protect terrain
+	# In Minecraft Beta, explosions submerged in water deal knockback/damage but protect terrain
 	var center_bid: int = get_block_world(center_i)
 	var submerged_in_water: bool = BlockRegistry.is_liquid(center_bid)
 

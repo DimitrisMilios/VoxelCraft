@@ -1,7 +1,7 @@
 class_name AStarPathFinder
 extends RefCounted
-## Authentic TrueCraft & Beta 1.7.3 3D A* Voxel Pathfinding implementation.
-## Ports TrueCraft's AStarPathFinder.cs with 3D grid traversal, 4 orthogonal and
+## Authentic Beta 1.7.3 3D A* Voxel Pathfinding implementation.
+## 3D grid traversal with 4 orthogonal and
 ## 4 diagonal neighbors, corner-cutting prevention, 1-block jump stepping,
 ## <=3-block safe drop falls, voxel height clearance checks, and parent backtracking.
 

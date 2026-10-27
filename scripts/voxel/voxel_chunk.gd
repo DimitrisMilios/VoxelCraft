@@ -694,7 +694,7 @@ func _place_balloon_tree(lx: int, base_y: int, lz: int) -> void:
 	for ty in range(base_y, base_y + trunk_height):
 		_set_voxel_raw(lx, ty, lz, BlockRegistry.BlockId.WOOD_LOG)
 
-	# Spherical balloon canopy of radius 2 centered at trunk top (TrueCraft BalloonOakTree)
+	# Spherical balloon canopy of radius 2 centered at trunk top (BalloonOakTree)
 	var center_cy: int = base_y + trunk_height
 	for cy in range(center_cy - 2, center_cy + 3):
 		for cx in range(lx - 2, lx + 3):

@@ -9,7 +9,7 @@ var _total: int = 0
 
 func _init() -> void:
 	print("==================================================================")
-	print("   VOXELCRAFT - TRUECRAFT PHASE 5 VERIFICATION TEST               ")
+	print("   VOXELCRAFT - PHASE 5 VERIFICATION TEST                         ")
 	print("   Dual-Channel Voxel Lighting & Armor Mitigation System          ")
 	print("==================================================================")
 

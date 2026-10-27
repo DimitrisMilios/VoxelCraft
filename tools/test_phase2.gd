@@ -3,11 +3,11 @@ extends SceneTree
 ## Automated Unit & Integration Tests for Phase 2:
 ## - Block Metadata (4-bit nibbles, stairs orientation, wool vertex tinting, slabs)
 ## - Persistence of metadata via ChunkStorage
-## - Authentic TrueCraft Beta 1.7.3 Recipe Catalog (burger-b1.7.json)
+## - Authentic Beta 1.7.3 Recipe Catalog (burger-b1.7.json)
 ## - Shift-Click container and loop-crafting transfers
 
 func _init() -> void:
-	print("=== Running TrueCraft Phase 2 Verification Test Suite ===")
+	print("=== Running Phase 2 Verification Test Suite ===")
 	var total_tests: int = 0
 	var passed_tests: int = 0
 
@@ -314,6 +314,6 @@ func _init() -> void:
 	# Summary
 	# ------------------------------------------------------------------------
 	print("\n==================================================")
-	print("TrueCraft Phase 2 Verification Suite: %d / %d PASSED" % [passed_tests, total_tests])
+	print("Phase 2 Verification Suite: %d / %d PASSED" % [passed_tests, total_tests])
 	print("==================================================")
 	quit(0 if passed_tests == total_tests else 1)

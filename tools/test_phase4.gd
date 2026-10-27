@@ -1,5 +1,5 @@
 extends SceneTree
-## TrueCraft Phase 4 Automated Verification Suite
+## Phase 4 Automated Verification Suite
 ## Tests:
 ## 1. 3D A* Voxel Pathfinding (linear path, obstacle avoidance, step up, ledge drop)
 ## 2. Creeper Intelligence (sighting, A* chase, 3m stopping, fuse hissing & swelling, cancel defuse, explosion)
@@ -17,7 +17,7 @@ const ArrowProjectileClass = preload("res://scripts/entities/arrow_projectile.gd
 
 func _init() -> void:
 	print("==================================================")
-	print("--- Running TrueCraft Phase 4 Verification Suite ---")
+	print("--- Running Phase 4 Verification Suite ---")
 	print("==================================================")
 
 	var main_scene: PackedScene = load("res://scenes/main.tscn")
@@ -65,7 +65,7 @@ func _init() -> void:
 
 	print("==================================================")
 	if all_passed:
-		print(">>> ALL TRUECRAFT PHASE 4 TESTS PASSED CLEANLY! <<<")
+		print(">>> ALL PHASE 4 TESTS PASSED CLEANLY! <<<")
 		print("==================================================")
 		quit(0)
 	else:

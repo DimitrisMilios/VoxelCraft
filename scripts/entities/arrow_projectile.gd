@@ -1,6 +1,6 @@
 class_name ArrowProjectile
 extends Node3D
-## TrueCraft & Beta 1.7.3 authentic ballistic arrow projectile entity.
+## Authentic Beta 1.7.3 ballistic arrow projectile entity.
 ## Features ballistic arc kinematics (gravity & air drag), continuous collision detection,
 ## water drag attenuation, mob damage & knockback, block sticking, and player arrow retrieval.
 

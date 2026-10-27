@@ -1,6 +1,6 @@
 class_name TNTPrimed
 extends CharacterBody3D
-## TrueCraft & Beta 1.7.3 authentic primed TNT entity.
+## Authentic Beta 1.7.3 primed TNT entity.
 ## Features authentic 80-tick (4.0s) fuse, physics with gravity & bounce,
 ## water buoyancy and current drift, accelerating white flash blinking,
 ## and realistic spherical crater detonation with bedrock/obsidian blast resistance.

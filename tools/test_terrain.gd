@@ -1,16 +1,16 @@
 extends SceneTree
-## Comprehensive integration test for Phase 1: TrueCraft Beta 1.7.3 Terrain & Biomes.
+## Comprehensive integration test for Phase 1: Beta 1.7.3 Terrain & Biomes.
 ## Verifies 10 Beta biomes, continuous (T, R) climate maps, unbreakable Bedrock floor,
 ## Beta ore height bounds, tree species, dungeon spawners, and block drops.
 
 func _init() -> void:
-	print("--- Running Test: TrueCraft Beta 1.7.3 Terrain & Biomes ---")
+	print("--- Running Test: Beta 1.7.3 Terrain & Biomes ---")
 	_test_climate_and_10_biomes()
 	_test_bedrock_layer()
 	_test_ore_height_bounds()
 	_test_new_blocks_and_harvest_drops()
 	_test_chunk_generation_and_decorators()
-	print("--- Phase 1: All TrueCraft Terrain Tests PASSED! ---")
+	print("--- Phase 1: All Terrain Tests PASSED! ---")
 	quit(0)
 
 
