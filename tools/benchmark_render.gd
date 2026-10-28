@@ -76,7 +76,9 @@ func _process(_delta: float) -> bool:
 				_phase = 1
 				_phase_start_frame = _frame
 		1:
-			# Let pending remeshes and GC settle.
+			# Let pending remeshes settle. VSync is turned off here because the VideoSettings
+			# autoload turns it back on after _initialize.
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 			if _frame - _phase_start_frame > 60:
 				_phase = 2
 				_phase_start_frame = _frame

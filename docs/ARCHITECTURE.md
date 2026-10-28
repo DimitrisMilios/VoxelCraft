@@ -21,8 +21,10 @@ This technical specification details the software architecture, data structures,
 
 * **Engine:** Godot Engine 4.x
 * **Scripting Language:** GDScript 2.0 (statically typed for optimal VM performance)
-* **Rendering Backend:** Mobile Vulkan (`mobile`)
-* **Target Framerate:** 60+ FPS on integrated graphics (Intel Iris Xe / AMD Radeon Vega) and dedicated GPUs.
+* **Rendering Backend:** Compatibility (OpenGL 3.3, `gl_compatibility`) — runs on old and low-end GPUs.
+* **Physics:** Jolt Physics (built into Godot 4.4+).
+* **Target Framerate:** 60+ FPS on low-end integrated graphics. Terrain is unshaded with baked lighting, and an automatic render scale (`scripts/core/video_settings.gd`) lowers the 3D resolution only if the GPU still cannot keep up.
+* **Benchmark:** `tools/benchmark_render.gd` (run with a window) reports frame times, draw calls and chunk build costs.
 * **Coordinate Standards:**
   * Metric: $1.0\text{ unit} = 1\text{ voxel cube } (1\text{m} \times 1\text{m} \times 1\text{m})$.
   * Vertical: $+Y\text{ is up}$, $-Y\text{ is down}$.
@@ -67,25 +69,28 @@ To eliminate frame stutter during player locomotion across chunk borders, all te
 
 1. **Player Grid Tracking:** `WorldManager` monitors the player's spatial coordinates and converts them to chunk coordinates:
    $$\text{Chunk}_X = \lfloor X / 16 \rfloor, \quad \text{Chunk}_Z = \lfloor Z / 16 \rfloor$$
-2. **Radial Chunk Queue:** Chunks within the active render distance are sorted in radial order (closest to player first).
-3. **Thread Dispatch:** Tasks are submitted to Godot's native `WorkerThreadPool`:
-   * **Stage 1 (Terrain Noise & Biomes):** Evaluates continental height noise, temperature/humidity climate, caves, and ores into raw voxel data.
-   * **Stage 2 (Lighting BFS Flood):** Calculates initial skylight column rays and local blocklight spreads.
-   * **Stage 3 (Mesh Assembly):** Generates vertex arrays, UV maps, per-vertex AO colors, and normals.
-4. **Main Thread Integration:** Meshes are assigned to `MeshInstance3D` nodes on the main scene tree during frame boundaries.
+2. **Radial Queues:** Chunks are processed closest-first.
+3. **Two-stage worker pipeline** (`WorkerThreadPool`, leaving one CPU core for the main thread):
+   * **Generate (radius = render distance + 1):** terrain noise, biomes (computed once per column), caves, ores, structures, then the chunk's own lighting. The chunk exists as data only.
+   * **Mesh (radius = render distance):** starts once all 8 neighbors have data. Pulls light in across the borders from the neighbors, then meshes every non-empty sub-chunk from an 18³ padded copy, so faces, light and AO are seamless across chunk borders.
+4. **Main thread integration (time-budgeted):** finished chunks are attached a few per frame. Collision shapes are only attached within 3 chunks of the player, spread across frames; mobs standing on ground without collision hold still until it arrives.
+5. **Edits:** a block change relights its 3×3 chunk neighborhood incrementally, then the affected sub-chunks are re-meshed on workers from small y-slices of the neighborhood (stale results are discarded by version counters).
 
 ---
 
 ## 4. Mesh Generation & Face Culling Pipeline
 
-### ✂️ Neighbor-Aware Face Culling
-Rather than rendering internal block faces, each voxel inspects its 6 orthogonal neighbors ($+Y, -Y, +X, -X, +Z, -Z$):
-* Faces are emitted **only** when adjacent to a non-opaque block (Air, Water, Leaves, Glass, or boundary).
-* Hidden internal faces are culled prior to vertex array assembly, reducing GPU triangle counts by over $85\%$.
+The mesher (`scripts/voxel/chunk_mesher.gd`) writes geometry straight into packed arrays (no `SurfaceTool`).
 
-### 🎨 Texture Atlas & Dual-Pass Rendering
-* **Opaque Pass:** Employs an unshaded / Lambertian shader sampling the unified Faithful 64x texture atlas with nearest-neighbor mipmapping.
-* **Translucent Water Pass:** Uses a dedicated alpha-blended water shader with animated UV wave ripples and Fresnel reflections.
+### ✂️ Neighbor-Aware Face Culling
+* Buried blocks are rejected with six table lookups before any other work.
+* A face is emitted only when the neighbor does not hide it (opaque cubes and the opaque-textured leaves hide faces; glass-like blocks such as ice and lava hide faces only against the same block).
+* Render types: full cubes, cutout cubes, cross plants (flowers, sugar cane, saplings), `#`-shaped crops, sloped water, and box shapes (stairs, slabs, doors, cactus, beds, torches...). Box shapes come from `BlockRegistry.get_shape_boxes`, which collision and the selection outline also use.
+
+### 🎨 Vertex Format & Shaders
+* **Per vertex:** position, UV (0..1 inside the tile), `UV2` = smooth sky/block light, `COLOR.rgb` = face shade × AO (× wool tint), `COLOR.a` = texture layer.
+* **Opaque and cutout passes** (`shaders/voxel_terrain*.gdshader`) are unshaded: one texture fetch from a mip-mapped `Texture2DArray` (one layer per tile, so no bleeding) and the classic light curve. Day and night only change two shader globals (`vc_sky_darken`, `vc_sky_tint`).
+* **Water** (`shaders/water.gdshader`) is unshaded and alpha-blended, lit by the same baked light, with scrolling wave normals for the Fresnel tint.
 
 ---
 
@@ -94,17 +99,18 @@ Rather than rendering internal block faces, each voxel inspects its 6 orthogonal
 Lighting operates via a fast Breadth-First Search (BFS) queue algorithm (`VoxelLighting`):
 
 ### ☀️ Skylight Propagation
-1. Scans downward from the sky ($Y=255 \to 0$); every transparent block receives Skylight Level 15.
-2. When striking an opaque block or entering a cave, light enters a BFS queue and propagates outward in 6 directions, decreasing by $1$ per block until reaching $0$.
+1. Each column is lit straight down at level 15 until a block absorbs it (water and ice remove 2, leaves 1, opaque blocks all of it).
+2. Light then spreads sideways into shaded columns (under overhangs, into cave mouths), losing 1 per block.
 
 ### 🕯️ Blocklight Propagation
-1. Light sources (Torches: 14, Glowstone: 15, Active Furnaces: 13, Lava: 15) enqueue their origin coordinates.
-2. Propagates outward in 6 directions, decrementing by $1$ per step.
+1. Emitters (Torch 14, Glowstone 15, Lava 15, Redstone Torch 7) are found with `PackedByteArray.find` and flood outward, losing 1 per block.
 
-### 🌗 Smooth Ambient Occlusion (AO)
-For each vertex on an exposed face, the 3 adjacent neighbor blocks are sampled to compute corner occlusion:
-$$\text{AO Level} = \begin{cases} 3 & \text{if both side neighbors are solid} \\ \text{Side}_1 + \text{Side}_2 + \text{Corner} & \text{otherwise} \end{cases}$$
-The resulting vertex tint smoothly darkens recessed corners and crevices.
+### 🔁 Borders and Edits
+* At mesh time a chunk pulls light in across its four borders from the already-lit neighbors.
+* Placing or breaking a block runs a removal flood and a re-add flood over the 3×3 chunk buffers around it (light never travels further than 15 blocks), updating only the channels the change can affect. Daylight dropping straight down at level 15 is handled specially, so digging a shaft lights it all the way down.
+
+### 🌗 Smooth Lighting & Ambient Occlusion
+Each face vertex averages the light of the cell in front of the face and its (non-opaque) side and corner neighbors, and darkens by the number of occluding neighbors (0–3 → 100/80/65/50%). Quads are triangulated along the brighter diagonal to avoid AO seams. At night the shader subtracts up to 11 levels from skylight, while torch light stays warm.
 
 ---
 

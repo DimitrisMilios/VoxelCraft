@@ -181,6 +181,11 @@ VoxelCraft features dedicated headless test suites located in [`tools/`](tools/)
 | `tools/test_phase5.gd` | Dual-channel lighting BFS, smooth AO vertex tints, and armor damage mitigation |
 | `tools/test_inventory_persistence.gd` | Multi-world save/load, player inventory persistence, and window close safety |
 | `tools/test_doors_beds_music.gd` | 2-block door mechanics, bed sleeping transitions, and background music manager |
+| `tools/test_mechanics.gd` | Mining times per tool, harvest tiers, drops, doors, sugar cane, logs, leaf decay, and incremental lighting |
+
+Tool and test scripts save into `user://test_worlds`, so they never touch your real worlds.
+
+With a window (no `--headless`), `tools/benchmark_render.gd` measures frame times, draw calls and chunk build costs, and `tools/showcase_blocks.gd` renders the special blocks to screenshots.
 
 Run any test suite headlessly via Godot:
 ```bash

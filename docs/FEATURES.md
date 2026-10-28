@@ -116,18 +116,29 @@ Players can equip 4 armor pieces (Helmet, Chestplate, Leggings, Boots) crafted f
 
 ## 5. Tool Tiers, Progressive Mining & Durability
 
-### 🔨 Tool Hierarchy & Material Harvest Levels
-* **Tier 0 (Fist / Wood):** Dirt, Wood Logs, Sand, Gravel.
-* **Tier 1 (Stone):** Cobblestone, Iron Ore, Lapis Lazuli.
-* **Tier 2 (Iron):** Gold Ore, Redstone Ore, Diamond Ore.
-* **Tier 3 (Diamond):** Obsidian, Bedrock (Bedrock remains unbreakable).
-* **Tier 4 (Gold):** Ultra-high mining speed with low durability.
+### 🔨 Harvest Levels (what drops anything)
+* **Any pickaxe (wood or gold):** Stone, Cobblestone, Sandstone, Coal Ore, Furnace, Spawner.
+* **Stone pickaxe or better:** Iron Ore, Lapis Ore, Iron and Lapis Blocks.
+* **Iron pickaxe or better:** Gold Ore, Diamond Ore, Redstone Ore, Gold and Diamond Blocks.
+* **Diamond pickaxe:** Obsidian. Bedrock cannot be broken.
+* Everything else (dirt, wood, sand, plants...) drops by hand. Leaves only drop themselves with shears (otherwise 5% sapling, 0.5% apple from oak).
 
-### ⏳ Progressive Mining & Visual Cracks
-* Blocks do not break instantly: holding the Left Mouse Button advances mining progress based on tool tier and block hardness.
-* A 10-stage destruction decal overlays the targeted block face.
-* Releasing the button resets mining progress.
-* Tools decrement durability upon completing block harvest; a color-coded durability bar displays in the inventory.
+### ⏳ Break Time
+Break time in seconds = **hardness × 1.5 ÷ tool speed** when the block can be harvested, or **hardness × 5 ÷ tool speed** when it cannot (rounded up to whole game ticks of 1/20 s). The tool speed only applies if it is the right tool for the block (pickaxe for stone-type blocks, axe for wood, shovel for dirt/sand/gravel); otherwise it is 1. Mining is 5× slower with your head underwater and 5× slower while not standing on the ground.
+
+| Tool material | Hand | Wood | Stone | Iron | Diamond | Gold |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Speed | 1 | 2 | 4 | 6 | 8 | 12 |
+| Stone (hardness 1.5) | 7.5 s | 1.15 s | 0.6 s | 0.4 s | 0.3 s | 0.2 s |
+| Iron Ore (3) | 15 s* | 7.5 s* | 1.15 s | 0.75 s | 0.6 s | 1.25 s* |
+| Obsidian (50) | 250 s* | 125 s* | 62.5 s* | 41.7 s* | 9.4 s | 20.85 s* |
+| Oak Log (2, axe) | 3 s | 1.5 s | 0.75 s | 0.5 s | 0.4 s | 0.25 s |
+
+\* cannot be harvested with that tool, so it drops nothing.
+
+* A 10-stage crack overlay follows the progress; releasing the button or switching items restarts it.
+* After a block breaks there is a 0.25 s pause before the next one starts; instant blocks (plants, torches, TNT) break immediately.
+* Tools lose 1 durability per block that takes time to break (swords 2); instant blocks cost nothing.
 
 ---
 
@@ -144,15 +155,24 @@ Players can equip 4 armor pieces (Helmet, Chestplate, Leggings, Boots) crafted f
 * **Oak Trees:** Classic balloon canopies with organic leaf distribution.
 * **Pine / Spruce Trees:** Conical needle foliage native to snowy taiga biomes.
 * **Birch Trees:** Distinct white bark with vibrant foliage.
-* Felling tree trunks causes detached leaves to gradually decay.
+* Each wood type has its own bark and end-grain texture. Placed logs lie along the axis of the face you click, with the bark rotated to match.
+* Felling a trunk makes natural leaves more than 4 blocks (through leaves) from any log decay over the next seconds, dropping saplings and occasionally apples. Leaves you place yourself never decay.
+* **Saplings** (oak, spruce, birch) grow into trees with random ticks when they have light level 9+ and room to grow.
+
+### 🎋 Sugar Cane & Cactus
+* Sugar cane generates in clumps on sand, grass or dirt right at the water's edge, 2–4 blocks tall.
+* It can only be placed on sugar cane, or on grass/dirt/sand with water directly beside that block. Removing the water (or the block under it) breaks the whole stalk, dropping each piece.
+* Sugar cane and cactus grow one block every 16 random ticks (about 18 minutes) up to 3 blocks tall.
 
 ---
 
 ## 7. Functional Multiblocks & Persistent Containers
 
 ### 🚪 2-Block Swinging Doors
-* Composed of paired lower and upper door blocks.
-* Interacting with either half toggles both blocks simultaneously with spatial creak audio and dynamic collision updating.
+* A thin (3/16 block) two-block panel. It is placed facing the way you look, against the edge of the block nearest to you, and needs a solid floor and two free blocks.
+* The hinge goes on the side with more solid blocks next to it; placing a door beside another door makes a double door; otherwise it follows which half of the block you clicked.
+* Right-clicking either half swings both halves 90° onto the hinge side (collision follows, so open doors can be walked through).
+* Breaking either half, or the block under it, removes the whole door and drops one door.
 
 ### 🛏️ 2-Block Bed Multiblock & Sleep System
 * Built from paired Foot and Head blocks.
@@ -227,7 +247,7 @@ Entities navigate complex voxel landscapes using a specialized 3D A* search engi
 ### 🎨 Faithful 64x High-Definition Aesthetics
 * Clean 64×64 pixel-art textures across all blocks, mobs, weapons, and HUD elements.
 * 3D First-Person Held Item viewmodel with organic walk-bobbing, weapon sway, and strike animations.
-* Full HD 1080p presentation running on Godot's Mobile Vulkan renderer.
+* Lightweight Compatibility (OpenGL 3.3) renderer with baked smooth lighting, distance fog and an automatic render scale that keeps weak GPUs at 60 FPS.
 
 ### 🎵 Dynamic Sound Design
 * **Procedural Sound Synthesizer:** On-the-fly 16-bit PCM procedural audio generator.
