@@ -95,6 +95,9 @@ func _ready() -> void:
 	VoxelAtlasBuilder.get_shared_water_material()
 	# Leave a core free for the main thread on low-end dual/quad-core CPUs.
 	max_concurrent_tasks = clampi(OS.get_processor_count() - 1, 1, max_concurrent_tasks)
+	var video: Node = get_node_or_null("/root/VideoSettings")
+	if video != null:
+		render_distance = clampi(int(video.get("render_distance")), 2, 16)
 
 	if GameSession.active_world_id.is_empty():
 		var saved: Array[Dictionary] = GameSession.list_saved_worlds()
@@ -226,6 +229,9 @@ func set_render_distance(new_distance: int) -> void:
 		return
 	render_distance = clamped
 	_apply_fog_distance()
+	var video: Node = get_node_or_null("/root/VideoSettings")
+	if video != null:
+		video.call("set_render_distance", clamped)
 	if _player != null:
 		_last_player_chunk = world_to_chunk_coords(_player.global_position)
 		_update_chunk_targets(_last_player_chunk)

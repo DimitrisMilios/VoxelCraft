@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 MusicManager="*res://scripts/audio/music_manager.gd"
+VideoSettings="*res://scripts/core/video_settings.gd"
 
 [display]
 

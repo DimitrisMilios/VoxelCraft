@@ -1481,7 +1481,7 @@ func _build_pause_menu() -> void:
 	vbox.add_child(_render_dist_label)
 
 	var slider := HSlider.new()
-	slider.min_value = 3
+	slider.min_value = 2
 	slider.max_value = 16
 	slider.step = 1
 	slider.value = init_dist
@@ -1493,19 +1493,19 @@ func _build_pause_menu() -> void:
 	)
 	vbox.add_child(slider)
 
-	var sun: DirectionalLight3D = get_tree().root.find_child("SunLight", true, false) as DirectionalLight3D if is_inside_tree() and get_tree() != null and get_tree().root != null else null
-	var shadow_btn := Button.new()
-	var shadow_state: bool = sun.shadow_enabled if sun != null else true
-	shadow_btn.text = "Dynamic Shadows: %s" % ("ON" if shadow_state else "OFF (Fastest)")
-	shadow_btn.custom_minimum_size = Vector2(0, 32)
-	_apply_faithful_button_style(shadow_btn)
-	shadow_btn.pressed.connect(func() -> void:
-		if sun != null:
-			sun.shadow_enabled = not sun.shadow_enabled
-			shadow_btn.text = "Dynamic Shadows: %s" % ("ON" if sun.shadow_enabled else "OFF (Fastest)")
-			_pause_status_label.text = "Shadows %s" % ("ENABLED" if sun.shadow_enabled else "DISABLED")
+	# 3D render resolution: Auto lowers it only when the GPU cannot keep 60 FPS; the HUD stays sharp.
+	var video: Node = get_node_or_null("/root/VideoSettings")
+	var scale_btn := Button.new()
+	scale_btn.text = "Render Scale: %s" % (video.call("describe_render_scale") if video != null else "100%")
+	scale_btn.custom_minimum_size = Vector2(0, 32)
+	_apply_faithful_button_style(scale_btn)
+	scale_btn.pressed.connect(func() -> void:
+		if video != null:
+			video.call("cycle_render_scale")
+			scale_btn.text = "Render Scale: %s" % video.call("describe_render_scale")
+			_pause_status_label.text = "Lower render scale = faster on weak graphics cards"
 	)
-	vbox.add_child(shadow_btn)
+	vbox.add_child(scale_btn)
 
 	var perf_btn := Button.new()
 	perf_btn.text = "Preset: Optimize for 60+ FPS (1-Click)"
@@ -1516,9 +1516,9 @@ func _build_pause_menu() -> void:
 			_world_manager.set_render_distance(4)
 			slider.value = 4
 			_render_dist_label.text = "Render Distance: 4 Chunks (64m)"
-		if sun != null:
-			sun.shadow_enabled = false
-			shadow_btn.text = "Dynamic Shadows: OFF (Fastest)"
+		if video != null:
+			video.call("set_render_scale", 0.0)
+			scale_btn.text = "Render Scale: %s" % video.call("describe_render_scale")
 		_pause_status_label.text = "Configured for Smooth 60+ FPS!"
 	)
 	vbox.add_child(perf_btn)
