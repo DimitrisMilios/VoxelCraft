@@ -138,6 +138,10 @@ func _resolve_refs() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Far from the player the terrain has no collision yet: hold still instead of falling through.
+	if _world_manager != null and not _world_manager.is_collision_ready_at(global_position if is_inside_tree() else position):
+		return
+
 	if _hurt_flash_timer > 0.0:
 		_hurt_flash_timer = maxf(0.0, _hurt_flash_timer - delta)
 		if _hurt_flash_timer <= 0.0 and _mob_mat != null:

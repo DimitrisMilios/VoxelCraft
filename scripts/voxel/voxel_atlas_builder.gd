@@ -1,14 +1,33 @@
 class_name VoxelAtlasBuilder
 extends RefCounted
-## Generates a crisp 16x16 per-tile retro pixel-art texture atlas and shared chunk material.
+## Builds the block texture atlas, the per-tile texture array used by terrain, and the shared
+## block materials. Tiles that the shipped atlas does not contain (spruce/birch wood, saplings,
+## extra ores...) are derived from existing tiles at load time.
 
 static var _cached_material: StandardMaterial3D = null
 static var _cached_water_material: Material = null
 static var _cached_texture: ImageTexture = null
-static var _cached_normal_texture: ImageTexture = null
-static var _cached_roughness_texture: ImageTexture = null
+static var _cached_atlas_image: Image = null
+static var _cached_texture_array: Texture2DArray = null
+static var _terrain_opaque: ShaderMaterial = null
+static var _terrain_cutout: ShaderMaterial = null
 
 
+## Unshaded terrain material (baked light). `cutout` = alpha-tested variant for foliage/plants.
+## Create these on the main thread before meshing starts; worker threads only read the cache.
+static func get_terrain_material(cutout: bool) -> ShaderMaterial:
+	if _terrain_opaque == null:
+		var arr: Texture2DArray = get_atlas_texture_array()
+		_terrain_opaque = ShaderMaterial.new()
+		_terrain_opaque.shader = load("res://shaders/voxel_terrain.gdshader") as Shader
+		_terrain_opaque.set_shader_parameter("atlas", arr)
+		_terrain_cutout = ShaderMaterial.new()
+		_terrain_cutout.shader = load("res://shaders/voxel_terrain_cutout.gdshader") as Shader
+		_terrain_cutout.set_shader_parameter("atlas", arr)
+	return _terrain_cutout if cutout else _terrain_opaque
+
+
+## Lit material for block-shaped entities (held block, dropped items, falling blocks).
 static func get_shared_voxel_material() -> StandardMaterial3D:
 	if _cached_material != null:
 		return _cached_material
@@ -19,26 +38,11 @@ static func get_shared_voxel_material() -> StandardMaterial3D:
 	material.vertex_color_use_as_albedo = true
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	material.alpha_scissor_threshold = 0.5
-	material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	material.cull_mode = BaseMaterial3D.CULL_BACK
-
-	# PBR Roughness map for tuned matte/gloss physical response
-	var rough_tex: ImageTexture = get_atlas_roughness_texture()
-	if rough_tex != null:
-		material.roughness = 1.0
-		material.roughness_texture = rough_tex
-		material.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_GREEN
-	else:
-		material.roughness = 0.85
+	material.roughness = 1.0
 	material.metallic = 0.0
-
-	# PBR Normal texture for micro-surface bumps and stone cracks under dynamic lighting
-	var norm_tex: ImageTexture = get_atlas_normal_texture()
-	if norm_tex != null:
-		material.normal_enabled = true
-		material.normal_scale = 0.25
-		material.normal_texture = norm_tex
-
+	material.metallic_specular = 0.0
+	material.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	_cached_material = material
 	return _cached_material
 
@@ -48,145 +52,352 @@ static func get_shared_water_material() -> Material:
 		return _cached_water_material
 
 	var shader: Shader = load("res://shaders/water.gdshader") as Shader
-	if shader != null:
-		var s_mat := ShaderMaterial.new()
-		s_mat.shader = shader
+	var s_mat := ShaderMaterial.new()
+	s_mat.shader = shader
+	s_mat.set_shader_parameter("water_color", Color(0.20, 0.50, 0.88, 0.70))
+	s_mat.set_shader_parameter("deep_color", Color(0.06, 0.26, 0.58, 0.88))
+	s_mat.set_shader_parameter("normal_strength", 0.85)
 
-		# Set realistic shallow and deep colors (matching reference image RTX / SEUS PTGI lake water)
-		s_mat.set_shader_parameter("shallow_color", Color(0.24, 0.74, 0.82, 0.40))
-		s_mat.set_shader_parameter("deep_color", Color(0.04, 0.30, 0.56, 0.90))
-		s_mat.set_shader_parameter("depth_distance", 5.5)
-		s_mat.set_shader_parameter("beer_factor", 1.25)
-		s_mat.set_shader_parameter("roughness", 0.04)
-		s_mat.set_shader_parameter("metallic", 0.05)
-		s_mat.set_shader_parameter("specular", 0.95)
-		s_mat.set_shader_parameter("refraction_strength", 0.02)
-		s_mat.set_shader_parameter("normal_strength", 0.85)
+	var wave1_img: Image = TexturePack.load_image("res://assets/textures/water_wave_normal_1.png")
+	if wave1_img != null:
+		s_mat.set_shader_parameter("wave_normal_1", ImageTexture.create_from_image(wave1_img))
+	var wave2_img: Image = TexturePack.load_image("res://assets/textures/water_wave_normal_2.png")
+	if wave2_img != null:
+		s_mat.set_shader_parameter("wave_normal_2", ImageTexture.create_from_image(wave2_img))
 
-		var wave1_img: Image = TexturePack.load_image("res://assets/textures/water_wave_normal_1.png")
-		if wave1_img != null:
-			s_mat.set_shader_parameter("wave_normal_1", ImageTexture.create_from_image(wave1_img))
-		var wave2_img: Image = TexturePack.load_image("res://assets/textures/water_wave_normal_2.png")
-		if wave2_img != null:
-			s_mat.set_shader_parameter("wave_normal_2", ImageTexture.create_from_image(wave2_img))
-
-		_cached_water_material = s_mat
-		return _cached_water_material
-
-	var water_tex: ImageTexture = null
-	var water_uv_scale: float = 0.32
-	var loaded_water: Image = TexturePack.load_image("res://assets/textures/water_still_64.png")
-	if loaded_water != null:
-		water_tex = ImageTexture.create_from_image(loaded_water)
-		water_uv_scale = 1.0
-
-	if water_tex == null:
-		var water_img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
-		for y in range(16):
-			for x in range(16):
-				var wave: float = sin((float(x) * 0.9 + float(y) * 1.4) * 0.78) * 0.055
-				var streak: float = 0.08 if ((x + y * 2) % 6 == 0) else 0.0
-				var trough: float = -0.05 if ((x * 2 + y) % 5 == 0) else 0.0
-				var col := Color(
-					clampf(0.14 + wave + streak + trough, 0.0, 1.0),
-					clampf(0.47 + wave + streak + trough, 0.0, 1.0),
-					clampf(0.88 + wave + streak * 1.1, 0.0, 1.0),
-					0.74
-				)
-				water_img.set_pixel(x, y, col)
-		water_tex = ImageTexture.create_from_image(water_img)
-
-	var material := StandardMaterial3D.new()
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.albedo_texture = water_tex
-	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	material.uv1_scale = Vector3(water_uv_scale, water_uv_scale, water_uv_scale)
-	material.uv1_triplanar = true
-	material.vertex_color_use_as_albedo = true
-	material.roughness = 0.07
-	material.metallic = 0.14
-	material.metallic_specular = 0.88
-	_cached_water_material = material
+	_cached_water_material = s_mat
 	return _cached_water_material
 
 
-## Scrolls water UV coordinates continuously so rivers, corners, and waterfalls visibly animate.
-static func update_water_animation(delta: float) -> void:
-	if _cached_water_material == null:
-		return
-	if _cached_water_material is StandardMaterial3D:
-		var std_mat := _cached_water_material as StandardMaterial3D
-		var offset: Vector3 = std_mat.uv1_offset
-		offset.x = fmod(offset.x + delta * 0.18, 1.0)
-		offset.y = fmod(offset.y - delta * 0.42, 1.0)
-		offset.z = fmod(offset.z + delta * 0.22, 1.0)
-		std_mat.uv1_offset = offset
+## Water animates in its shader (TIME); nothing to update per frame.
+static func update_water_animation(_delta: float) -> void:
+	pass
 
 
 static func get_atlas_texture() -> ImageTexture:
 	if _cached_texture != null:
 		return _cached_texture
-
-	var target_cols: int = 61
-	var tile_size: int = BlockRegistry.TILE_PIXEL_SIZE
-
-	# 1. Load the block atlas: a local texture pack override (e.g. Faithful 64x)
-	#    if installed, otherwise the repo's Blender-baked atlas.
-	var baked_img: Image = TexturePack.load_image("res://assets/textures/block_atlas.png")
-	if baked_img != null:
-		var b_tile_size: int = maxi(1, baked_img.get_height())
-		var existing_cols: int = maxi(1, baked_img.get_width() / b_tile_size)
-		if existing_cols >= target_cols:
-			BlockRegistry.atlas_columns = existing_cols
-			_cached_texture = ImageTexture.create_from_image(baked_img)
-			return _cached_texture
-
-		# Dynamically append tiles existing_cols..target_cols so new Beta blocks get distinct textures
-		var ext_img := Image.create(target_cols * b_tile_size, b_tile_size, false, Image.FORMAT_RGBA8)
-		ext_img.blit_rect(baked_img, Rect2i(0, 0, baked_img.get_width(), b_tile_size), Vector2i.ZERO)
-		var rng := RandomNumberGenerator.new()
-		rng.seed = 1337
-		for tile_idx in range(existing_cols, target_cols):
-			_paint_tile(ext_img, tile_idx, tile_idx * b_tile_size, 0, b_tile_size, rng)
-
-		BlockRegistry.atlas_columns = target_cols
-		_cached_texture = ImageTexture.create_from_image(ext_img)
-		return _cached_texture
-
-	# 2. Fallback procedural pixel-art atlas if `block_atlas.png` is missing
-	BlockRegistry.atlas_columns = target_cols
-	var width: int = target_cols * tile_size
-	var height: int = BlockRegistry.ATLAS_ROWS * tile_size
-	var img := Image.create(width, height, false, Image.FORMAT_RGBA8)
-
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 1337
-
-	for tile_idx in range(target_cols):
-		var offset_x: int = tile_idx * tile_size
-		_paint_tile(img, tile_idx, offset_x, 0, tile_size, rng)
-
-	_cached_texture = ImageTexture.create_from_image(img)
+	_cached_atlas_image = _build_atlas_image()
+	_cached_texture = ImageTexture.create_from_image(_cached_atlas_image)
 	return _cached_texture
 
 
-static func get_atlas_normal_texture() -> ImageTexture:
-	if _cached_normal_texture != null:
-		return _cached_normal_texture
-	var norm_img: Image = TexturePack.load_image("res://assets/textures/block_atlas_normal.png")
-	if norm_img != null and not norm_img.is_empty():
-		_cached_normal_texture = ImageTexture.create_from_image(norm_img)
-	return _cached_normal_texture
+## One mip-mapped layer per atlas tile, so distant terrain is filtered without tile bleeding.
+static func get_atlas_texture_array() -> Texture2DArray:
+	if _cached_texture_array != null:
+		return _cached_texture_array
+	get_atlas_texture()
+	var img: Image = _cached_atlas_image
+	var ts: int = img.get_height()
+	var cols: int = img.get_width() / ts
+	var layers: Array[Image] = []
+	for i in range(cols):
+		var layer: Image = img.get_region(Rect2i(i * ts, 0, ts, ts))
+		layer.convert(Image.FORMAT_RGBA8)
+		layer.generate_mipmaps()
+		layers.append(layer)
+	_cached_texture_array = Texture2DArray.new()
+	_cached_texture_array.create_from_images(layers)
+	return _cached_texture_array
 
 
-static func get_atlas_roughness_texture() -> ImageTexture:
-	if _cached_roughness_texture != null:
-		return _cached_roughness_texture
-	var rough_img: Image = TexturePack.load_image("res://assets/textures/block_atlas_roughness.png")
-	if rough_img != null and not rough_img.is_empty():
-		_cached_roughness_texture = ImageTexture.create_from_image(rough_img)
-	return _cached_roughness_texture
+static func _build_atlas_image() -> Image:
+	var target_cols: int = BlockRegistry.ATLAS_TILE_COUNT
+	var baked_img: Image = TexturePack.load_image("res://assets/textures/block_atlas.png")
+	if baked_img == null:
+		# Fallback procedural pixel-art atlas if `block_atlas.png` is missing
+		var tile_size: int = BlockRegistry.TILE_PIXEL_SIZE
+		var img := Image.create(target_cols * tile_size, tile_size, false, Image.FORMAT_RGBA8)
+		var rng0 := RandomNumberGenerator.new()
+		rng0.seed = 1337
+		for tile_idx in range(target_cols):
+			_paint_tile(img, tile_idx, tile_idx * tile_size, 0, tile_size, rng0)
+		_add_derived_tiles(img, tile_size, 44)
+		BlockRegistry.atlas_columns = target_cols
+		return img
+
+	baked_img.convert(Image.FORMAT_RGBA8)
+	var ts: int = maxi(1, baked_img.get_height())
+	var existing_cols: int = maxi(1, baked_img.get_width() / ts)
+	if existing_cols >= target_cols:
+		BlockRegistry.atlas_columns = existing_cols
+		return baked_img
+
+	var ext_img := Image.create(target_cols * ts, ts, false, Image.FORMAT_RGBA8)
+	ext_img.blit_rect(baked_img, Rect2i(0, 0, existing_cols * ts, ts), Vector2i.ZERO)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1337
+	# Flowers, mushrooms and the spawner cage are painted as 16x16 pixel art (the painter draws
+	# them bottom-up, so flip) and scaled up crisply; everything else is derived below.
+	for tile_idx in [49, 50, 51, 52, 57]:
+		if tile_idx >= existing_cols:
+			var small := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+			_paint_tile(small, tile_idx, 0, 0, 16, rng)
+			if tile_idx != 57:
+				small.flip_y()
+			small.resize(ts, ts, Image.INTERPOLATE_NEAREST)
+			ext_img.blit_rect(small, Rect2i(0, 0, ts, ts), Vector2i(tile_idx * ts, 0))
+	_add_derived_tiles(ext_img, ts, existing_cols)
+	BlockRegistry.atlas_columns = target_cols
+	return ext_img
+
+
+# ============================================================================
+# DERIVED TILES
+# ============================================================================
+
+static func _tile(img: Image, idx: int, ts: int) -> Image:
+	return img.get_region(Rect2i(idx * ts, 0, ts, ts))
+
+
+static func _put(img: Image, idx: int, ts: int, tile: Image) -> void:
+	img.blit_rect(tile, Rect2i(0, 0, ts, ts), Vector2i(idx * ts, 0))
+
+
+static func _lum(c: Color) -> float:
+	return c.r * 0.299 + c.g * 0.587 + c.b * 0.114
+
+
+## Replaces painted placeholder tiles with versions built from the real textures.
+static func _add_derived_tiles(img: Image, ts: int, first_new: int) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 90210
+	var oak_side: Image = _tile(img, 4, ts)
+	var oak_top: Image = _tile(img, 5, ts)
+	var oak_leaves: Image = _tile(img, 6, ts)
+	var stone: Image = _tile(img, 3, ts)
+	var coal: Image = _tile(img, 12, ts)
+	var oak_leaf_lum: float = _average_lum(oak_leaves)
+
+	if first_new <= 44:
+		_put(img, 44, ts, _crop_sprout(_tile(img, 38, ts), 0.42, Color(0.36, 0.72, 0.20)))
+	if first_new <= 45:
+		_put(img, 45, ts, _crop_sprout(_tile(img, 39, ts), 0.48, Color(0.30, 0.66, 0.22)))
+	if first_new <= 46:
+		_put(img, 46, ts, _pebbles(ts, rng))
+	if first_new <= 47:
+		_put(img, 47, ts, _noise_tile(ts, rng, Color(0.62, 0.65, 0.72), 0.035))
+	if first_new <= 48:
+		_put(img, 48, ts, _ice_tile(ts, rng))
+
+	var spruce_side: Image = _tint_multiply(oak_side, Color(0.56, 0.45, 0.40))
+	var birch_side: Image = _birch_bark(ts, rng)
+	if first_new <= 53:
+		_put(img, 53, ts, spruce_side)
+	if first_new <= 54:
+		_put(img, 54, ts, _recolor_foliage(oak_leaves, oak_leaf_lum, Color(0.30, 0.48, 0.30)))
+	if first_new <= 55:
+		_put(img, 55, ts, birch_side)
+	if first_new <= 56:
+		_put(img, 56, ts, _recolor_foliage(oak_leaves, oak_leaf_lum, Color(0.47, 0.62, 0.31)))
+	if first_new <= 58:
+		_put(img, 58, ts, _bedrock(stone, rng))
+	if first_new <= 59:
+		_put(img, 59, ts, _recolor_ore(stone, coal, Color(0.92, 0.10, 0.08)))
+	if first_new <= 60:
+		_put(img, 60, ts, _recolor_ore(stone, coal, Color(0.14, 0.30, 0.86)))
+
+	_put(img, BlockRegistry.TILE_PINE_LOG_TOP, ts, _log_top(oak_top, spruce_side, Color(0.72, 0.58, 0.48), 0.0))
+	_put(img, BlockRegistry.TILE_BIRCH_LOG_TOP, ts, _log_top(oak_top, birch_side, Color(1.12, 1.10, 0.98), 0.12))
+	_put(img, BlockRegistry.TILE_OAK_SAPLING, ts, _sapling(ts, _tile(img, 6, ts), oak_side, false))
+	_put(img, BlockRegistry.TILE_PINE_SAPLING, ts, _sapling(ts, _tile(img, 54, ts), spruce_side, true))
+	_put(img, BlockRegistry.TILE_BIRCH_SAPLING, ts, _sapling(ts, _tile(img, 56, ts), birch_side, false))
+
+
+static func _average_lum(src: Image) -> float:
+	var total: float = 0.0
+	var n: int = 0
+	for y in range(0, src.get_height(), 2):
+		for x in range(0, src.get_width(), 2):
+			total += _lum(src.get_pixel(x, y))
+			n += 1
+	return maxf(total / float(maxi(n, 1)), 0.01)
+
+
+static func _tint_multiply(src: Image, mul: Color) -> Image:
+	var out: Image = src.duplicate()
+	for y in range(out.get_height()):
+		for x in range(out.get_width()):
+			var c: Color = out.get_pixel(x, y)
+			out.set_pixel(x, y, Color(clampf(c.r * mul.r, 0.0, 1.0), clampf(c.g * mul.g, 0.0, 1.0), clampf(c.b * mul.b, 0.0, 1.0), c.a))
+	return out
+
+
+static func _recolor_foliage(src: Image, avg_lum: float, target: Color) -> Image:
+	var out: Image = src.duplicate()
+	for y in range(out.get_height()):
+		for x in range(out.get_width()):
+			var c: Color = out.get_pixel(x, y)
+			var k: float = _lum(c) / avg_lum
+			out.set_pixel(x, y, Color(clampf(target.r * k, 0.0, 1.0), clampf(target.g * k, 0.0, 1.0), clampf(target.b * k, 0.0, 1.0), c.a))
+	return out
+
+
+## Log end: the outer ring is the species' bark, the inside is the oak growth rings recolored.
+static func _log_top(oak_top: Image, bark: Image, ring_mul: Color, whiten: float) -> Image:
+	var ts: int = oak_top.get_width()
+	var border: int = maxi(1, ts / 16)
+	var out: Image = oak_top.duplicate()
+	for y in range(ts):
+		for x in range(ts):
+			if x < border or y < border or x >= ts - border or y >= ts - border:
+				out.set_pixel(x, y, bark.get_pixel(x, y))
+				continue
+			var c: Color = oak_top.get_pixel(x, y)
+			var r := Color(clampf(c.r * ring_mul.r, 0.0, 1.0), clampf(c.g * ring_mul.g, 0.0, 1.0), clampf(c.b * ring_mul.b, 0.0, 1.0), 1.0)
+			out.set_pixel(x, y, r.lerp(Color(0.92, 0.88, 0.76), whiten))
+	return out
+
+
+## White birch bark with the characteristic dark horizontal lenticel streaks.
+static func _birch_bark(ts: int, rng: RandomNumberGenerator) -> Image:
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	var px: int = maxi(1, ts / 16)
+	for y in range(ts):
+		for x in range(ts):
+			var n: float = rng.randf_range(-0.035, 0.035)
+			var stripe: float = -0.03 if ((x / px) % 5 == 0) else 0.0
+			out.set_pixel(x, y, Color(0.86 + n + stripe, 0.85 + n + stripe, 0.81 + n + stripe, 1.0))
+	# Dark streaks on a coarse grid so they stay crisp at any tile resolution.
+	var cells: int = 16
+	for row in range(cells):
+		var cx: int = 0
+		while cx < cells:
+			var length: int = rng.randi_range(1, 4)
+			if rng.randf() < 0.24:
+				var dark := Color(0.16, 0.15, 0.14) if rng.randf() < 0.7 else Color(0.33, 0.31, 0.29)
+				for i in range(length):
+					var gx: int = (cx + i) % cells
+					for yy in range(px):
+						for xx in range(px):
+							out.set_pixel(gx * px + xx, row * px + yy, dark)
+			cx += length + rng.randi_range(1, 3)
+	return out
+
+
+static func _crop_sprout(src: Image, keep_frac: float, green: Color) -> Image:
+	var ts: int = src.get_width()
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	var cut: int = int(float(ts) * (1.0 - keep_frac))
+	for y in range(ts):
+		for x in range(ts):
+			var c: Color = src.get_pixel(x, y)
+			if y < cut or c.a < 0.5:
+				out.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			var k: float = clampf(_lum(c) * 1.6, 0.35, 1.25)
+			out.set_pixel(x, y, Color(clampf(green.r * k, 0.0, 1.0), clampf(green.g * k, 0.0, 1.0), clampf(green.b * k, 0.0, 1.0), 1.0))
+	return out
+
+
+static func _noise_tile(ts: int, rng: RandomNumberGenerator, base: Color, amount: float) -> Image:
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	var px: int = maxi(1, ts / 16)
+	for gy in range(16):
+		for gx in range(16):
+			var n: float = rng.randf_range(-amount, amount)
+			var c := Color(clampf(base.r + n, 0.0, 1.0), clampf(base.g + n, 0.0, 1.0), clampf(base.b + n, 0.0, 1.0), 1.0)
+			for yy in range(px):
+				for xx in range(px):
+					out.set_pixel(gx * px + xx, gy * px + yy, c)
+	return out
+
+
+static func _pebbles(ts: int, rng: RandomNumberGenerator) -> Image:
+	var out: Image = _noise_tile(ts, rng, Color(0.50, 0.48, 0.47), 0.04)
+	var px: int = maxi(1, ts / 16)
+	var shades: Array[Color] = [Color(0.66, 0.64, 0.62), Color(0.38, 0.36, 0.36), Color(0.56, 0.52, 0.50), Color(0.28, 0.27, 0.28)]
+	for i in range(22):
+		var cx: int = rng.randi_range(0, 15)
+		var cy: int = rng.randi_range(0, 15)
+		var w: int = rng.randi_range(1, 3)
+		var h: int = rng.randi_range(1, 2)
+		var shade: Color = shades[rng.randi_range(0, shades.size() - 1)]
+		for gy in range(h):
+			for gx in range(w):
+				var tx: int = (cx + gx) % 16
+				var ty: int = (cy + gy) % 16
+				for yy in range(px):
+					for xx in range(px):
+						out.set_pixel(tx * px + xx, ty * px + yy, shade)
+	return out
+
+
+static func _ice_tile(ts: int, rng: RandomNumberGenerator) -> Image:
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	for y in range(ts):
+		for x in range(ts):
+			var n: float = rng.randf_range(-0.02, 0.02)
+			var streak: bool = ((x * 3 + y) % (ts / 2)) < maxi(1, ts / 32)
+			var c := Color(0.62 + n, 0.78 + n, 0.98, 0.9)
+			if streak:
+				c = Color(0.86, 0.93, 1.0, 0.95)
+			out.set_pixel(x, y, c)
+	return out
+
+
+static func _bedrock(stone: Image, rng: RandomNumberGenerator) -> Image:
+	var ts: int = stone.get_width()
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	var px: int = maxi(1, ts / 16)
+	var blotch := PackedFloat32Array()
+	blotch.resize(256)
+	for i in range(256):
+		blotch[i] = rng.randf_range(-0.22, 0.22)
+	for y in range(ts):
+		for x in range(ts):
+			var g: float = _lum(stone.get_pixel(x, y))
+			var v: float = clampf((g - 0.5) * 1.8 + 0.30 + blotch[(y / px) * 16 + (x / px)], 0.04, 0.75)
+			out.set_pixel(x, y, Color(v, v, v, 1.0))
+	return out
+
+
+## Ore built from the coal-ore pattern: pixels that differ from plain stone become colored flecks.
+static func _recolor_ore(stone: Image, coal: Image, ore: Color) -> Image:
+	var ts: int = stone.get_width()
+	var out: Image = stone.duplicate()
+	for y in range(ts):
+		for x in range(ts):
+			var s: Color = stone.get_pixel(x, y)
+			var c: Color = coal.get_pixel(x, y)
+			var diff: float = absf(s.r - c.r) + absf(s.g - c.g) + absf(s.b - c.b)
+			if diff > 0.18:
+				var k: float = clampf(0.55 + (1.0 - _lum(c)) * 0.7, 0.5, 1.25)
+				out.set_pixel(x, y, Color(clampf(ore.r * k, 0.0, 1.0), clampf(ore.g * k, 0.0, 1.0), clampf(ore.b * k, 0.0, 1.0), 1.0))
+	return out
+
+
+## Small sapling sprite: a thin trunk under a round (or layered, for spruce) leafy crown.
+static func _sapling(ts: int, leaves: Image, bark: Image, conifer: bool) -> Image:
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	out.fill(Color(0, 0, 0, 0))
+	var u: float = float(ts) / 16.0
+	# Trunk
+	for y in range(int(9.0 * u), ts):
+		for x in range(int(7.0 * u), int(9.0 * u)):
+			out.set_pixel(x, y, bark.get_pixel(x, y).darkened(0.1))
+	# Crown
+	for y in range(ts):
+		for x in range(ts):
+			var fx: float = float(x) / u
+			var fy: float = float(y) / u
+			var inside: bool = false
+			if conifer:
+				for tier in [[3.0, 2.5], [6.0, 4.0], [9.0, 5.5]]:
+					var cy: float = tier[0]
+					var half_w: float = tier[1]
+					if fy >= cy - 2.5 and fy <= cy + 1.0 and absf(fx - 8.0) <= half_w * (1.0 - (cy + 1.0 - fy) / 4.5):
+						inside = true
+			else:
+				for blob in [[8.0, 5.5, 4.2], [5.0, 8.0, 3.0], [11.0, 8.0, 3.0], [8.0, 9.0, 3.2]]:
+					var dx: float = fx - blob[0]
+					var dy: float = fy - blob[1]
+					if dx * dx + dy * dy <= blob[2] * blob[2]:
+						inside = true
+			if inside:
+				var c: Color = leaves.get_pixel(x, y)
+				out.set_pixel(x, y, Color(c.r, c.g, c.b, 1.0))
+	return out
 
 
 static func _paint_tile(

@@ -25,7 +25,7 @@ func _init(seed_or_path: Variant = 2026) -> void:
 func get_world_save_dir() -> String:
 	if not _custom_dir.is_empty():
 		return _custom_dir
-	return "%s/seed_%d" % [SAVE_ROOT_DIR, _world_seed]
+	return "%s/seed_%d" % [GameSession.get_save_root(), _world_seed]
 
 
 func _ensure_save_directory() -> void:

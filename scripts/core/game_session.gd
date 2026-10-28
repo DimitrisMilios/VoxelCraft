@@ -4,6 +4,9 @@ extends RefCounted
 ## inventory state, time of day, and transitions between the Main Menu and active game.
 
 const SAVE_ROOT: String = "user://worlds"
+## Saves used when the engine runs a tool or test script (`-s` / `--script`), so automated runs
+## can never read or overwrite real player worlds.
+const TOOL_SAVE_ROOT: String = "user://test_worlds"
 
 static var active_world_id: String = ""
 static var active_world_name: String = "New World"
@@ -13,7 +16,17 @@ static var active_world_data: Dictionary = {}
 
 ## Returns absolute path to the worlds directory.
 static func get_worlds_dir() -> String:
-	return ProjectSettings.globalize_path(SAVE_ROOT)
+	return ProjectSettings.globalize_path(get_save_root())
+
+
+static var _is_script_run: int = -1
+
+## `user://worlds` for the game; `user://test_worlds` when running a tool/test script.
+static func get_save_root() -> String:
+	if _is_script_run < 0:
+		var args: PackedStringArray = OS.get_cmdline_args()
+		_is_script_run = 1 if (args.has("-s") or args.has("--script")) else 0
+	return TOOL_SAVE_ROOT if _is_script_run == 1 else SAVE_ROOT
 
 
 ## Returns absolute path to the active world's folder.

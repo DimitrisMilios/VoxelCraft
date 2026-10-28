@@ -21,18 +21,20 @@ sky_material = SubResource("ProceduralSkyMaterial_retro")
 [sub_resource type="Environment" id="Environment_retro"]
 background_mode = 2
 sky = SubResource("Sky_retro")
-ambient_light_source = 3
+ambient_light_source = 2
 ambient_light_color = Color(0.75, 0.8, 0.88, 1)
-ambient_light_sky_contribution = 0.5
-tonemap_mode = 3
-tonemap_exposure = 1.05
-tonemap_white = 1.0
+reflected_light_source = 1
+tonemap_mode = 0
 ssao_enabled = false
 ssil_enabled = false
 glow_enabled = false
 fog_enabled = true
+fog_mode = 1
 fog_light_color = Color(0.68, 0.84, 0.96, 1)
-fog_density = 0.0016
+fog_sky_affect = 0.0
+fog_depth_curve = 1.0
+fog_depth_begin = 44.0
+fog_depth_end = 72.0
 volumetric_fog_enabled = false
 
 [node name="Main" type="Node3D"]
@@ -42,12 +44,6 @@ environment = SubResource("Environment_retro")
 
 [node name="SunLight" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.819152, -0.40558, 0.40558, 0, 0.707107, 0.707107, -0.573576, -0.579228, 0.579228, 0, 80, 0)
-shadow_enabled = true
-shadow_blur = 1.0
-directional_shadow_mode = 1
-directional_shadow_split_1 = 0.25
-directional_shadow_max_distance = 64.0
-directional_shadow_fade_start = 0.85
 light_energy = 1.25
 
 [node name="DayNightCycle" type="Node" parent="."]

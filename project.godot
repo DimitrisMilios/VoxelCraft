@@ -13,7 +13,7 @@ config_version=5
 config/name="VoxelCraft"
 config/description="An open-source retro 3D voxel sandbox game built with Godot Engine 4."
 run/main_scene="res://scenes/ui/main_menu.tscn"
-config/features=PackedStringArray("4.7", "Forward Plus")
+config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 
 [autoload]
@@ -32,9 +32,25 @@ window/stretch/aspect="expand"
 [rendering]
 
 textures/canvas_textures/default_texture_filter=0
-renderer/rendering_method="mobile"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/anisotropic_filtering_level=0
 lights_and_shadows/directional_shadow/size=1024
-lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1
-environment/ssil/quality=1
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=0
 environment/defaults/default_clear_color=Color(0.53, 0.81, 0.92, 1)
-anti_aliasing/quality/screen_space_aa=1
+anti_aliasing/quality/screen_space_aa=0
+
+[shader_globals]
+
+vc_sky_darken={
+"type": "float",
+"value": 0.0
+}
+vc_sky_tint={
+"type": "vec3",
+"value": Vector3(1, 1, 1)
+}
+vc_block_tint={
+"type": "vec3",
+"value": Vector3(1, 0.92, 0.78)
+}

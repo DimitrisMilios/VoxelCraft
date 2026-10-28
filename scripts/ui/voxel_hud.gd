@@ -100,6 +100,7 @@ var _render_dist_label: Label = null
 var _pause_status_label: Label = null
 
 var _save_toast_timer: float = 0.0
+var _debug_refresh_timer: float = 0.0
 var _loot_toast_timer: float = 0.0
 var _damage_flash_alpha: float = 0.0
 
@@ -221,7 +222,10 @@ func _process(delta: float) -> void:
 		else:
 			_cursor_float.visible = false
 
-	if _debug_label != null and _player != null:
+	_debug_refresh_timer -= delta
+	if _debug_label != null and _player != null and _debug_refresh_timer <= 0.0:
+		# Rebuilding this multi-line string re-lays-out the label; 4 times a second is plenty.
+		_debug_refresh_timer = 0.25
 		var pos: Vector3 = _player.global_position
 		var chunk_coord: Vector2i = _world_manager.world_to_chunk_coords(pos) if _world_manager != null else Vector2i.ZERO
 		var fps: int = Engine.get_frames_per_second()

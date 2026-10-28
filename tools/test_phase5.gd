@@ -55,10 +55,10 @@ func test_1_skylight_column_propagation() -> void:
 
 	print("  Sky above (Y=70): %d (expected 15)" % sky_above)
 	print("  Sky at stone (Y=64): %d (expected 0)" % sky_at_stone)
-	print("  Sky below (Y=50): %d (expected 0)" % sky_below)
+	print("  Sky below (Y=50): %d (expected 14: daylight spreads in sideways under a single floating block)" % sky_below)
 
-	if sky_above == 15 and sky_at_stone == 0 and sky_below == 0:
-		print("  PASS: Skylight propagates column downwards and terminates at solid obstacles.")
+	if sky_above == 15 and sky_at_stone == 0 and sky_below == 14:
+		print("  PASS: Skylight fills columns, stops at solid blocks, and spreads sideways into shade.")
 		_passed += 1
 	else:
 		printerr("  FAIL: Skylight propagation incorrect.")

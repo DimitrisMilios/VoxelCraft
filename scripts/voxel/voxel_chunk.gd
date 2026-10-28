@@ -12,15 +12,6 @@ const SUB_CHUNK_COUNT: int = 16 # 256 / 16
 const SEA_LEVEL: int = 48
 const WATER_LEVEL: int = 45
 
-static var _opaque_table: PackedByteArray = _init_opaque_table()
-
-static func _init_opaque_table() -> PackedByteArray:
-	var arr := PackedByteArray()
-	arr.resize(256)
-	for id in range(256):
-		arr[id] = 1 if BlockRegistry.is_opaque_full_cube(id) else 0
-	return arr
-
 enum Biome {
 	PLAINS = 0,
 	DESERT = 1,
@@ -47,10 +38,6 @@ var generated_loot_chests: Array[Vector3i] = []
 ## World positions of any Villagers to spawn when this chunk is added to tree.
 var generated_villager_spawns: Array[Vector3] = []
 
-## Optional thread-safe callback `(world_pos: Vector3i) -> int` provided by WorldManager
-## for seamless cross-chunk border face culling.
-var neighbor_block_getter: Callable = Callable()
-
 ## Contiguous 1D byte buffer of size 16 * 256 * 16 (65,536 bytes).
 var _voxels: PackedByteArray = PackedByteArray()
 var _highest_solid_y: int = 0
@@ -58,49 +45,37 @@ var _highest_solid_y: int = 0
 var _metadata: PackedByteArray = PackedByteArray()
 ## 4-bit dual-channel lighting buffer (65,536 bytes) storing [High: Skylight 0..15 | Low: Blocklight 0..15].
 var _lighting: PackedByteArray = PackedByteArray()
-## Version tracking per sub-chunk to safely discard stale async worker builds.
-var _sub_versions: Array[int] = []
+## Bumped whenever `_lighting` is edited on the main thread, so stale worker results are not applied.
+var light_version: int = 0
+## True once the chunk has been meshed and attached to the world.
+var is_meshed: bool = false
 
-var _sub_solid_meshes: Array[MeshInstance3D] = []
-var _sub_water_meshes: Array[MeshInstance3D] = []
-var _sub_colliders: Array[CollisionShape3D] = []
-var _block_lights: Dictionary = {} # Vector3i(lx, ly, lz) -> OmniLight3D
+## Version tracking per sub-chunk to safely discard stale async worker builds.
+var _sub_versions: PackedInt32Array = PackedInt32Array()
+var _water_versions: PackedInt32Array = PackedInt32Array()
+
+## Nodes are created lazily: empty sub-chunks (mostly sky) never allocate scene nodes.
+var _sub_meshes: Array[MeshInstance3D] = []
+var _sub_water: Array[MeshInstance3D] = []
+var _sub_cols: Array[CollisionShape3D] = []
+
+
+func _init() -> void:
+	_sub_versions.resize(SUB_CHUNK_COUNT)
+	_water_versions.resize(SUB_CHUNK_COUNT)
+	_sub_meshes.resize(SUB_CHUNK_COUNT)
+	_sub_water.resize(SUB_CHUNK_COUNT)
+	_sub_cols.resize(SUB_CHUNK_COUNT)
 
 
 func _ready() -> void:
 	collision_layer = 1
 	collision_mask = 0
-	_ensure_child_nodes()
 
 
+## Kept for callers that expect it; sub-chunk nodes are created on demand.
 func _ensure_child_nodes() -> void:
-	if not _sub_solid_meshes.is_empty():
-		return
-
-	var solid_mat: StandardMaterial3D = VoxelAtlasBuilder.get_shared_voxel_material()
-	var water_mat: Material = VoxelAtlasBuilder.get_shared_water_material()
-
-	for sub_idx in range(SUB_CHUNK_COUNT):
-		var solid_mi := MeshInstance3D.new()
-		solid_mi.name = "SubMesh_%d" % sub_idx
-		solid_mi.material_override = solid_mat
-		solid_mi.visible = false
-		add_child(solid_mi)
-		_sub_solid_meshes.append(solid_mi)
-
-		var water_mi := MeshInstance3D.new()
-		water_mi.name = "SubWater_%d" % sub_idx
-		water_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		water_mi.material_override = water_mat
-		water_mi.visible = false
-		add_child(water_mi)
-		_sub_water_meshes.append(water_mi)
-
-		var col := CollisionShape3D.new()
-		col.name = "SubCol_%d" % sub_idx
-		col.disabled = true
-		add_child(col)
-		_sub_colliders.append(col)
+	pass
 
 
 ## Restores voxel data directly from a saved persistence buffer.
@@ -180,8 +155,12 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			var surface_y: int = sample_surface_height(surface_noise, wx, wz)
 			var top_y: int = maxi(surface_y, WATER_LEVEL)
 
+			# Biome is per column; computing it once here instead of per block is a big generation win.
+			var col_biome: int = sample_biome(wx, wz, surface_noise.seed if surface_noise != null else 0)
+			var below_carved: int = 0
 			for ly in range(top_y + 1):
-				var block_id: int = sample_terrain_voxel(surface_y, wx, ly, wz, cave_noise)
+				var block_id: int = sample_terrain_voxel(surface_y, wx, ly, wz, cave_noise, col_biome, below_carved)
+				below_carved = 1 if (ly > 3 and ly <= surface_y and (block_id == BlockRegistry.BlockId.AIR or block_id == BlockRegistry.BlockId.LAVA)) else 0
 				if block_id != BlockRegistry.BlockId.AIR:
 					_set_voxel_raw(lx, ly, lz, block_id)
 
@@ -191,7 +170,7 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 			# Deterministic trees, plants, flowers, cacti, and boulders
 			if surface_y > WATER_LEVEL + 1 and surface_y + 1 < CHUNK_SIZE_Y:
 				var surface_id: int = get_block_local(lx, surface_y, lz)
-				var biome: int = sample_biome(wx, wz, surface_noise.seed if surface_noise != null else 0)
+				var biome: int = col_biome
 
 				# 1. Trees (only in safe inner margins so canopies do not clip chunk borders)
 				if lx >= 3 and lx <= CHUNK_SIZE_X - 4 and lz >= 3 and lz <= CHUNK_SIZE_Z - 4:
@@ -240,17 +219,10 @@ func generate_terrain(surface_noise: FastNoiseLite, cave_noise: FastNoiseLite = 
 							var shroom_id: int = BlockRegistry.BlockId.BROWN_MUSHROOM if (plant_hash % 2 == 0) else BlockRegistry.BlockId.RED_MUSHROOM
 							_set_voxel_raw(lx, surface_y + 1, lz, shroom_id)
 
-			# Shoreline Sugar Cane reeds along water banks (matching realistic lake shores)
-			if (surface_y == WATER_LEVEL or surface_y == WATER_LEVEL + 1) and (surface_y + 3 < CHUNK_SIZE_Y):
-				var surf_id: int = get_block_local(lx, surface_y, lz)
-				if surf_id == BlockRegistry.BlockId.SAND or surf_id == BlockRegistry.BlockId.GRASS or surf_id == BlockRegistry.BlockId.DIRT:
-					var cane_hash: int = absi((wx * 374761393) ^ (wz * 668265263)) % 100
-					if cane_hash < 24:
-						var cane_height: int = 3 if (cane_hash % 2 == 0) else 2
-						for ch in range(1, cane_height + 1):
-							_set_voxel_raw(lx, surface_y + ch, lz, BlockRegistry.BlockId.SUGAR_CANE)
-						if surface_y + cane_height > _highest_solid_y:
-							_highest_solid_y = surface_y + cane_height
+			# Sugar cane grows in clumps on sand/grass/dirt right at the water's edge: the ground block
+			# sits at water level and a horizontally adjacent block is open (unfrozen) water.
+			if surface_y == WATER_LEVEL and get_block_local(lx, surface_y + 1, lz) == BlockRegistry.BlockId.AIR:
+				_try_place_sugar_cane(surface_noise, lx, lz, wx, wz, surface_y)
 
 			# Underwater Seagrass on shallow lake beds
 			elif surface_y < WATER_LEVEL and surface_y >= WATER_LEVEL - 3 and (surface_y + 1 < CHUNK_SIZE_Y):
@@ -417,7 +389,9 @@ static func sample_terrain_voxel(
 	wx: int,
 	ly: int,
 	wz: int,
-	cave_noise: FastNoiseLite
+	cave_noise: FastNoiseLite,
+	biome_hint: int = -1,
+	below_carved: int = -1
 ) -> int:
 	if ly < 0:
 		return BlockRegistry.BlockId.AIR
@@ -434,8 +408,9 @@ static func sample_terrain_voxel(
 		if ly <= WATER_LEVEL:
 			# Water surface in cold biomes (Taiga, Tundra) freezes into solid Ice
 			if ly == WATER_LEVEL:
-				var world_seed: int = (cave_noise.seed - 7919) if cave_noise != null else 0
-				var b_at_surf: int = sample_biome(wx, wz, world_seed)
+				var b_at_surf: int = biome_hint
+				if b_at_surf < 0:
+					b_at_surf = sample_biome(wx, wz, (cave_noise.seed - 7919) if cave_noise != null else 0)
 				if b_at_surf == Biome.TUNDRA or b_at_surf == Biome.TAIGA:
 					return BlockRegistry.BlockId.ICE
 			return BlockRegistry.BlockId.WATER
@@ -449,7 +424,8 @@ static func sample_terrain_voxel(
 
 	# Rare glowing crystal clusters hanging from deep cavern ceilings
 	if cave_noise != null and ly >= 10 and ly <= 30 and ly < surface_y - 7:
-		if _is_carved_cave_or_ravine(surface_y, wx, ly - 1, wz, cave_noise):
+		var carved_below: bool = (below_carved == 1) if below_carved >= 0 else _is_carved_cave_or_ravine(surface_y, wx, ly - 1, wz, cave_noise)
+		if carved_below:
 			var glow_hash: int = absi((wx * 73856093) ^ (ly * 19349663) ^ (wz * 83492791)) % 1000
 			if glow_hash < 6:
 				return BlockRegistry.BlockId.GLOWSTONE
@@ -458,8 +434,9 @@ static func sample_terrain_voxel(
 	if surface_y <= WATER_LEVEL + 1 and ly >= surface_y - 2:
 		return BlockRegistry.BlockId.SAND
 
-	var world_seed: int = (cave_noise.seed - 7919) if cave_noise != null else 0
-	var biome: int = sample_biome(wx, wz, world_seed)
+	var biome: int = biome_hint
+	if biome < 0:
+		biome = sample_biome(wx, wz, (cave_noise.seed - 7919) if cave_noise != null else 0)
 
 	# 1. Desert: Sand surface (2 blocks) + Sandstone filler (4 blocks)
 	if biome == Biome.DESERT and surface_y > WATER_LEVEL:
@@ -554,6 +531,41 @@ static func _sample_underground_stone_or_ore(wx: int, ly: int, wz: int) -> int:
 		return BlockRegistry.BlockId.COAL_ORE
 
 	return BlockRegistry.BlockId.STONE
+
+
+func _try_place_sugar_cane(surface_noise: FastNoiseLite, lx: int, lz: int, wx: int, wz: int, ground_y: int) -> void:
+	var ground_id: int = get_block_local(lx, ground_y, lz)
+	if ground_id != BlockRegistry.BlockId.SAND and ground_id != BlockRegistry.BlockId.GRASS and ground_id != BlockRegistry.BlockId.DIRT:
+		return
+
+	# Clumps: only some 8x8 patches of shoreline grow cane, and roughly half the spots inside them.
+	var patch_hash: int = absi(((wx >> 3) * 73856093) ^ ((wz >> 3) * 19349663) ^ 0x5bd1e995) % 100
+	if patch_hash >= 40:
+		return
+	var spot_hash: int = absi((wx * 374761393) ^ (wz * 668265263)) % 1000
+	if spot_hash >= 520:
+		return
+
+	var world_seed: int = surface_noise.seed if surface_noise != null else 0
+	var biome: int = sample_biome(wx, wz, world_seed)
+	if biome == Biome.TUNDRA or biome == Biome.TAIGA:
+		return # Shore water is frozen there
+
+	var has_water: bool = false
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if sample_surface_height(surface_noise, wx + d.x, wz + d.y) < WATER_LEVEL:
+			has_water = true
+			break
+	if not has_water:
+		return
+
+	# Height 2..4, weighted toward short stalks (2: 61%, 3: 28%, 4: 11%).
+	var h_roll: int = spot_hash % 18
+	var cane_height: int = 2 if h_roll < 11 else (3 if h_roll < 16 else 4)
+	for ch in range(1, cane_height + 1):
+		_set_voxel_raw(lx, ground_y + ch, lz, BlockRegistry.BlockId.SUGAR_CANE)
+	if ground_y + cane_height > _highest_solid_y:
+		_highest_solid_y = ground_y + cane_height
 
 
 func _should_spawn_tree(wx: int, wz: int, biome: int = Biome.PLAINS) -> bool:
@@ -818,6 +830,7 @@ func _build_village_house(ox: int, base_y: int, oz: int, _seed_val: int) -> void
 					# Front door at (dx=3, dz=0, dy=1..2)
 					if dx == 3 and dz == 0 and (dy == 1 or dy == 2):
 						_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.DOOR_CLOSED)
+						_set_meta_raw(lx, ly, lz, BlockRegistry.door_meta_from_dir(Vector3i(0, 0, 1), false))
 					elif dy == 4:
 						_set_voxel_raw(lx, ly, lz, BlockRegistry.BlockId.WOOD_LOG)
 					else:
@@ -939,315 +952,80 @@ func _build_desert_pyramid(ox: int, base_y: int, oz: int, _seed_val: int) -> voi
 		_highest_solid_y = base_y + 6
 
 
-## Thread-safe builder for all 16 vertical sub-chunks. Can be called from WorkerThreadPool.
-func build_mesh_data() -> Dictionary:
-	var sub_results: Array[Dictionary] = []
-	var max_sub_idx: int = mini(_highest_solid_y / SUB_CHUNK_HEIGHT, SUB_CHUNK_COUNT - 1)
-	var lights: Array[Vector3i] = []
 
-	for sub_idx in range(SUB_CHUNK_COUNT):
-		if sub_idx <= max_sub_idx:
-			sub_results.append(_build_single_sub_chunk_data(sub_idx))
-		else:
-			sub_results.append({"mesh": null, "water_mesh": null, "shape": null})
+# ============================================================================
+# MESHING
+# ============================================================================
 
-	# Pre-collect up to 3 surface / torch light emitters in background worker
-	var max_y: int = mini(_highest_solid_y + 1, CHUNK_SIZE_Y)
-	for ly in range(max_y):
-		if lights.size() >= 3:
-			break
-		for lx in range(CHUNK_SIZE_X):
-			if lights.size() >= 3:
-				break
-			for lz in range(CHUNK_SIZE_Z):
-				var bid: int = get_block_local(lx, ly, lz)
-				if bid == BlockRegistry.BlockId.TORCH or (bid == BlockRegistry.BlockId.LAVA and ly >= WATER_LEVEL - 4):
-					lights.append(Vector3i(lx, ly, lz))
-					if lights.size() >= 3:
-						break
-
-	return {
-		"sub_chunks": sub_results,
-		"lights": lights,
-	}
+## Highest sub-chunk index that can contain geometry.
+func get_max_sub_index() -> int:
+	return mini((_highest_solid_y + 1) / SUB_CHUNK_HEIGHT, SUB_CHUNK_COUNT - 1)
 
 
-## Builds solid mesh, water mesh, and trimesh collision for a single 16x16x16 vertical slice.
-func _build_single_sub_chunk_data(
-	sub_idx: int,
-	explicit_voxels: PackedByteArray = PackedByteArray(),
-	explicit_lighting: PackedByteArray = PackedByteArray(),
-	explicit_meta: PackedByteArray = PackedByteArray()
+## Builds every non-empty sub-chunk. `nb_vox` / `nb_light` are 9-entry neighborhoods indexed
+## `(dz + 1) * 3 + (dx + 1)` (entry 4 = this chunk). Thread-safe when given private buffer copies.
+static func build_mesh_data_from(
+	nb_vox: Array, nb_light: Array, meta: PackedByteArray, max_sub: int
 ) -> Dictionary:
-	var st_solid := SurfaceTool.new()
-	st_solid.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_col := SurfaceTool.new()
-	st_col.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_water := SurfaceTool.new()
-	st_water.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var y_start: int = sub_idx * SUB_CHUNK_HEIGHT
-	var y_end: int = mini(y_start + SUB_CHUNK_HEIGHT, CHUNK_SIZE_Y)
-	var solid_faces: int = 0
-	var col_faces: int = 0
-	var water_faces: int = 0
-
-	var voxels: PackedByteArray = explicit_voxels if not explicit_voxels.is_empty() else _voxels
-	var lighting: PackedByteArray = explicit_lighting if not explicit_lighting.is_empty() else _lighting
-	var metadata: PackedByteArray = explicit_meta if not explicit_meta.is_empty() else _metadata
-	if voxels.is_empty():
-		return {
-			"mesh": null,
-			"water_mesh": null,
-			"shape": null,
-		}
-
-	for ly in range(y_start, y_end):
-		var y_shift: int = ly << 8
-		for lz in range(CHUNK_SIZE_Z):
-			var row_shift: int = y_shift | (lz << 4)
-			for lx in range(CHUNK_SIZE_X):
-				var idx: int = row_shift | lx
-				var block_id: int = voxels[idx]
-				if block_id == 0: # AIR
-					continue
-
-				if BlockRegistry.is_water(block_id):
-					# Check 6 neighbors first to see if this water cell has any exposed face
-					var nb_top: int = (voxels[((ly + 1) << 8) | (lz << 4) | lx]) if (ly + 1 < CHUNK_SIZE_Y) else _get_neighbor_id(lx, ly + 1, lz)
-					var has_top: bool = not BlockRegistry.is_water(nb_top)
-
-					var nb_bottom: int = (voxels[((ly - 1) << 8) | (lz << 4) | lx]) if (ly > 0) else _get_neighbor_id(lx, ly - 1, lz)
-					var has_bottom: bool = not BlockRegistry.is_water(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom)
-
-					var nb_east: int = (voxels[y_shift | (lz << 4) | (lx + 1)]) if (lx < 15) else _get_neighbor_id(lx + 1, ly, lz)
-					var has_east: bool = not BlockRegistry.is_water(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east)
-
-					var nb_west: int = (voxels[y_shift | (lz << 4) | (lx - 1)]) if (lx > 0) else _get_neighbor_id(lx - 1, ly, lz)
-					var has_west: bool = not BlockRegistry.is_water(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west)
-
-					var nb_south: int = (voxels[y_shift | ((lz + 1) << 4) | lx]) if (lz < 15) else _get_neighbor_id(lx, ly, lz + 1)
-					var has_south: bool = not BlockRegistry.is_water(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south)
-
-					var nb_north: int = (voxels[y_shift | ((lz - 1) << 4) | lx]) if (lz > 0) else _get_neighbor_id(lx, ly, lz - 1)
-					var has_north: bool = not BlockRegistry.is_water(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north)
-
-					if not (has_top or has_bottom or has_east or has_west or has_south or has_north):
-						continue # Completely enclosed internal water, skip expensive corner height calculations
-
-					var h00: float = _compute_water_corner_height(lx, ly, lz, -1, -1)
-					var h10: float = _compute_water_corner_height(lx, ly, lz, 1, -1)
-					var h11: float = _compute_water_corner_height(lx, ly, lz, 1, 1)
-					var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
-
-					if has_top:
-						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
-						water_faces += 1
-
-					if has_bottom:
-						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
-						water_faces += 1
-
-					if has_east:
-						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
-						water_faces += 1
-
-					if has_west:
-						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
-						water_faces += 1
-
-					if has_south:
-						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
-						water_faces += 1
-
-					if has_north:
-						_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
-						water_faces += 1
-					continue
-
-				var meta: int = 0
-				if (
-					block_id == BlockRegistry.BlockId.WOOD_LOG
-					or block_id == BlockRegistry.BlockId.LEAVES
-					or block_id == BlockRegistry.BlockId.WOOL
-					or block_id == BlockRegistry.BlockId.WOOD_STAIRS
-					or block_id == BlockRegistry.BlockId.COBBLE_STAIRS
-					or block_id == BlockRegistry.BlockId.SLAB
-					or block_id == BlockRegistry.BlockId.FARMLAND
-				):
-					if not metadata.is_empty():
-						var byte_idx: int = idx >> 1
-						if byte_idx < metadata.size():
-							var b_meta: int = metadata[byte_idx]
-							meta = (b_meta & 0x0F) if ((idx & 1) == 0) else ((b_meta >> 4) & 0x0F)
-
-				# Custom foliage blocks (Sugar Cane, Seagrass, Flowers, Mushrooms cross quads)
-				if (
-					block_id == BlockRegistry.BlockId.SUGAR_CANE
-					or block_id == BlockRegistry.BlockId.SEAGRASS
-					or block_id == BlockRegistry.BlockId.DANDELION
-					or block_id == BlockRegistry.BlockId.ROSE
-					or block_id == BlockRegistry.BlockId.BROWN_MUSHROOM
-					or block_id == BlockRegistry.BlockId.RED_MUSHROOM
-				):
-					_emit_cross_quad(st_solid, lx, ly, lz, block_id, meta)
-					solid_faces += 4
-					continue
-
-				# L-shaped stairs geometry (Wood Stairs & Cobble Stairs)
-				if block_id == BlockRegistry.BlockId.WOOD_STAIRS or block_id == BlockRegistry.BlockId.COBBLE_STAIRS:
-					var base_min := Vector3(0.0, 0.0, 0.0)
-					var base_max := Vector3(1.0, 0.5, 1.0)
-					var step_min := Vector3(0.0, 0.5, 0.5)
-					var step_max := Vector3(1.0, 1.0, 1.0)
-					match meta:
-						0: # East (+X)
-							step_min = Vector3(0.5, 0.5, 0.0)
-							step_max = Vector3(1.0, 1.0, 1.0)
-						1: # West (-X)
-							step_min = Vector3(0.0, 0.5, 0.0)
-							step_max = Vector3(0.5, 1.0, 1.0)
-						2: # South (+Z)
-							step_min = Vector3(0.0, 0.5, 0.5)
-							step_max = Vector3(1.0, 1.0, 1.0)
-						3: # North (-Z)
-							step_min = Vector3(0.0, 0.5, 0.0)
-							step_max = Vector3(1.0, 1.0, 0.5)
-					_emit_custom_box(st_solid, lx, ly, lz, base_min, base_max, block_id, meta)
-					_emit_custom_box(st_solid, lx, ly, lz, step_min, step_max, block_id, meta)
-					solid_faces += 12
-					_emit_custom_box(st_col, lx, ly, lz, base_min, base_max, block_id, meta)
-					_emit_custom_box(st_col, lx, ly, lz, step_min, step_max, block_id, meta)
-					col_faces += 12
-					continue
-
-				# Custom non-cube functional blocks (Torches, Beds, Doors, Ladders, Slabs, Levers, Buttons)
-				if not BlockRegistry.is_opaque_full_cube(block_id):
-					var min_b := Vector3(0.0, 0.0, 0.0)
-					var max_b := Vector3(1.0, 1.0, 1.0)
-					match block_id:
-						BlockRegistry.BlockId.TORCH, BlockRegistry.BlockId.REDSTONE_TORCH:
-							min_b = Vector3(0.40, 0.0, 0.40)
-							max_b = Vector3(0.60, 0.68, 0.60)
-						BlockRegistry.BlockId.SLAB:
-							min_b = Vector3(0.0, 0.0, 0.0)
-							max_b = Vector3(1.0, 0.5, 1.0)
-						BlockRegistry.BlockId.LEVER:
-							min_b = Vector3(0.35, 0.0, 0.35)
-							max_b = Vector3(0.65, 0.60, 0.65)
-						BlockRegistry.BlockId.BUTTON:
-							min_b = Vector3(0.35, 0.35, 0.0)
-							max_b = Vector3(0.65, 0.65, 0.15)
-						BlockRegistry.BlockId.BED, BlockRegistry.BlockId.BED_HEAD:
-							min_b = Vector3(0.0, 0.0, 0.0)
-							max_b = Vector3(1.0, 0.56, 1.0)
-						BlockRegistry.BlockId.DOOR_CLOSED:
-							min_b = Vector3(0.0, 0.0, 0.40)
-							max_b = Vector3(1.0, 1.0, 0.60)
-						BlockRegistry.BlockId.DOOR_OPEN:
-							min_b = Vector3(0.0, 0.0, 0.0)
-							max_b = Vector3(0.20, 1.0, 1.0)
-						BlockRegistry.BlockId.LADDER:
-							min_b = Vector3(0.0, 0.0, 0.42)
-							max_b = Vector3(1.0, 1.0, 0.58)
-						BlockRegistry.BlockId.FARMLAND:
-							min_b = Vector3(0.0, 0.0, 0.0)
-							max_b = Vector3(1.0, 0.9375, 1.0)
-						BlockRegistry.BlockId.WHEAT_CROPS, BlockRegistry.BlockId.POTATO_CROPS:
-							min_b = Vector3(0.06, 0.0, 0.06)
-							max_b = Vector3(0.94, 0.88, 0.94)
-						BlockRegistry.BlockId.WHEAT_SPROUT, BlockRegistry.BlockId.POTATO_SPROUT:
-							min_b = Vector3(0.12, 0.0, 0.12)
-							max_b = Vector3(0.88, 0.38, 0.88)
-						BlockRegistry.BlockId.SUGAR_CANE, BlockRegistry.BlockId.SEAGRASS:
-							min_b = Vector3(0.10, 0.0, 0.10)
-							max_b = Vector3(0.90, 0.95, 0.90)
-					_emit_custom_box(st_solid, lx, ly, lz, min_b, max_b, block_id, meta)
-					solid_faces += 6
-					if not BlockRegistry.is_passable_block(block_id):
-						_emit_col_box(st_col, lx, ly, lz, min_b, max_b)
-						col_faces += 6
-					continue
-
-				var is_passable: bool = BlockRegistry.is_passable_block(block_id)
-				var col_tgt: SurfaceTool = st_col if not is_passable else null
-
-				# TOP (+Y)
-				var top_solid: bool = (_opaque_table[voxels[((ly + 1) << 8) | (lz << 4) | lx]] == 1) if (ly + 1 < CHUNK_SIZE_Y) else false
-				if not top_solid:
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.TOP, block_id, meta, col_tgt, voxels, lighting)
-					solid_faces += 1
-					if col_tgt != null:
-						col_faces += 1
-
-				# BOTTOM (-Y)
-				var bot_solid: bool = (_opaque_table[voxels[((ly - 1) << 8) | (lz << 4) | lx]] == 1) if (ly > 0) else true
-				if not bot_solid:
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, block_id, meta, col_tgt, voxels, lighting)
-					solid_faces += 1
-					if col_tgt != null:
-						col_faces += 1
-
-				# EAST (+X)
-				var east_solid: bool = (_opaque_table[voxels[y_shift | (lz << 4) | (lx + 1)]] == 1) if (lx < 15) else _is_neighbor_solid(16, ly, lz)
-				if not east_solid:
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.EAST, block_id, meta, col_tgt, voxels, lighting)
-					solid_faces += 1
-					if col_tgt != null:
-						col_faces += 1
-
-				# WEST (-X)
-				var west_solid: bool = (_opaque_table[voxels[y_shift | (lz << 4) | (lx - 1)]] == 1) if (lx > 0) else _is_neighbor_solid(-1, ly, lz)
-				if not west_solid:
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.WEST, block_id, meta, col_tgt, voxels, lighting)
-					solid_faces += 1
-					if col_tgt != null:
-						col_faces += 1
-
-				# SOUTH (+Z)
-				var south_solid: bool = (_opaque_table[voxels[y_shift | ((lz + 1) << 4) | lx]] == 1) if (lz < 15) else _is_neighbor_solid(lx, ly, 16)
-				if not south_solid:
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, block_id, meta, col_tgt, voxels, lighting)
-					solid_faces += 1
-					if col_tgt != null:
-						col_faces += 1
-
-				# NORTH (-Z)
-				var north_solid: bool = (_opaque_table[voxels[y_shift | ((lz - 1) << 4) | lx]] == 1) if (lz > 0) else _is_neighbor_solid(lx, ly, -1)
-				if not north_solid:
-					_emit_face(st_solid, lx, ly, lz, BlockRegistry.FaceDir.NORTH, block_id, meta, col_tgt, voxels, lighting)
-					solid_faces += 1
-					if col_tgt != null:
-						col_faces += 1
-
-	var solid_mesh: ArrayMesh = st_solid.commit() if solid_faces > 0 else null
-	var col_mesh: ArrayMesh = st_col.commit() if col_faces > 0 else null
-	var water_mesh: ArrayMesh = st_water.commit() if water_faces > 0 else null
-	var trimesh_shape: ConcavePolygonShape3D = col_mesh.create_trimesh_shape() if col_mesh != null else null
-
-	return {
-		"mesh": solid_mesh,
-		"water_mesh": water_mesh,
-		"shape": trimesh_shape,
-	}
+	var sub_results: Array[Dictionary] = []
+	var center: PackedByteArray = nb_vox[4]
+	for sub_idx in range(SUB_CHUNK_COUNT):
+		if sub_idx > max_sub or center.is_empty() or _sub_slice_is_air(center, sub_idx):
+			sub_results.append({"mesh": null, "water_mesh": null, "shape": null})
+			continue
+		var padded: Array = ChunkMesher.build_padded(sub_idx, nb_vox, nb_light)
+		sub_results.append(ChunkMesher.build_sub_chunk(sub_idx, padded, meta))
+	return {"sub_chunks": sub_results}
 
 
-## Applies prebuilt sub-chunk meshes and collision shapes on the main thread.
+static func _sub_slice_is_air(vox: PackedByteArray, sub_idx: int) -> bool:
+	var start: int = sub_idx * 4096
+	return vox.slice(start, start + 4096).count(0) == 4096
+
+
+## Builds all sub-chunk meshes using only this chunk's own data (no neighbors loaded).
+func build_mesh_data() -> Dictionary:
+	if _lighting.is_empty():
+		VoxelLighting.compute_chunk_lighting(self)
+	var nb_vox: Array = _empty_neighborhood()
+	var nb_light: Array = _empty_neighborhood()
+	nb_vox[4] = _voxels
+	nb_light[4] = _lighting
+	return build_mesh_data_from(nb_vox, nb_light, _metadata, get_max_sub_index())
+
+
+static func _empty_neighborhood() -> Array:
+	var arr: Array = []
+	for i in range(9):
+		arr.append(PackedByteArray())
+	return arr
+
+
+## Builds one sub-chunk from the chunk's own data (kept for tools/tests).
+func _build_single_sub_chunk_data(sub_idx: int) -> Dictionary:
+	if _lighting.is_empty():
+		VoxelLighting.compute_chunk_lighting(self)
+	var nb_vox: Array = _empty_neighborhood()
+	var nb_light: Array = _empty_neighborhood()
+	nb_vox[4] = _voxels
+	nb_light[4] = _lighting
+	return ChunkMesher.build_sub_chunk(sub_idx, ChunkMesher.build_padded(sub_idx, nb_vox, nb_light), _metadata)
+
+
+## Applies prebuilt sub-chunk meshes on the main thread. Collision shapes are only attached when
+## collision is enabled for this chunk (near the player); otherwise they wait in `_pending_shapes`.
 func apply_mesh_data(mesh_data: Dictionary) -> void:
-	_ensure_child_nodes()
 	var sub_chunks: Array = mesh_data.get("sub_chunks", [])
 	for sub_idx in range(mini(sub_chunks.size(), SUB_CHUNK_COUNT)):
 		_apply_single_sub_chunk(sub_idx, sub_chunks[sub_idx])
+	is_meshed = true
+	_spawn_generated_contents()
 
-	# Fast light emitter attachment using precalculated worker lights
-	var pre_lights: Array = mesh_data.get("lights", [])
-	for l_pos in pre_lights:
-		var pos_i: Vector3i = l_pos as Vector3i
-		_update_light_emitter_at(pos_i, get_block_local(pos_i.x, pos_i.y, pos_i.z))
 
-	if not generated_loot_chests.is_empty() and is_inside_tree():
+func _spawn_generated_contents() -> void:
+	if not is_inside_tree():
+		return
+	if not generated_loot_chests.is_empty():
 		var inv := get_tree().get_first_node_in_group("inventory_manager") as InventoryManager
 		if inv != null:
 			for chest_pos in generated_loot_chests:
@@ -1255,681 +1033,161 @@ func apply_mesh_data(mesh_data: Dictionary) -> void:
 				inv.populate_loot_chest_at(chest_pos, seed_val)
 			generated_loot_chests.clear()
 
-	if not generated_villager_spawns.is_empty() and is_inside_tree():
+	if not generated_villager_spawns.is_empty():
 		var parent_node: Node = get_parent()
 		if parent_node != null:
 			for spawn_pos in generated_villager_spawns:
-				var villager := PassiveMob.new()
-				villager.variant = PassiveMob.MobVariant.VILLAGER
-				parent_node.add_child(villager)
-				villager.global_position = spawn_pos
+				if parent_node.has_method("queue_villager_spawn"):
+					parent_node.queue_villager_spawn(spawn_pos)
+				else:
+					var villager := PassiveMob.new()
+					villager.variant = PassiveMob.MobVariant.VILLAGER
+					parent_node.add_child(villager)
+					villager.global_position = spawn_pos
 		generated_villager_spawns.clear()
 
 
-## High-performance water-only mesh rebuild for dynamic fluid flow.
-## Skips solid mesh, tangents, and trimesh collision generation (0.05ms execution).
-func rebuild_water_at_local_y(ly: int) -> void:
-	_ensure_child_nodes()
-	var sub_idx: int = clampi(ly / SUB_CHUNK_HEIGHT, 0, SUB_CHUNK_COUNT - 1)
-	var wm: ArrayMesh = _build_single_sub_chunk_water_only(sub_idx)
-	_sub_water_meshes[sub_idx].mesh = wm
-	_sub_water_meshes[sub_idx].visible = (wm != null)
+## Marker meaning "no collision change pending" for a sub-chunk.
+const NO_SHAPE_CHANGE: int = 0
 
-	var local_sub_y: int = ly % SUB_CHUNK_HEIGHT
-	if local_sub_y == 0 and sub_idx > 0:
-		var wm_below: ArrayMesh = _build_single_sub_chunk_water_only(sub_idx - 1)
-		_sub_water_meshes[sub_idx - 1].mesh = wm_below
-		_sub_water_meshes[sub_idx - 1].visible = (wm_below != null)
-	elif local_sub_y == SUB_CHUNK_HEIGHT - 1 and sub_idx < SUB_CHUNK_COUNT - 1:
-		var wm_above: ArrayMesh = _build_single_sub_chunk_water_only(sub_idx + 1)
-		_sub_water_meshes[sub_idx + 1].mesh = wm_above
-		_sub_water_meshes[sub_idx + 1].visible = (wm_above != null)
+## Per sub-chunk collision change waiting to be attached: NO_SHAPE_CHANGE, null (remove) or a Shape3D.
+var _pending_shapes: Array = []
+var _has_pending_shapes: bool = false
+## Collision is attached only near the player; far chunks keep their shapes pending.
+var collision_enabled: bool = true
 
 
-func _build_single_sub_chunk_water_only(sub_idx: int) -> ArrayMesh:
-	var st_water := SurfaceTool.new()
-	st_water.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var y_start: int = sub_idx * SUB_CHUNK_HEIGHT
-	var y_end: int = mini(y_start + SUB_CHUNK_HEIGHT, CHUNK_SIZE_Y)
-	var water_faces: int = 0
-
-	for ly in range(y_start, y_end):
-		for lx in range(CHUNK_SIZE_X):
-			for lz in range(CHUNK_SIZE_Z):
-				var block_id: int = get_block_local(lx, ly, lz)
-				if not BlockRegistry.is_water(block_id):
-					continue
-
-				var h00: float = _compute_water_corner_height(lx, ly, lz, -1, -1)
-				var h10: float = _compute_water_corner_height(lx, ly, lz, 1, -1)
-				var h11: float = _compute_water_corner_height(lx, ly, lz, 1, 1)
-				var h01: float = _compute_water_corner_height(lx, ly, lz, -1, 1)
-
-				var nb_top: int = _get_neighbor_id(lx, ly + 1, lz)
-				if not BlockRegistry.is_water(nb_top):
-					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.TOP, h00, h10, h11, h01)
-					water_faces += 1
-
-				var nb_bottom: int = _get_neighbor_id(lx, ly - 1, lz)
-				if not BlockRegistry.is_water(nb_bottom) and not BlockRegistry.is_opaque_full_cube(nb_bottom):
-					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.BOTTOM, h00, h10, h11, h01)
-					water_faces += 1
-
-				var nb_east: int = _get_neighbor_id(lx + 1, ly, lz)
-				if not BlockRegistry.is_water(nb_east) and not BlockRegistry.is_opaque_full_cube(nb_east):
-					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.EAST, h00, h10, h11, h01)
-					water_faces += 1
-
-				var nb_west: int = _get_neighbor_id(lx - 1, ly, lz)
-				if not BlockRegistry.is_water(nb_west) and not BlockRegistry.is_opaque_full_cube(nb_west):
-					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.WEST, h00, h10, h11, h01)
-					water_faces += 1
-
-				var nb_south: int = _get_neighbor_id(lx, ly, lz + 1)
-				if not BlockRegistry.is_water(nb_south) and not BlockRegistry.is_opaque_full_cube(nb_south):
-					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.SOUTH, h00, h10, h11, h01)
-					water_faces += 1
-
-				var nb_north: int = _get_neighbor_id(lx, ly, lz - 1)
-				if not BlockRegistry.is_water(nb_north) and not BlockRegistry.is_opaque_full_cube(nb_north):
-					_emit_sloped_water_face(st_water, lx, ly, lz, BlockRegistry.FaceDir.NORTH, h00, h10, h11, h01)
-					water_faces += 1
-
-	return st_water.commit() if water_faces > 0 else null
-
-
-func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary) -> void:
+func _apply_single_sub_chunk(sub_idx: int, sub_data: Dictionary, apply_water: bool = true) -> void:
 	var m: ArrayMesh = sub_data.get("mesh", null) as ArrayMesh
-	_sub_solid_meshes[sub_idx].mesh = m
-	_sub_solid_meshes[sub_idx].visible = (m != null)
-
-	var wm: ArrayMesh = sub_data.get("water_mesh", null) as ArrayMesh
-	_sub_water_meshes[sub_idx].mesh = wm
-	_sub_water_meshes[sub_idx].visible = (wm != null)
+	var mi: MeshInstance3D = _sub_meshes[sub_idx]
+	if m != null and mi == null:
+		mi = MeshInstance3D.new()
+		mi.name = "SubMesh_%d" % sub_idx
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		add_child(mi)
+		_sub_meshes[sub_idx] = mi
+	if mi != null:
+		mi.mesh = m
+		mi.visible = m != null
 
 	var s: Shape3D = sub_data.get("shape", null) as Shape3D
-	_sub_colliders[sub_idx].shape = s
-	_sub_colliders[sub_idx].disabled = (s == null)
+	if collision_enabled:
+		_set_sub_shape(sub_idx, s)
+		if not _pending_shapes.is_empty():
+			_pending_shapes[sub_idx] = NO_SHAPE_CHANGE
+	else:
+		if _pending_shapes.is_empty():
+			_pending_shapes.resize(SUB_CHUNK_COUNT)
+			_pending_shapes.fill(NO_SHAPE_CHANGE)
+		_pending_shapes[sub_idx] = s
+		_has_pending_shapes = true
+
+	if apply_water:
+		_apply_water_mesh(sub_idx, sub_data.get("water_mesh", null) as ArrayMesh)
 
 
-## Asynchronously rebuilds the 16x16x16 vertical sub-chunk containing `ly` on a background worker thread.
-## Keeps the main thread locked at smooth 60+ FPS with zero hitches or stalls.
+func _set_sub_shape(sub_idx: int, s: Shape3D) -> void:
+	var col: CollisionShape3D = _sub_cols[sub_idx]
+	if s != null and col == null:
+		col = CollisionShape3D.new()
+		col.name = "SubCol_%d" % sub_idx
+		add_child(col)
+		_sub_cols[sub_idx] = col
+	if col != null:
+		col.shape = s
+		col.disabled = s == null
+
+
+## Enables collision and attaches pending sub-chunk shapes until `budget_usec` is used up.
+## Returns true when nothing is left pending.
+func attach_pending_collision(budget_usec: int) -> bool:
+	collision_enabled = true
+	if not _has_pending_shapes:
+		return true
+	var start: int = Time.get_ticks_usec()
+	for sub_idx in range(SUB_CHUNK_COUNT):
+		var pending: Variant = _pending_shapes[sub_idx]
+		if typeof(pending) == TYPE_INT:
+			continue
+		_set_sub_shape(sub_idx, pending as Shape3D)
+		_pending_shapes[sub_idx] = NO_SHAPE_CHANGE
+		if Time.get_ticks_usec() - start > budget_usec:
+			return false
+	_has_pending_shapes = false
+	return true
+
+
+
+func _apply_water_mesh(sub_idx: int, wm: ArrayMesh) -> void:
+	var wi: MeshInstance3D = _sub_water[sub_idx]
+	if wm != null and wi == null:
+		wi = MeshInstance3D.new()
+		wi.name = "SubWater_%d" % sub_idx
+		wi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		wi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		wi.material_override = VoxelAtlasBuilder.get_shared_water_material()
+		add_child(wi)
+		_sub_water[sub_idx] = wi
+	if wi != null:
+		wi.mesh = wm
+		wi.visible = wm != null
+
+
+## Starts an async rebuild of one sub-chunk from prepared buffer slices; stale results are dropped.
+## `job` holds "vox" / "light" (9-entry neighborhoods of y-sliced copies), "meta" and "y_origin".
+func dispatch_sub_rebuild(sub_idx: int, job: Dictionary, water_only: bool) -> void:
+	_water_versions[sub_idx] += 1
+	if not water_only:
+		_sub_versions[sub_idx] += 1
+	var ver: int = _sub_versions[sub_idx]
+	var water_ver: int = _water_versions[sub_idx]
+	WorkerThreadPool.add_task(func() -> void:
+		var padded: Array = ChunkMesher.build_padded(sub_idx, job["vox"], job["light"], int(job["y_origin"]))
+		var data: Dictionary = ChunkMesher.build_sub_chunk(sub_idx, padded, job["meta"], water_only)
+		_apply_versioned_sub_chunk.call_deferred(sub_idx, data, ver, water_ver, water_only)
+	, false, "SubChunkMesh")
+
+
+func _apply_versioned_sub_chunk(sub_idx: int, data: Dictionary, ver: int, water_ver: int, water_only: bool) -> void:
+	if not is_instance_valid(self) or is_queued_for_deletion():
+		return
+	var water_fresh: bool = water_ver == _water_versions[sub_idx]
+	if water_only:
+		if water_fresh:
+			_apply_water_mesh(sub_idx, data.get("water_mesh", null) as ArrayMesh)
+		return
+	if ver != _sub_versions[sub_idx]:
+		return
+	_apply_single_sub_chunk(sub_idx, data, water_fresh)
+
+
+## Requests a remesh of the sub-chunk containing `ly` through the world (with neighbor data);
+## a chunk that is not attached to a world skips it (it gets meshed when attached).
 func rebuild_at_local_y(ly: int) -> void:
-	_ensure_child_nodes()
-	var sub_idx: int = clampi(ly / SUB_CHUNK_HEIGHT, 0, SUB_CHUNK_COUNT - 1)
-	_dispatch_async_sub_chunk_rebuild(sub_idx)
-
-	var local_sub_y: int = ly % SUB_CHUNK_HEIGHT
-	var seam_neighbor: int = -1
-	if local_sub_y == 0 and sub_idx > 0:
-		seam_neighbor = sub_idx - 1
-	elif local_sub_y == SUB_CHUNK_HEIGHT - 1 and sub_idx < SUB_CHUNK_COUNT - 1:
-		seam_neighbor = sub_idx + 1
-
-	if seam_neighbor >= 0:
-		_dispatch_async_sub_chunk_rebuild(seam_neighbor)
+	var wm: Node = get_parent()
+	if wm != null and wm.has_method("request_sub_remesh"):
+		wm.request_sub_remesh(chunk_coords, clampi(ly / SUB_CHUNK_HEIGHT, 0, SUB_CHUNK_COUNT - 1))
 
 
-## Asynchronously rebuilds a sub-chunk on a worker thread and applies it safely on the main thread.
 func rebuild_at_local_y_async(ly: int) -> void:
 	rebuild_at_local_y(ly)
 
 
-func _dispatch_async_sub_chunk_rebuild(sub_idx: int) -> void:
-	if _sub_versions.size() < SUB_CHUNK_COUNT:
-		_sub_versions.resize(SUB_CHUNK_COUNT)
-		_sub_versions.fill(0)
-	_sub_versions[sub_idx] += 1
-	var expected_ver: int = _sub_versions[sub_idx]
-
-	var voxels_snapshot: PackedByteArray = _voxels.duplicate()
-	var lighting_snapshot: PackedByteArray = _lighting.duplicate()
-	var meta_snapshot: PackedByteArray = _metadata.duplicate()
-	WorkerThreadPool.add_task(func():
-		if not is_instance_valid(self):
-			return
-		var data: Dictionary = _build_single_sub_chunk_data(sub_idx, voxels_snapshot, lighting_snapshot, meta_snapshot)
-		if is_instance_valid(self):
-			_apply_versioned_sub_chunk.call_deferred(sub_idx, data, expected_ver)
-	)
+func rebuild_water_at_local_y(ly: int) -> void:
+	var wm: Node = get_parent()
+	if wm != null and wm.has_method("request_sub_remesh"):
+		wm.request_sub_remesh(chunk_coords, clampi(ly / SUB_CHUNK_HEIGHT, 0, SUB_CHUNK_COUNT - 1), true)
 
 
-func _apply_versioned_sub_chunk(sub_idx: int, data: Dictionary, ver: int) -> void:
-	if not is_instance_valid(self):
-		return
-	if _sub_versions.size() < SUB_CHUNK_COUNT or ver != _sub_versions[sub_idx]:
-		return
-	_apply_single_sub_chunk(sub_idx, data)
-
-
-## Full chunk synchronous rebuild.
+## Full chunk synchronous rebuild from the chunk's own data.
 func rebuild_mesh() -> void:
-	var mesh_data: Dictionary = build_mesh_data()
-	apply_mesh_data(mesh_data)
+	apply_mesh_data(build_mesh_data())
 
 
-func _get_neighbor_id(lx: int, ly: int, lz: int) -> int:
-	if ly < 0:
-		return BlockRegistry.BlockId.STONE
-	if ly >= CHUNK_SIZE_Y:
-		return BlockRegistry.BlockId.AIR
-	if lx >= 0 and lx < CHUNK_SIZE_X and lz >= 0 and lz < CHUNK_SIZE_Z:
-		return get_block_local(lx, ly, lz)
-
-	if neighbor_block_getter.is_valid():
-		var wx: int = chunk_coords.x * CHUNK_SIZE_X + lx
-		var wz: int = chunk_coords.y * CHUNK_SIZE_Z + lz
-		return neighbor_block_getter.call(Vector3i(wx, ly, wz))
-
-	return BlockRegistry.BlockId.AIR
-
-
-func _is_neighbor_solid(lx: int, ly: int, lz: int) -> bool:
-	return BlockRegistry.is_opaque_full_cube(_get_neighbor_id(lx, ly, lz))
-
-
-func _emit_cross_quad(
-	st: SurfaceTool,
-	lx: int,
-	ly: int,
-	lz: int,
-	block_id: int,
-	meta: int = 0
-) -> void:
-	var origin := Vector3(float(lx), float(ly), float(lz))
-	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, BlockRegistry.FaceDir.NORTH, meta)
-	var u0: float = uv_rect.position.x
-	var v0: float = uv_rect.position.y
-	var u1: float = uv_rect.position.x + uv_rect.size.x
-	var v1: float = uv_rect.position.y + uv_rect.size.y
-
-	# Diagonal 1: (0, 0, 0) to (1, 1, 1)
-	var d1_p0 := origin + Vector3(0.0, 0.0, 0.0)
-	var d1_p1 := origin + Vector3(1.0, 0.0, 1.0)
-	var d1_p2 := origin + Vector3(1.0, 1.0, 1.0)
-	var d1_p3 := origin + Vector3(0.0, 1.0, 0.0)
-
-	# Diagonal 2: (0, 0, 1) to (1, 1, 0)
-	var d2_p0 := origin + Vector3(0.0, 0.0, 1.0)
-	var d2_p1 := origin + Vector3(1.0, 0.0, 0.0)
-	var d2_p2 := origin + Vector3(1.0, 1.0, 0.0)
-	var d2_p3 := origin + Vector3(0.0, 1.0, 1.0)
-
-	var normal1 := Vector3(-0.7071, 0.0, 0.7071)
-	var normal2 := Vector3(0.7071, 0.0, 0.7071)
-	var col := Color(0.94, 0.94, 0.94, 1.0)
-
-	# Diagonal 1 (Front & Back)
-	for pass_idx in range(2):
-		var n: Vector3 = normal1 if pass_idx == 0 else -normal1
-		var a: Vector3 = d1_p0 if pass_idx == 0 else d1_p1
-		var b: Vector3 = d1_p1 if pass_idx == 0 else d1_p0
-		var c: Vector3 = d1_p2 if pass_idx == 0 else d1_p3
-		var d: Vector3 = d1_p3 if pass_idx == 0 else d1_p2
-
-		st.set_color(col)
-		st.set_normal(n)
-
-		st.set_uv(Vector2(u0, v1))
-		st.add_vertex(a)
-		st.set_uv(Vector2(u1, v1))
-		st.add_vertex(b)
-		st.set_uv(Vector2(u1, v0))
-		st.add_vertex(c)
-
-		st.set_uv(Vector2(u0, v1))
-		st.add_vertex(a)
-		st.set_uv(Vector2(u1, v0))
-		st.add_vertex(c)
-		st.set_uv(Vector2(u0, v0))
-		st.add_vertex(d)
-
-	# Diagonal 2 (Front & Back)
-	for pass_idx in range(2):
-		var n: Vector3 = normal2 if pass_idx == 0 else -normal2
-		var a: Vector3 = d2_p0 if pass_idx == 0 else d2_p1
-		var b: Vector3 = d2_p1 if pass_idx == 0 else d2_p0
-		var c: Vector3 = d2_p2 if pass_idx == 0 else d2_p3
-		var d: Vector3 = d2_p3 if pass_idx == 0 else d2_p2
-
-		st.set_color(col)
-		st.set_normal(n)
-
-		st.set_uv(Vector2(u0, v1))
-		st.add_vertex(a)
-		st.set_uv(Vector2(u1, v1))
-		st.add_vertex(b)
-		st.set_uv(Vector2(u1, v0))
-		st.add_vertex(c)
-
-		st.set_uv(Vector2(u0, v1))
-		st.add_vertex(a)
-		st.set_uv(Vector2(u1, v0))
-		st.add_vertex(c)
-		st.set_uv(Vector2(u0, v0))
-		st.add_vertex(d)
-
-
-func _emit_custom_box(
-	st: SurfaceTool,
-	lx: int,
-	ly: int,
-	lz: int,
-	min_b: Vector3,
-	max_b: Vector3,
-	block_id: int,
-	meta: int = 0
-) -> void:
-	var origin := Vector3(float(lx), float(ly), float(lz))
-	var p0: Vector3 = origin + min_b
-	var p1: Vector3 = origin + max_b
-	var faces: Array[int] = [
-		BlockRegistry.FaceDir.TOP,
-		BlockRegistry.FaceDir.BOTTOM,
-		BlockRegistry.FaceDir.EAST,
-		BlockRegistry.FaceDir.WEST,
-		BlockRegistry.FaceDir.SOUTH,
-		BlockRegistry.FaceDir.NORTH,
-	]
-	for face_dir in faces:
-		var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir, meta)
-		var u0: float = uv_rect.position.x
-		var v0: float = uv_rect.position.y
-		var u1: float = uv_rect.position.x + uv_rect.size.x
-		var v1: float = uv_rect.position.y + uv_rect.size.y
-		var verts: Array[Vector3]
-		var normal: Vector3
-		var shade: float = 1.0
-		match face_dir:
-			BlockRegistry.FaceDir.TOP:
-				normal = Vector3.UP
-				shade = 1.0
-				verts = [Vector3(p0.x, p1.y, p0.z), Vector3(p1.x, p1.y, p0.z), Vector3(p1.x, p1.y, p1.z), Vector3(p0.x, p1.y, p1.z)]
-			BlockRegistry.FaceDir.BOTTOM:
-				normal = Vector3.DOWN
-				shade = 0.55
-				verts = [Vector3(p0.x, p0.y, p1.z), Vector3(p1.x, p0.y, p1.z), Vector3(p1.x, p0.y, p0.z), Vector3(p0.x, p0.y, p0.z)]
-			BlockRegistry.FaceDir.EAST:
-				normal = Vector3.RIGHT
-				shade = 0.82
-				verts = [Vector3(p1.x, p1.y, p1.z), Vector3(p1.x, p1.y, p0.z), Vector3(p1.x, p0.y, p0.z), Vector3(p1.x, p0.y, p1.z)]
-			BlockRegistry.FaceDir.WEST:
-				normal = Vector3.LEFT
-				shade = 0.76
-				verts = [Vector3(p0.x, p1.y, p0.z), Vector3(p0.x, p1.y, p1.z), Vector3(p0.x, p0.y, p1.z), Vector3(p0.x, p0.y, p0.z)]
-			BlockRegistry.FaceDir.SOUTH:
-				normal = Vector3.BACK
-				shade = 0.90
-				verts = [Vector3(p0.x, p1.y, p1.z), Vector3(p1.x, p1.y, p1.z), Vector3(p1.x, p0.y, p1.z), Vector3(p0.x, p0.y, p1.z)]
-			_:
-				normal = Vector3.FORWARD
-				shade = 0.72
-				verts = [Vector3(p1.x, p1.y, p0.z), Vector3(p0.x, p1.y, p0.z), Vector3(p0.x, p0.y, p0.z), Vector3(p1.x, p0.y, p0.z)]
-
-		if BlockRegistry.is_light_emitter(block_id):
-			shade = 1.0
-		var col := Color(shade, shade, shade, 1.0)
-		if block_id == BlockRegistry.BlockId.WOOL and meta > 0 and meta < BlockRegistry.WOOL_COLORS.size():
-			var wc: Color = BlockRegistry.WOOL_COLORS[meta]
-			col = Color(shade * wc.r, shade * wc.g, shade * wc.b, 1.0)
-		var uvs: Array[Vector2] = [Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1), Vector2(u0, v1)]
-		var indices: Array[int] = [0, 1, 2, 0, 2, 3]
-		for idx in indices:
-			st.set_normal(normal)
-			st.set_color(col)
-			st.set_uv(uvs[idx])
-			st.add_vertex(verts[idx])
-
-
-## Computes the smoothed water height at a corner shared by the 4 cells around (lx, ly, lz) in quadrant (dx, dz).
-func _compute_water_corner_height(lx: int, ly: int, lz: int, dx: int, dz: int) -> float:
-	var sum_h: float = 0.0
-	var max_h: float = 0.0
-	var count: int = 0
-	var has_air_neighbor: bool = false
-
-	for ox in [0, dx]:
-		for oz in [0, dz]:
-			var nx: int = lx + ox
-			var nz: int = lz + oz
-			# If any cell sharing this vertex has water directly above it, snap corner to 1.0 for seamless waterfalls
-			if BlockRegistry.is_liquid(_get_neighbor_id(nx, ly + 1, nz)):
-				return 1.0
-			var nid: int = _get_neighbor_id(nx, ly, nz)
-			if BlockRegistry.is_liquid(nid):
-				var h: float = BlockRegistry.get_water_height_ratio(nid)
-				sum_h += h
-				max_h = maxf(max_h, h)
-				count += 1
-			elif nid == BlockRegistry.BlockId.AIR:
-				has_air_neighbor = true
-
-	if count == 0:
-		return 0.12
-	var avg_h: float = sum_h / float(count)
-	# Taper down slightly when bordering open air so edges & corners form a visible downward lip
-	var edge_drop: float = -0.04 if (has_air_neighbor and max_h < 0.87) else 0.0
-	return clampf(avg_h * 0.72 + max_h * 0.28 + edge_drop, 0.07, 0.96)
-
-
-func _emit_sloped_water_face(
-	st: SurfaceTool,
-	lx: int,
-	ly: int,
-	lz: int,
-	face_dir: int,
-	h00: float,
-	h10: float,
-	h11: float,
-	h01: float
-) -> void:
-	var origin := Vector3(float(lx), float(ly), float(lz))
-	var verts: Array[Vector3]
-	var normal: Vector3
-	var shade: float = 1.0
-
-	match face_dir:
-		BlockRegistry.FaceDir.TOP:
-			shade = 1.0
-			verts = [
-				origin + Vector3(0.0, h00, 0.0),
-				origin + Vector3(1.0, h10, 0.0),
-				origin + Vector3(1.0, h11, 1.0),
-				origin + Vector3(0.0, h01, 1.0),
-			]
-			var calc_norm: Vector3 = (verts[3] - verts[0]).cross(verts[1] - verts[0]).normalized()
-			normal = calc_norm if calc_norm.length_squared() > 0.01 else Vector3.UP
-		BlockRegistry.FaceDir.BOTTOM:
-			normal = Vector3.DOWN
-			shade = 0.65
-			verts = [
-				origin + Vector3(0.0, 0.0, 1.0),
-				origin + Vector3(1.0, 0.0, 1.0),
-				origin + Vector3(1.0, 0.0, 0.0),
-				origin + Vector3(0.0, 0.0, 0.0),
-			]
-		BlockRegistry.FaceDir.EAST:
-			normal = Vector3.RIGHT
-			shade = 0.85
-			verts = [
-				origin + Vector3(1.0, h11, 1.0),
-				origin + Vector3(1.0, h10, 0.0),
-				origin + Vector3(1.0, 0.0, 0.0),
-				origin + Vector3(1.0, 0.0, 1.0),
-			]
-		BlockRegistry.FaceDir.WEST:
-			normal = Vector3.LEFT
-			shade = 0.80
-			verts = [
-				origin + Vector3(0.0, h00, 0.0),
-				origin + Vector3(0.0, h01, 1.0),
-				origin + Vector3(0.0, 0.0, 1.0),
-				origin + Vector3(0.0, 0.0, 0.0),
-			]
-		BlockRegistry.FaceDir.SOUTH:
-			normal = Vector3.BACK
-			shade = 0.90
-			verts = [
-				origin + Vector3(0.0, h01, 1.0),
-				origin + Vector3(1.0, h11, 1.0),
-				origin + Vector3(1.0, 0.0, 1.0),
-				origin + Vector3(0.0, 0.0, 1.0),
-			]
-		_: # NORTH
-			normal = Vector3.FORWARD
-			shade = 0.78
-			verts = [
-				origin + Vector3(1.0, h10, 0.0),
-				origin + Vector3(0.0, h00, 0.0),
-				origin + Vector3(0.0, 0.0, 0.0),
-				origin + Vector3(1.0, 0.0, 0.0),
-			]
-
-	var color := Color(shade, shade, shade, 1.0)
-	var indices: Array[int] = [0, 1, 2, 0, 2, 3]
-	for idx in indices:
-		st.set_normal(normal)
-		st.set_color(color)
-		st.add_vertex(verts[idx])
-
-
-func _emit_col_box(
-	st: SurfaceTool,
-	lx: int,
-	ly: int,
-	lz: int,
-	min_bound: Vector3,
-	max_bound: Vector3
-) -> void:
-	var origin := Vector3(float(lx), float(ly), float(lz))
-	var p0 := origin + min_bound
-	var p1 := origin + max_bound
-
-	# TOP
-	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
-
-	# BOTTOM
-	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
-
-	# EAST
-	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
-
-	# WEST
-	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
-	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
-
-	# SOUTH
-	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
-	st.add_vertex(Vector3(p0.x, p1.y, p1.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p1.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p1.z))
-
-	# NORTH
-	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p0.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p1.y, p0.z))
-	st.add_vertex(Vector3(p0.x, p0.y, p0.z))
-	st.add_vertex(Vector3(p1.x, p0.y, p0.z))
-
-
-func _emit_col_face(
-	st: SurfaceTool,
-	lx: int,
-	ly: int,
-	lz: int,
-	face_dir: int
-) -> void:
-	var fx: float = float(lx)
-	var fy: float = float(ly)
-	var fz: float = float(lz)
-	var p0: Vector3; var p1: Vector3; var p2: Vector3; var p3: Vector3
-	match face_dir:
-		BlockRegistry.FaceDir.TOP:
-			p0 = Vector3(fx, fy + 1.0, fz)
-			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
-			p2 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
-			p3 = Vector3(fx, fy + 1.0, fz + 1.0)
-		BlockRegistry.FaceDir.BOTTOM:
-			p0 = Vector3(fx, fy, fz + 1.0)
-			p1 = Vector3(fx + 1.0, fy, fz + 1.0)
-			p2 = Vector3(fx + 1.0, fy, fz)
-			p3 = Vector3(fx, fy, fz)
-		BlockRegistry.FaceDir.EAST:
-			p0 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
-			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
-			p2 = Vector3(fx + 1.0, fy, fz)
-			p3 = Vector3(fx + 1.0, fy, fz + 1.0)
-		BlockRegistry.FaceDir.WEST:
-			p0 = Vector3(fx, fy + 1.0, fz)
-			p1 = Vector3(fx, fy + 1.0, fz + 1.0)
-			p2 = Vector3(fx, fy, fz + 1.0)
-			p3 = Vector3(fx, fy, fz)
-		BlockRegistry.FaceDir.SOUTH:
-			p0 = Vector3(fx, fy + 1.0, fz + 1.0)
-			p1 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
-			p2 = Vector3(fx + 1.0, fy, fz + 1.0)
-			p3 = Vector3(fx, fy, fz + 1.0)
-		_: # NORTH
-			p0 = Vector3(fx + 1.0, fy + 1.0, fz)
-			p1 = Vector3(fx, fy + 1.0, fz)
-			p2 = Vector3(fx, fy, fz)
-			p3 = Vector3(fx + 1.0, fy, fz)
-
-	st.add_vertex(p0)
-	st.add_vertex(p1)
-	st.add_vertex(p2)
-	st.add_vertex(p0)
-	st.add_vertex(p2)
-	st.add_vertex(p3)
-
-
-func _emit_face(
-	st: SurfaceTool,
-	lx: int,
-	ly: int,
-	lz: int,
-	face_dir: int,
-	block_id: int,
-	meta: int = 0,
-	st_col: SurfaceTool = null,
-	voxels: PackedByteArray = PackedByteArray(),
-	lighting: PackedByteArray = PackedByteArray()
-) -> void:
-	var uv_rect: Rect2 = BlockRegistry.get_tile_uv_rect(block_id, face_dir, meta)
-	var u0: float = uv_rect.position.x
-	var v0: float = uv_rect.position.y
-	var u1: float = uv_rect.position.x + uv_rect.size.x
-	var v1: float = uv_rect.position.y + uv_rect.size.y
-
-	var fx: float = float(lx)
-	var fy: float = float(ly)
-	var fz: float = float(lz)
-
-	var p0: Vector3; var p1: Vector3; var p2: Vector3; var p3: Vector3
-	var normal: Vector3
-	var shade: float = 1.0
-
-	match face_dir:
-		BlockRegistry.FaceDir.TOP:
-			normal = Vector3.UP
-			shade = 1.0
-			p0 = Vector3(fx, fy + 1.0, fz)
-			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
-			p2 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
-			p3 = Vector3(fx, fy + 1.0, fz + 1.0)
-		BlockRegistry.FaceDir.BOTTOM:
-			normal = Vector3.DOWN
-			shade = 0.52
-			p0 = Vector3(fx, fy, fz + 1.0)
-			p1 = Vector3(fx + 1.0, fy, fz + 1.0)
-			p2 = Vector3(fx + 1.0, fy, fz)
-			p3 = Vector3(fx, fy, fz)
-		BlockRegistry.FaceDir.EAST:
-			normal = Vector3.RIGHT
-			shade = 0.80
-			p0 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
-			p1 = Vector3(fx + 1.0, fy + 1.0, fz)
-			p2 = Vector3(fx + 1.0, fy, fz)
-			p3 = Vector3(fx + 1.0, fy, fz + 1.0)
-		BlockRegistry.FaceDir.WEST:
-			normal = Vector3.LEFT
-			shade = 0.76
-			p0 = Vector3(fx, fy + 1.0, fz)
-			p1 = Vector3(fx, fy + 1.0, fz + 1.0)
-			p2 = Vector3(fx, fy, fz + 1.0)
-			p3 = Vector3(fx, fy, fz)
-		BlockRegistry.FaceDir.SOUTH:
-			normal = Vector3.BACK
-			shade = 0.88
-			p0 = Vector3(fx, fy + 1.0, fz + 1.0)
-			p1 = Vector3(fx + 1.0, fy + 1.0, fz + 1.0)
-			p2 = Vector3(fx + 1.0, fy, fz + 1.0)
-			p3 = Vector3(fx, fy, fz + 1.0)
-		_: # NORTH
-			normal = Vector3.FORWARD
-			shade = 0.70
-			p0 = Vector3(fx + 1.0, fy + 1.0, fz)
-			p1 = Vector3(fx, fy + 1.0, fz)
-			p2 = Vector3(fx, fy, fz)
-			p3 = Vector3(fx + 1.0, fy, fz)
-
-	if BlockRegistry.is_light_emitter(block_id):
-		shade = 1.0
-	var face_color := Color(shade, shade, shade, 1.0)
-	if block_id == BlockRegistry.BlockId.WOOL and meta > 0 and meta < BlockRegistry.WOOL_COLORS.size():
-		var wc: Color = BlockRegistry.WOOL_COLORS[meta]
-		face_color = Color(shade * wc.r, shade * wc.g, shade * wc.b, 1.0)
-
-	var ao: Plane = VoxelLighting.calculate_face_ao(self, lx, ly, lz, face_dir, block_id, voxels, lighting)
-
-	var c0 := Color(face_color.r * ao.x, face_color.g * ao.x, face_color.b * ao.x, 1.0)
-	var c1 := Color(face_color.r * ao.y, face_color.g * ao.y, face_color.b * ao.y, 1.0)
-	var c2 := Color(face_color.r * ao.z, face_color.g * ao.z, face_color.b * ao.z, 1.0)
-	var c3 := Color(face_color.r * ao.d, face_color.g * ao.d, face_color.b * ao.d, 1.0)
-
-	# Triangle 1: 0 -> 1 -> 2
-	st.set_normal(normal)
-	st.set_color(c0)
-	st.set_uv(Vector2(u0, v0))
-	st.add_vertex(p0)
-
-	st.set_normal(normal)
-	st.set_color(c1)
-	st.set_uv(Vector2(u1, v0))
-	st.add_vertex(p1)
-
-	st.set_normal(normal)
-	st.set_color(c2)
-	st.set_uv(Vector2(u1, v1))
-	st.add_vertex(p2)
-
-	# Triangle 2: 0 -> 2 -> 3
-	st.set_normal(normal)
-	st.set_color(c0)
-	st.set_uv(Vector2(u0, v0))
-	st.add_vertex(p0)
-
-	st.set_normal(normal)
-	st.set_color(c2)
-	st.set_uv(Vector2(u1, v1))
-	st.add_vertex(p2)
-
-	st.set_normal(normal)
-	st.set_color(c3)
-	st.set_uv(Vector2(u0, v1))
-	st.add_vertex(p3)
-
-	if st_col != null:
-		st_col.add_vertex(p0)
-		st_col.add_vertex(p1)
-		st_col.add_vertex(p2)
-		st_col.add_vertex(p0)
-		st_col.add_vertex(p2)
-		st_col.add_vertex(p3)
-
+# ============================================================================
+# DATA ACCESS
+# ============================================================================
 
 func ensure_lighting_buffer() -> void:
 	if _lighting.is_empty():
@@ -1953,10 +1211,7 @@ func set_sky_light_local(lx: int, ly: int, lz: int, val: int) -> void:
 		return
 	ensure_lighting_buffer()
 	var idx := _to_index(lx, ly, lz)
-	var cur := _lighting[idx]
-	var blk := cur & 0x0F
-	var sky := clampi(val, 0, 15)
-	_lighting[idx] = ((sky << 4) | blk) & 0xFF
+	_lighting[idx] = ((clampi(val, 0, 15) << 4) | (_lighting[idx] & 0x0F)) & 0xFF
 
 
 func get_block_light_local(lx: int, ly: int, lz: int) -> int:
@@ -1970,10 +1225,7 @@ func set_block_light_local(lx: int, ly: int, lz: int, val: int) -> void:
 		return
 	ensure_lighting_buffer()
 	var idx := _to_index(lx, ly, lz)
-	var cur := _lighting[idx]
-	var sky := (cur >> 4) & 0x0F
-	var blk := clampi(val, 0, 15)
-	_lighting[idx] = ((sky << 4) | blk) & 0xFF
+	_lighting[idx] = ((_lighting[idx] & 0xF0) | clampi(val, 0, 15)) & 0xFF
 
 
 func is_in_bounds(lx: int, ly: int, lz: int) -> bool:
@@ -1999,53 +1251,27 @@ func set_block_local(lx: int, ly: int, lz: int, block_id: int, immediate_rebuild
 	is_dirty = true
 	if block_id != BlockRegistry.BlockId.AIR and ly > _highest_solid_y:
 		_highest_solid_y = ly
-	_update_light_emitter_at(Vector3i(lx, ly, lz), block_id)
 	if immediate_rebuild:
 		rebuild_at_local_y(ly)
 
 
-func _update_light_emitter_at(local_pos: Vector3i, block_id: int) -> void:
-	if BlockRegistry.is_light_emitter(block_id):
-		if not _block_lights.has(local_pos):
-			var omni := OmniLight3D.new()
-			omni.position = Vector3(local_pos) + Vector3(0.5, 0.5, 0.5)
-			if block_id == BlockRegistry.BlockId.LAVA:
-				omni.light_color = Color(1.0, 0.40, 0.10)
-				omni.light_energy = 2.4
-				omni.omni_range = 14.0
-			elif block_id == BlockRegistry.BlockId.REDSTONE_TORCH:
-				omni.light_color = Color(1.0, 0.20, 0.15)
-				omni.light_energy = 0.9
-				omni.omni_range = 7.0
-			else:
-				omni.light_color = Color(1.0, 0.86, 0.52)
-				omni.light_energy = 1.85
-				omni.omni_range = 11.0
-			omni.omni_attenuation = 1.2
-			add_child(omni)
-			_block_lights[local_pos] = omni
-	else:
-		if _block_lights.has(local_pos):
-			var old_light: OmniLight3D = _block_lights[local_pos]
-			_block_lights.erase(local_pos)
-			if is_instance_valid(old_light):
-				old_light.queue_free()
-
-
-func _sync_all_light_emitters() -> void:
-	if _voxels.is_empty():
-		return
-	var max_y: int = mini(_highest_solid_y + 1, CHUNK_SIZE_Y)
-	for ly in range(max_y):
-		for lx in range(CHUNK_SIZE_X):
-			for lz in range(CHUNK_SIZE_Z):
-				var id: int = get_block_local(lx, ly, lz)
-				if BlockRegistry.is_light_emitter(id):
-					_update_light_emitter_at(Vector3i(lx, ly, lz), id)
-
-
 func _set_voxel_raw(lx: int, ly: int, lz: int, block_id: int) -> void:
 	_voxels[_to_index(lx, ly, lz)] = block_id
+
+
+## Writes metadata during generation without marking the chunk as player-modified.
+func _set_meta_raw(lx: int, ly: int, lz: int, val: int) -> void:
+	if not is_in_bounds(lx, ly, lz):
+		return
+	_ensure_metadata_buffer()
+	var i: int = _to_index(lx, ly, lz)
+	var byte_idx: int = i >> 1
+	var b: int = _metadata[byte_idx]
+	if (i & 1) == 0:
+		b = (b & 0xF0) | (val & 0x0F)
+	else:
+		b = (b & 0x0F) | ((val & 0x0F) << 4)
+	_metadata[byte_idx] = b
 
 
 func _to_index(lx: int, ly: int, lz: int) -> int:

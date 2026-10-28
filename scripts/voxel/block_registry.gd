@@ -75,6 +75,9 @@ enum BlockId {
 	WOOD_STAIRS = 71,
 	COBBLE_STAIRS = 72,
 	SLAB = 73,
+	SAPLING = 74,
+	PINE_SAPLING = 75,
+	BIRCH_SAPLING = 76,
 }
 
 const WOOL_COLORS: Array[Color] = [
@@ -105,36 +108,41 @@ enum FaceDir {
 	NORTH = 5,  # -Z
 }
 
-## Atlas grid layout (19 tiles wide x 1 tile tall, each tile 16x16 pixels):
-## Tile 0: Grass Top
-## Tile 1: Grass Side
-## Tile 2: Dirt
-## Tile 3: Stone
-## Tile 4: Wood Log Side
-## Tile 5: Wood Log Top
-## Tile 6: Leaves
-## Tile 7: Sand
-## Tile 8: Cobblestone
-## Tile 9: Wood Planks
-## Tile 10: Snow
-## Tile 11: Glowstone
-## Tile 12: Coal Ore
-## Tile 13: Iron Ore
-## Tile 14: Gold Ore
-## Tile 15: Diamond Ore
-## Tile 16: Crafting Table Top (Grid)
-## Tile 17: Crafting Table Side (Workbench Tools)
-## Tile 18: Furnace Front (Stone Oven Opening & Embers)
-## Default (repo) atlas layout: 29 tiles of 32x32 px. A local texture pack may supply a wider
-## atlas (e.g. Faithful 64x: 36 tiles of 64x64 px with extra per-face tiles 29..35).
+## How the chunk mesher draws a block.
+enum RenderType {
+	NONE = 0,         ## Air / not drawn
+	CUBE = 1,         ## Full opaque cube (opaque surface)
+	CUBE_CUTOUT = 2,  ## Full cube on the alpha-tested surface; faces between equal blocks are culled
+	CROSS = 3,        ## Two diagonal quads (flowers, sugar cane, saplings)
+	WATER = 4,        ## Sloped translucent water
+	BOX = 5,          ## One or more custom boxes (stairs, slabs, doors, torches, beds...)
+	CROP = 6,         ## Four vertical planes in a # pattern (wheat, potatoes)
+}
+
+## Tool categories that speed up mining (values match InventoryManager.ToolCategory).
+const TOOL_NONE: int = 0
+const TOOL_PICKAXE: int = 1
+const TOOL_AXE: int = 2
+const TOOL_SHOVEL: int = 3
+
+## Atlas layout: one row of square tiles. The shipped atlas has 44 tiles; tiles past that are
+## derived from existing tiles (or painted) at load time by VoxelAtlasBuilder.
 const ATLAS_COLUMNS: int = 29
 const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 32
+const ATLAS_TILE_COUNT: int = 66
+
+const TILE_DOOR: int = 23
+const TILE_PINE_LOG_TOP: int = 61
+const TILE_BIRCH_LOG_TOP: int = 62
+const TILE_OAK_SAPLING: int = 63
+const TILE_PINE_SAPLING: int = 64
+const TILE_BIRCH_SAPLING: int = 65
 
 ## Actual column count of the loaded atlas (set by VoxelAtlasBuilder when the atlas loads).
 static var atlas_columns: int = 0
 
-## Extended per-face tiles (29..35) fall back to these tiles when the atlas is the 29-tile default.
+## Extended per-face tiles fall back to these tiles if the atlas could not be extended.
 const EXTENDED_TILE_FALLBACK: Dictionary = {
 	29: 17, # Crafting Table Side -> Crafting Table Front
 	30: 8,  # Furnace Side -> Cobblestone
@@ -164,8 +172,115 @@ const EXTENDED_TILE_FALLBACK: Dictionary = {
 	58: 3,  # Bedrock -> Stone
 	59: 13, # Redstone Ore -> Iron Ore
 	60: 15, # Lapis Ore -> Diamond Ore
+	61: 5,  # Pine Log Top -> Wood Log Top
+	62: 5,  # Birch Log Top -> Wood Log Top
+	63: 6,  # Oak Sapling -> Leaves
+	64: 54, # Pine Sapling -> Pine Leaves
+	65: 56, # Birch Sapling -> Birch Leaves
 }
 
+
+# ============================================================================
+# FAST LOOKUP TABLES (indexed by block id, built once; used by the mesher and lighting)
+# ============================================================================
+
+static var render_type_table: PackedByteArray = _build_table(0)
+## 1 if the block hides the faces of its neighbors (full opaque cubes, plus opaque-rendered leaves).
+static var occluder_table: PackedByteArray = _build_table(1)
+## How much light (0..15) a block removes when light passes through it.
+static var light_opacity_table: PackedByteArray = _build_table(2)
+## Light level (0..15) a block emits.
+static var luminance_table: PackedByteArray = _build_table(3)
+## (block_id << 7) | (meta << 3) | face -> atlas tile.
+static var tile_table: PackedByteArray = _build_tile_table()
+
+
+static func _build_table(kind: int) -> PackedByteArray:
+	var arr := PackedByteArray()
+	arr.resize(256)
+	for id in range(256):
+		match kind:
+			0:
+				arr[id] = _calc_render_type(id)
+			1:
+				arr[id] = _calc_occluder(id)
+			2:
+				arr[id] = _calc_light_opacity(id)
+			_:
+				arr[id] = _calc_luminance(id)
+	return arr
+
+
+static func _build_tile_table() -> PackedByteArray:
+	var arr := PackedByteArray()
+	arr.resize(256 * 128)
+	for id in range(256):
+		for meta in range(16):
+			for face in range(6):
+				arr[(id << 7) | (meta << 3) | face] = get_tile_index(id, face, meta)
+	return arr
+
+
+static func _calc_render_type(id: int) -> int:
+	if id == BlockId.AIR:
+		return RenderType.NONE
+	if is_water(id):
+		return RenderType.WATER
+	match id:
+		BlockId.SUGAR_CANE, BlockId.SEAGRASS, BlockId.DANDELION, BlockId.ROSE, BlockId.BROWN_MUSHROOM, BlockId.RED_MUSHROOM, BlockId.SAPLING, BlockId.PINE_SAPLING, BlockId.BIRCH_SAPLING:
+			return RenderType.CROSS
+		BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS, BlockId.WHEAT_SPROUT, BlockId.POTATO_SPROUT:
+			return RenderType.CROP
+		BlockId.LAVA, BlockId.ICE, BlockId.MONSTER_SPAWNER:
+			return RenderType.CUBE_CUTOUT
+		BlockId.TORCH, BlockId.REDSTONE_TORCH, BlockId.SLAB, BlockId.LEVER, BlockId.BUTTON, BlockId.BED, BlockId.BED_HEAD, BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.LADDER, BlockId.FARMLAND, BlockId.WOOD_STAIRS, BlockId.COBBLE_STAIRS, BlockId.CACTUS:
+			return RenderType.BOX
+	if id > BlockId.BIRCH_SAPLING:
+		return RenderType.NONE
+	return RenderType.CUBE
+
+
+static func _calc_occluder(id: int) -> int:
+	if render_type_table.is_empty():
+		return 0
+	if render_type_table[id] == RenderType.CUBE:
+		return 1
+	return 0
+
+
+static func _calc_light_opacity(id: int) -> int:
+	if id == BlockId.AIR:
+		return 0
+	if is_water(id) or id == BlockId.ICE:
+		return 2
+	if id == BlockId.LEAVES or id == BlockId.PINE_LEAVES or id == BlockId.BIRCH_LEAVES:
+		return 1
+	if render_type_table.is_empty():
+		return 0
+	match render_type_table[id]:
+		RenderType.CUBE:
+			return 15
+		RenderType.CUBE_CUTOUT:
+			return 0 if id == BlockId.LAVA else 1
+		_:
+			return 0
+
+
+static func _calc_luminance(id: int) -> int:
+	match id:
+		BlockId.LAVA, BlockId.GLOWSTONE:
+			return 15
+		BlockId.TORCH:
+			return 14
+		BlockId.REDSTONE_TORCH:
+			return 7
+		_:
+			return 0
+
+
+# ============================================================================
+# CLASSIFICATION
+# ============================================================================
 
 static func is_solid(block_id: int) -> bool:
 	return block_id != BlockId.AIR and not is_water(block_id) and not is_passable_block(block_id)
@@ -193,6 +308,7 @@ static func is_passable_block(block_id: int) -> bool:
 		or block_id == BlockId.REDSTONE_TORCH
 		or block_id == BlockId.LEVER
 		or block_id == BlockId.BUTTON
+		or is_sapling(block_id)
 	)
 
 
@@ -205,41 +321,47 @@ static func is_crop(block_id: int) -> bool:
 	)
 
 
-static func is_opaque_full_cube(block_id: int) -> bool:
-	if not is_solid(block_id):
-		return false
-	if (
-		block_id == BlockId.TORCH
-		or block_id == BlockId.BED
-		or block_id == BlockId.BED_HEAD
-		or block_id == BlockId.DOOR_CLOSED
-		or block_id == BlockId.DOOR_OPEN
-		or block_id == BlockId.LADDER
-		or block_id == BlockId.FARMLAND
-		or block_id == BlockId.WHEAT_CROPS
-		or block_id == BlockId.POTATO_CROPS
-		or block_id == BlockId.WHEAT_SPROUT
-		or block_id == BlockId.POTATO_SPROUT
+static func is_log(block_id: int) -> bool:
+	return block_id == BlockId.WOOD_LOG or block_id == BlockId.PINE_LOG or block_id == BlockId.BIRCH_LOG
+
+
+static func is_leaves(block_id: int) -> bool:
+	return block_id == BlockId.LEAVES or block_id == BlockId.PINE_LEAVES or block_id == BlockId.BIRCH_LEAVES
+
+
+static func is_sapling(block_id: int) -> bool:
+	return block_id == BlockId.SAPLING or block_id == BlockId.PINE_SAPLING or block_id == BlockId.BIRCH_SAPLING
+
+
+static func is_door(block_id: int) -> bool:
+	return block_id == BlockId.DOOR_CLOSED or block_id == BlockId.DOOR_OPEN
+
+
+## True for blocks that pop off when the block underneath them is removed.
+static func needs_support_below(block_id: int) -> bool:
+	return (
+		is_door(block_id)
+		or is_crop(block_id)
+		or is_sapling(block_id)
 		or block_id == BlockId.SUGAR_CANE
-		or block_id == BlockId.SEAGRASS
+		or block_id == BlockId.CACTUS
+		or block_id == BlockId.TORCH
+		or block_id == BlockId.REDSTONE_TORCH
 		or block_id == BlockId.DANDELION
 		or block_id == BlockId.ROSE
 		or block_id == BlockId.BROWN_MUSHROOM
 		or block_id == BlockId.RED_MUSHROOM
-		or block_id == BlockId.ICE
-		or block_id == BlockId.LEAVES
-		or block_id == BlockId.PINE_LEAVES
-		or block_id == BlockId.BIRCH_LEAVES
-		or block_id == BlockId.MONSTER_SPAWNER
-		or block_id == BlockId.WOOD_STAIRS
-		or block_id == BlockId.COBBLE_STAIRS
-		or block_id == BlockId.SLAB
-		or block_id == BlockId.REDSTONE_TORCH
 		or block_id == BlockId.LEVER
-		or block_id == BlockId.BUTTON
-	):
-		return false
-	return true
+	)
+
+
+static func is_opaque_full_cube(block_id: int) -> bool:
+	return render_type_table[block_id & 0xFF] == RenderType.CUBE and not is_leaves(block_id)
+
+
+## True if the block hides adjacent faces (full opaque cubes and the opaque-textured leaves).
+static func is_occluder(block_id: int) -> bool:
+	return occluder_table[block_id & 0xFF] == 1
 
 
 static func is_liquid(block_id: int) -> bool:
@@ -296,13 +418,11 @@ static func is_lava(block_id: int) -> bool:
 
 
 static func is_light_emitter(block_id: int) -> bool:
-	return (
-		block_id == BlockId.GLOWSTONE
-		or block_id == BlockId.FURNACE
-		or block_id == BlockId.TORCH
-		or block_id == BlockId.LAVA
-		or block_id == BlockId.REDSTONE_TORCH
-	)
+	return luminance_table[block_id & 0xFF] > 0
+
+
+static func get_luminance(block_id: int) -> int:
+	return luminance_table[block_id & 0xFF]
 
 
 static func is_interactive_station(block_id: int) -> bool:
@@ -314,72 +434,195 @@ static func is_interactive_station(block_id: int) -> bool:
 
 
 static func is_stone_Or_ore(block_id: int) -> bool:
-	return (
-		block_id == BlockId.STONE
-		or block_id == BlockId.COBBLESTONE
-		or block_id == BlockId.MOSSY_COBBLE
-		or block_id == BlockId.SANDSTONE
-		or block_id == BlockId.COAL_ORE
-		or block_id == BlockId.IRON_ORE
-		or block_id == BlockId.GOLD_ORE
-		or block_id == BlockId.DIAMOND_ORE
-		or block_id == BlockId.FURNACE
-		or block_id == BlockId.OBSIDIAN
-		or block_id == BlockId.REDSTONE_ORE
-		or block_id == BlockId.LAPIS_ORE
-		or block_id == BlockId.MONSTER_SPAWNER
-		or block_id == BlockId.BEDROCK
-		or block_id == BlockId.GOLD_BLOCK
-		or block_id == BlockId.IRON_BLOCK
-		or block_id == BlockId.DIAMOND_BLOCK
-		or block_id == BlockId.LAPIS_BLOCK
-		or block_id == BlockId.COBBLE_STAIRS
-		or block_id == BlockId.SLAB
-	)
+	return get_effective_tool(block_id) == TOOL_PICKAXE
 
 
-## Base time in seconds to break this block by hand (reduced by equipped Pickaxe multiplier).
+# ============================================================================
+# MINING
+# ============================================================================
+
+## Block hardness on the classic scale (stone = 1.5, obsidian = 50). 0 breaks instantly,
+## -1 cannot be broken. Break time = hardness * 1.5 / tool speed (x5 without the right tool).
 static func get_block_hardness(block_id: int) -> float:
 	if is_liquid(block_id) or block_id == BlockId.AIR:
-		return 0.0
+		return -1.0
 	match block_id:
 		BlockId.BEDROCK:
-			return -1.0 # Indestructible in survival
-		BlockId.DANDELION, BlockId.ROSE, BlockId.BROWN_MUSHROOM, BlockId.RED_MUSHROOM:
-			return 0.05
-		BlockId.TORCH, BlockId.TNT, BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS, BlockId.SUGAR_CANE, BlockId.SEAGRASS, BlockId.REDSTONE_TORCH, BlockId.LEVER, BlockId.BUTTON:
-			return 0.10
-		BlockId.WHEAT_SPROUT, BlockId.POTATO_SPROUT:
-			return 0.05
-		BlockId.WOOL:
-			return 0.35
-		BlockId.FARMLAND, BlockId.GRAVEL, BlockId.CLAY:
-			return 0.38
-		BlockId.ICE:
-			return 0.30
-		BlockId.LEAVES, BlockId.PINE_LEAVES, BlockId.BIRCH_LEAVES, BlockId.SNOW, BlockId.CACTUS, BlockId.BED, BlockId.BED_HEAD:
-			return 0.24
-		BlockId.GRASS, BlockId.DIRT, BlockId.SAND, BlockId.LADDER:
-			return 0.38
-		BlockId.WOOD_LOG, BlockId.PINE_LOG, BlockId.BIRCH_LOG, BlockId.WOOD_PLANKS, BlockId.CRAFTING_TABLE, BlockId.CHEST, BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.GLOWSTONE, BlockId.WOOD_STAIRS:
-			return 0.65
-		BlockId.STONE, BlockId.COBBLESTONE, BlockId.MOSSY_COBBLE, BlockId.SANDSTONE, BlockId.COAL_ORE, BlockId.FURNACE, BlockId.COBBLE_STAIRS, BlockId.SLAB:
-			return 1.15
-		BlockId.IRON_ORE, BlockId.REDSTONE_ORE, BlockId.LAPIS_ORE:
-			return 1.45
-		BlockId.GOLD_ORE:
-			return 1.75
-		BlockId.DIAMOND_ORE:
-			return 2.10
-		BlockId.MONSTER_SPAWNER:
-			return 2.50
-		BlockId.GOLD_BLOCK, BlockId.IRON_BLOCK, BlockId.DIAMOND_BLOCK, BlockId.LAPIS_BLOCK:
-			return 3.00
-		BlockId.OBSIDIAN:
-			return 4.50
-		_:
+			return -1.0
+		BlockId.TORCH, BlockId.REDSTONE_TORCH, BlockId.TNT, BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS, BlockId.WHEAT_SPROUT, BlockId.POTATO_SPROUT, BlockId.SUGAR_CANE, BlockId.SEAGRASS, BlockId.DANDELION, BlockId.ROSE, BlockId.BROWN_MUSHROOM, BlockId.RED_MUSHROOM, BlockId.SAPLING, BlockId.PINE_SAPLING, BlockId.BIRCH_SAPLING:
+			return 0.0
+		BlockId.LEAVES, BlockId.PINE_LEAVES, BlockId.BIRCH_LEAVES, BlockId.SNOW, BlockId.BED, BlockId.BED_HEAD:
+			return 0.2
+		BlockId.GLOWSTONE:
+			return 0.3
+		BlockId.CACTUS, BlockId.LADDER:
+			return 0.4
+		BlockId.DIRT, BlockId.SAND, BlockId.ICE, BlockId.LEVER, BlockId.BUTTON:
 			return 0.5
+		BlockId.GRASS, BlockId.GRAVEL, BlockId.CLAY, BlockId.FARMLAND:
+			return 0.6
+		BlockId.SANDSTONE, BlockId.WOOL:
+			return 0.8
+		BlockId.STONE:
+			return 1.5
+		BlockId.COBBLESTONE, BlockId.MOSSY_COBBLE, BlockId.WOOD_LOG, BlockId.PINE_LOG, BlockId.BIRCH_LOG, BlockId.WOOD_PLANKS, BlockId.WOOD_STAIRS, BlockId.COBBLE_STAIRS, BlockId.SLAB:
+			return 2.0
+		BlockId.CRAFTING_TABLE, BlockId.CHEST:
+			return 2.5
+		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.COAL_ORE, BlockId.IRON_ORE, BlockId.GOLD_ORE, BlockId.DIAMOND_ORE, BlockId.REDSTONE_ORE, BlockId.LAPIS_ORE, BlockId.GOLD_BLOCK, BlockId.LAPIS_BLOCK:
+			return 3.0
+		BlockId.FURNACE:
+			return 3.5
+		BlockId.MONSTER_SPAWNER, BlockId.IRON_BLOCK, BlockId.DIAMOND_BLOCK:
+			return 5.0
+		BlockId.OBSIDIAN:
+			return 50.0
+		_:
+			return 1.0
 
+
+## Tool category that mines this block faster (TOOL_* constants).
+static func get_effective_tool(block_id: int, meta: int = 0) -> int:
+	match block_id:
+		BlockId.STONE, BlockId.COBBLESTONE, BlockId.MOSSY_COBBLE, BlockId.SANDSTONE, BlockId.COAL_ORE, BlockId.IRON_ORE, BlockId.GOLD_ORE, BlockId.DIAMOND_ORE, BlockId.REDSTONE_ORE, BlockId.LAPIS_ORE, BlockId.FURNACE, BlockId.OBSIDIAN, BlockId.MONSTER_SPAWNER, BlockId.GOLD_BLOCK, BlockId.IRON_BLOCK, BlockId.DIAMOND_BLOCK, BlockId.LAPIS_BLOCK, BlockId.COBBLE_STAIRS, BlockId.BUTTON, BlockId.ICE, BlockId.BEDROCK:
+			return TOOL_PICKAXE
+		BlockId.SLAB:
+			return TOOL_AXE if meta == 2 else TOOL_PICKAXE
+		BlockId.WOOD_LOG, BlockId.PINE_LOG, BlockId.BIRCH_LOG, BlockId.WOOD_PLANKS, BlockId.CRAFTING_TABLE, BlockId.CHEST, BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.LADDER, BlockId.WOOD_STAIRS:
+			return TOOL_AXE
+		BlockId.GRASS, BlockId.DIRT, BlockId.SAND, BlockId.GRAVEL, BlockId.CLAY, BlockId.SNOW, BlockId.FARMLAND:
+			return TOOL_SHOVEL
+		_:
+			return TOOL_NONE
+
+
+## Minimum pickaxe harvest level needed for the block to drop anything
+## (-1 = no tool needed, 0 = wood/gold, 1 = stone, 2 = iron, 3 = diamond).
+static func get_required_harvest_level(block_id: int, meta: int = 0) -> int:
+	match block_id:
+		BlockId.STONE, BlockId.COBBLESTONE, BlockId.MOSSY_COBBLE, BlockId.SANDSTONE, BlockId.COAL_ORE, BlockId.FURNACE, BlockId.MONSTER_SPAWNER, BlockId.COBBLE_STAIRS:
+			return 0
+		BlockId.SLAB:
+			return -1 if meta == 2 else 0
+		BlockId.IRON_ORE, BlockId.IRON_BLOCK, BlockId.LAPIS_ORE, BlockId.LAPIS_BLOCK:
+			return 1
+		BlockId.GOLD_ORE, BlockId.GOLD_BLOCK, BlockId.DIAMOND_ORE, BlockId.DIAMOND_BLOCK, BlockId.REDSTONE_ORE:
+			return 2
+		BlockId.OBSIDIAN:
+			return 3
+		_:
+			return -1
+
+
+# ============================================================================
+# SHAPES (shared by the mesher, collision and the selection outline)
+# ============================================================================
+
+## Door metadata: bits 0-1 = facing (0 = +X, 1 = +Z, 2 = -X, 3 = -Z; the direction the player looked
+## when placing it), bit 2 = hinge on the right. Open/closed is the block id; the upper half is the
+## door block that has another door block below it.
+static func door_facing_dir(meta: int) -> Vector3i:
+	match meta & 3:
+		0:
+			return Vector3i(1, 0, 0)
+		1:
+			return Vector3i(0, 0, 1)
+		2:
+			return Vector3i(-1, 0, 0)
+		_:
+			return Vector3i(0, 0, -1)
+
+
+static func door_meta_from_dir(dir: Vector3i, hinge_right: bool) -> int:
+	var f: int = 0
+	if dir == Vector3i(0, 0, 1):
+		f = 1
+	elif dir == Vector3i(-1, 0, 0):
+		f = 2
+	elif dir == Vector3i(0, 0, -1):
+		f = 3
+	return f | (4 if hinge_right else 0)
+
+
+## Returns the boxes (in block-local 0..1 space) that make up a non-cube block.
+static func get_shape_boxes(block_id: int, meta: int = 0) -> Array[AABB]:
+	match block_id:
+		BlockId.TORCH, BlockId.REDSTONE_TORCH:
+			return [AABB(Vector3(0.4375, 0.0, 0.4375), Vector3(0.125, 0.625, 0.125))]
+		BlockId.SLAB:
+			return [AABB(Vector3.ZERO, Vector3(1.0, 0.5, 1.0))]
+		BlockId.LEVER:
+			return [AABB(Vector3(0.375, 0.0, 0.3125), Vector3(0.25, 0.6, 0.375))]
+		BlockId.BUTTON:
+			return [AABB(Vector3(0.3125, 0.375, 0.0), Vector3(0.375, 0.25, 0.125))]
+		BlockId.BED, BlockId.BED_HEAD:
+			return [AABB(Vector3.ZERO, Vector3(1.0, 0.5625, 1.0))]
+		BlockId.LADDER:
+			return [AABB(Vector3(0.0, 0.0, 0.4375), Vector3(1.0, 1.0, 0.125))]
+		BlockId.FARMLAND:
+			return [AABB(Vector3.ZERO, Vector3(1.0, 0.9375, 1.0))]
+		BlockId.CACTUS:
+			return [AABB(Vector3(0.0625, 0.0, 0.0625), Vector3(0.875, 1.0, 0.875))]
+		BlockId.WOOD_STAIRS, BlockId.COBBLE_STAIRS:
+			var step := AABB(Vector3(0.0, 0.5, 0.5), Vector3(1.0, 0.5, 0.5))
+			match meta & 3:
+				0: # Ascending toward +X
+					step = AABB(Vector3(0.5, 0.5, 0.0), Vector3(0.5, 0.5, 1.0))
+				1: # -X
+					step = AABB(Vector3(0.0, 0.5, 0.0), Vector3(0.5, 0.5, 1.0))
+				2: # +Z
+					step = AABB(Vector3(0.0, 0.5, 0.5), Vector3(1.0, 0.5, 0.5))
+				3: # -Z
+					step = AABB(Vector3(0.0, 0.5, 0.0), Vector3(1.0, 0.5, 0.5))
+			return [AABB(Vector3.ZERO, Vector3(1.0, 0.5, 1.0)), step]
+		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
+			return [get_door_box(meta, block_id == BlockId.DOOR_OPEN)]
+		_:
+			return [AABB(Vector3.ZERO, Vector3.ONE)]
+
+
+## A closed door sits against the block edge nearest to the player who placed it; opening swings it
+## 90 degrees around its hinge so it lies along the hinge-side edge.
+static func get_door_box(meta: int, is_open: bool) -> AABB:
+	const T: float = 3.0 / 16.0
+	var f: Vector3i = door_facing_dir(meta)
+	var edge: Vector3i = -f
+	if is_open:
+		var left := Vector3i(f.z, 0, -f.x)
+		edge = -left if (meta & 4) != 0 else left
+	if edge.x > 0:
+		return AABB(Vector3(1.0 - T, 0.0, 0.0), Vector3(T, 1.0, 1.0))
+	if edge.x < 0:
+		return AABB(Vector3(0.0, 0.0, 0.0), Vector3(T, 1.0, 1.0))
+	if edge.z > 0:
+		return AABB(Vector3(0.0, 0.0, 1.0 - T), Vector3(1.0, 1.0, T))
+	return AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 1.0, T))
+
+
+## Outline box used for the targeted-block highlight.
+static func get_selection_box(block_id: int, meta: int = 0) -> AABB:
+	match render_type_table[block_id & 0xFF]:
+		RenderType.BOX:
+			var boxes: Array[AABB] = get_shape_boxes(block_id, meta)
+			var merged: AABB = boxes[0]
+			for i in range(1, boxes.size()):
+				merged = merged.merge(boxes[i])
+			return merged
+		RenderType.CROSS:
+			if block_id == BlockId.SUGAR_CANE:
+				return AABB(Vector3(0.125, 0.0, 0.125), Vector3(0.75, 1.0, 0.75))
+			return AABB(Vector3(0.1875, 0.0, 0.1875), Vector3(0.625, 0.8125, 0.625))
+		RenderType.CROP:
+			if block_id == BlockId.WHEAT_SPROUT or block_id == BlockId.POTATO_SPROUT:
+				return AABB(Vector3.ZERO, Vector3(1.0, 0.25, 1.0))
+			return AABB(Vector3.ZERO, Vector3(1.0, 0.875, 1.0))
+		_:
+			return AABB(Vector3.ZERO, Vector3.ONE)
+
+
+# ============================================================================
+# NAMES & COLORS
+# ============================================================================
 
 static func get_block_name(block_id: int) -> String:
 	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FALLING:
@@ -394,9 +637,9 @@ static func get_block_name(block_id: int) -> String:
 		BlockId.STONE:
 			return "Stone"
 		BlockId.WOOD_LOG:
-			return "Wood Log"
+			return "Oak Log"
 		BlockId.LEAVES:
-			return "Leaves"
+			return "Oak Leaves"
 		BlockId.SAND:
 			return "Sand"
 		BlockId.COBBLESTONE:
@@ -474,9 +717,9 @@ static func get_block_name(block_id: int) -> String:
 		BlockId.RED_MUSHROOM:
 			return "Red Mushroom"
 		BlockId.PINE_LOG:
-			return "Pine Log"
+			return "Spruce Log"
 		BlockId.PINE_LEAVES:
-			return "Pine Leaves"
+			return "Spruce Leaves"
 		BlockId.BIRCH_LOG:
 			return "Birch Log"
 		BlockId.BIRCH_LEAVES:
@@ -509,6 +752,12 @@ static func get_block_name(block_id: int) -> String:
 			return "Cobblestone Stairs"
 		BlockId.SLAB:
 			return "Slab"
+		BlockId.SAPLING:
+			return "Oak Sapling"
+		BlockId.PINE_SAPLING:
+			return "Spruce Sapling"
+		BlockId.BIRCH_SAPLING:
+			return "Birch Sapling"
 		_:
 			return "Unknown"
 
@@ -569,8 +818,6 @@ static func get_block_color(block_id: int, meta: int = 0) -> Color:
 			return Color(0.18, 0.58, 0.22)
 		BlockId.MOSSY_COBBLE:
 			return Color(0.34, 0.52, 0.32)
-		BlockId.WOOL:
-			return Color(0.95, 0.95, 0.95)
 		BlockId.FARMLAND:
 			return Color(0.40, 0.26, 0.14)
 		BlockId.WHEAT_CROPS:
@@ -639,8 +886,25 @@ static func get_block_color(block_id: int, meta: int = 0) -> Color:
 			return Color(0.42, 0.44, 0.46)
 		BlockId.SLAB:
 			return Color(0.52, 0.54, 0.56)
+		BlockId.SAPLING, BlockId.PINE_SAPLING, BlockId.BIRCH_SAPLING:
+			return Color(0.30, 0.55, 0.20)
 		_:
 			return Color.GRAY
+
+
+# ============================================================================
+# TEXTURES
+# ============================================================================
+
+## Log metadata: bits 0-1 = axis (0 = vertical, 1 = along X, 2 = along Z).
+static func log_end_faces_match(face_dir: int, axis: int) -> bool:
+	match axis:
+		1:
+			return face_dir == FaceDir.EAST or face_dir == FaceDir.WEST
+		2:
+			return face_dir == FaceDir.SOUTH or face_dir == FaceDir.NORTH
+		_:
+			return face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM
 
 
 static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
@@ -657,19 +921,13 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 		BlockId.STONE:
 			return 3
 		BlockId.WOOD_LOG:
-			if meta == 1:
-				return 5 if (face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM) else 53
-			elif meta == 2:
-				return 5 if (face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM) else 55
-			else:
-				return 5 if (face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM) else 4
+			return 5 if log_end_faces_match(face_dir, meta & 3) else 4
+		BlockId.PINE_LOG:
+			return TILE_PINE_LOG_TOP if log_end_faces_match(face_dir, meta & 3) else 53
+		BlockId.BIRCH_LOG:
+			return TILE_BIRCH_LOG_TOP if log_end_faces_match(face_dir, meta & 3) else 55
 		BlockId.LEAVES:
-			if meta == 1:
-				return 54
-			elif meta == 2:
-				return 56
-			else:
-				return 6
+			return 6
 		BlockId.SAND:
 			return 7
 		BlockId.COBBLESTONE:
@@ -740,7 +998,7 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 		BlockId.BED, BlockId.BED_HEAD:
 			return 22
 		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
-			return 23
+			return TILE_DOOR
 		BlockId.LADDER:
 			return 24
 		BlockId.TNT:
@@ -799,18 +1057,8 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 			return 51
 		BlockId.RED_MUSHROOM:
 			return 52
-		BlockId.PINE_LOG:
-			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
-				return 5
-			else:
-				return 53
 		BlockId.PINE_LEAVES:
 			return 54
-		BlockId.BIRCH_LOG:
-			if face_dir == FaceDir.TOP or face_dir == FaceDir.BOTTOM:
-				return 5
-			else:
-				return 55
 		BlockId.BIRCH_LEAVES:
 			return 56
 		BlockId.MONSTER_SPAWNER:
@@ -821,8 +1069,25 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 			return 59
 		BlockId.LAPIS_ORE:
 			return 60
+		BlockId.SAPLING:
+			return TILE_OAK_SAPLING
+		BlockId.PINE_SAPLING:
+			return TILE_PINE_SAPLING
+		BlockId.BIRCH_SAPLING:
+			return TILE_BIRCH_SAPLING
 		_:
 			return 3
+
+
+## Atlas tile actually present in the loaded atlas (falls back if the atlas is narrower).
+static func resolve_tile(tile_idx: int) -> int:
+	var cols: int = atlas_columns if atlas_columns > 0 else ATLAS_TILE_COUNT
+	var t: int = tile_idx
+	var guard: int = 0
+	while t >= cols and guard < 4:
+		t = int(EXTENDED_TILE_FALLBACK.get(t, 3))
+		guard += 1
+	return t if t < cols else 3
 
 
 static var _uv_rect_cache: Dictionary = {}
@@ -835,9 +1100,7 @@ static func get_tile_uv_rect(block_id: int, face_dir: int, meta: int = 0) -> Rec
 	if atlas_columns <= 0:
 		VoxelAtlasBuilder.get_atlas_texture()
 	var cols: int = maxi(atlas_columns, 1)
-	var tile_idx: int = get_tile_index(block_id, face_dir, meta)
-	if tile_idx >= cols:
-		tile_idx = int(EXTENDED_TILE_FALLBACK.get(tile_idx, 3))
+	var tile_idx: int = resolve_tile(get_tile_index(block_id, face_dir, meta))
 	var u_step: float = 1.0 / float(cols)
 	var uv_margin: float = u_step * 0.015
 	var u0: float = float(tile_idx) * u_step + uv_margin

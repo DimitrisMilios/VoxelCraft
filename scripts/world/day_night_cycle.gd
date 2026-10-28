@@ -21,6 +21,7 @@ var time_of_day: float:
 		_apply_lighting(current_hour)
 
 var _sun_light: DirectionalLight3D = null
+var _last_applied_hour: float = -100.0
 var _world_env: WorldEnvironment = null
 var _sun_mesh: MeshInstance3D = null
 var _moon_mesh: MeshInstance3D = null
@@ -88,22 +89,21 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
-	var water_mat: Material = VoxelAtlasBuilder.get_shared_water_material()
-	if water_mat is StandardMaterial3D:
-		(water_mat as StandardMaterial3D).uv1_offset += Vector3(delta * 0.08, delta * 0.04, delta * 0.06)
-
 	if day_length_seconds <= 0.0:
 		return
 	var hours_per_sec: float = 24.0 / day_length_seconds
-	advance_hours(hours_per_sec * delta)
+	advance_hours(hours_per_sec * delta, false)
 
 
-func advance_hours(delta_hours: float) -> void:
+func advance_hours(delta_hours: float, force_update: bool = true) -> void:
 	current_hour += delta_hours
 	while current_hour >= 24.0:
 		current_hour -= 24.0
 		day_number += 1
-	_apply_lighting(current_hour)
+	# Sky, sun and fog only need refreshing about once a second of game time; changing the sky
+	# material every frame forces the renderer to rebuild the sky each frame.
+	if force_update or absf(current_hour - _last_applied_hour) >= 0.01:
+		_apply_lighting(current_hour)
 
 
 func is_night_time() -> bool:
@@ -126,10 +126,12 @@ func get_formatted_time() -> String:
 
 
 func _apply_lighting(hour: float) -> void:
+	_last_applied_hour = hour
 	# Convert hour (0..24) into sun elevation angle:
 	# 6:00 = sunrise (0 deg), 12:00 = zenith (90 deg), 18:00 = sunset (180 deg), 0:00 = nadir (270 deg)
 	var sun_phase: float = ((hour - 6.0) / 24.0) * TAU
 	var sun_height: float = sin(sun_phase) # -1.0 (midnight) to +1.0 (noon)
+	_update_terrain_light_globals(sun_height)
 
 	if _sun_light != null:
 		var pitch_angle: float = -sun_phase
@@ -172,3 +174,17 @@ func _apply_lighting(hour: float) -> void:
 			sky_mat.sky_top_color = top_col
 			sky_mat.sky_horizon_color = horizon_col
 			sky_mat.ground_horizon_color = horizon_col
+
+
+## Terrain is unshaded with baked light levels; the day/night cycle just tells the shaders how
+## much to darken skylight (0 at noon, 11 levels at midnight) and what color it has.
+func _update_terrain_light_globals(sun_height: float) -> void:
+	var daylight: float = clampf((sun_height + 0.18) / 1.18, 0.0, 1.0)
+	var darken: float = (1.0 - daylight) * 11.0
+	var twilight: float = clampf(1.0 - absf(sun_height) * 3.5, 0.0, 1.0)
+	var night_tint := Color(0.70, 0.76, 1.0)
+	var day_tint := Color(1.0, 1.0, 1.0)
+	var dusk_tint := Color(1.0, 0.86, 0.72)
+	var tint: Color = night_tint.lerp(day_tint, daylight).lerp(dusk_tint, twilight * 0.35)
+	RenderingServer.global_shader_parameter_set("vc_sky_darken", darken)
+	RenderingServer.global_shader_parameter_set("vc_sky_tint", Vector3(tint.r, tint.g, tint.b))
