@@ -203,6 +203,20 @@ static func _add_derived_tiles(img: Image, ts: int, first_new: int) -> void:
 	_put(img, BlockRegistry.TILE_PINE_SAPLING, ts, _sapling(ts, _tile(img, 54, ts), spruce_side, true))
 	_put(img, BlockRegistry.TILE_BIRCH_SAPLING, ts, _sapling(ts, _tile(img, 56, ts), birch_side, false))
 
+	_put(img, BlockRegistry.TILE_GLASS, ts, _glass(ts))
+	var door: Image = _tile(img, BlockRegistry.TILE_DOOR, ts)
+	var planks: Image = _tile(img, 9, ts)
+	_put(img, BlockRegistry.TILE_DOOR_TOP, ts, _door_half(door, planks, true))
+	_put(img, BlockRegistry.TILE_DOOR_BOTTOM, ts, _door_half(door, planks, false))
+
+	var wheat: Image = _tile(img, 38, ts)
+	for age in range(BlockRegistry.CROP_MAX_SPROUT_AGE + 1):
+		var t: float = float(age + 1) / 8.0
+		_put(img, BlockRegistry.TILE_WHEAT_STAGE_0 + age, ts, _crop_stage(wheat, 0.30 + 0.70 * t, float(age) / 7.0))
+	var potato: Image = _tile(img, 39, ts)
+	for stage in range(3):
+		_put(img, BlockRegistry.TILE_POTATO_STAGE_0 + stage, ts, _crop_stage(potato, 0.35 + 0.65 * float(stage + 1) / 4.0, 1.0))
+
 
 static func _average_lum(src: Image) -> float:
 	var total: float = 0.0
@@ -364,6 +378,78 @@ static func _recolor_ore(stone: Image, coal: Image, ore: Color) -> Image:
 			if diff > 0.18:
 				var k: float = clampf(0.55 + (1.0 - _lum(c)) * 0.7, 0.5, 1.25)
 				out.set_pixel(x, y, Color(clampf(ore.r * k, 0.0, 1.0), clampf(ore.g * k, 0.0, 1.0), clampf(ore.b * k, 0.0, 1.0), 1.0))
+	return out
+
+
+## Clear glass: a light frame around the edge plus a few diagonal glints; everything else is see-through.
+static func _glass(ts: int) -> Image:
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	out.fill(Color(0, 0, 0, 0))
+	var px: int = maxi(1, ts / 16)
+	var frame := Color(0.86, 0.93, 0.97, 1.0)
+	var shade := Color(0.66, 0.78, 0.84, 1.0)
+	for y in range(ts):
+		for x in range(ts):
+			var gx: int = x / px
+			var gy: int = y / px
+			if gx == 0 or gy == 0:
+				out.set_pixel(x, y, frame)
+			elif gx == 15 or gy == 15:
+				out.set_pixel(x, y, shade)
+			# Short diagonal glints in two corners.
+			elif (gx + gy == 6 and gx >= 2 and gx <= 4) or (gx + gy == 21 and gx >= 10 and gx <= 13) or (gx + gy == 8 and gx >= 3 and gx <= 4):
+				out.set_pixel(x, y, Color(0.95, 0.98, 1.0, 1.0))
+	return out
+
+
+## Rebuilds one door half at full tile resolution from the combined door tile (which stores each half
+## squashed to half height): rows are interpolated back to full height, wood gets vertical grain from
+## the planks texture, and the dark window panes become see-through.
+static func _door_half(door: Image, planks: Image, top: bool) -> Image:
+	var ts: int = door.get_width()
+	var half_h: int = door.get_height() / 2
+	var base_row: int = 0 if top else half_h
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	var glass := Color(0.14, 0.18, 0.24)
+	var plank_avg: float = _average_lum(planks)
+	for y in range(ts):
+		var src_f: float = float(y) * float(half_h) / float(ts)
+		var r0: int = mini(int(src_f), half_h - 1)
+		var r1: int = mini(r0 + 1, half_h - 1)
+		var frac: float = src_f - float(r0)
+		for x in range(ts):
+			var c0: Color = door.get_pixel(x, base_row + r0)
+			var c1: Color = door.get_pixel(x, base_row + r1)
+			var is_glass0: bool = absf(c0.r - glass.r) + absf(c0.g - glass.g) + absf(c0.b - glass.b) < 0.06
+			if is_glass0:
+				out.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			var is_glass1: bool = absf(c1.r - glass.r) + absf(c1.g - glass.g) + absf(c1.b - glass.b) < 0.06
+			var c: Color = c0 if is_glass1 else c0.lerp(c1, frac * 0.5)
+			# Door boards run vertically, so take grain from the planks texture turned on its side.
+			var grain: float = lerpf(1.0, _lum(planks.get_pixel(y, x)) / plank_avg, 0.35)
+			out.set_pixel(x, y, Color(clampf(c.r * grain, 0.0, 1.0), clampf(c.g * grain, 0.0, 1.0), clampf(c.b * grain, 0.0, 1.0), 1.0))
+	return out
+
+
+## A younger crop: the mature plant scaled down into the bottom `height_frac` of the tile, shifting
+## from fresh green toward its ripe colors as `ripeness` goes from 0 to 1.
+static func _crop_stage(mature: Image, height_frac: float, ripeness: float) -> Image:
+	var ts: int = mature.get_width()
+	var out := Image.create(ts, ts, false, Image.FORMAT_RGBA8)
+	out.fill(Color(0, 0, 0, 0))
+	var plant_h: int = maxi(1, int(float(ts) * height_frac))
+	var top: int = ts - plant_h
+	var green := Color(0.33, 0.70, 0.20)
+	for y in range(top, ts):
+		var sy: int = clampi(int(float(y - top) * float(ts) / float(plant_h)), 0, ts - 1)
+		for x in range(ts):
+			var c: Color = mature.get_pixel(x, sy)
+			if c.a < 0.5:
+				continue
+			var k: float = clampf(_lum(c) * 1.6, 0.35, 1.25)
+			var young := Color(clampf(green.r * k, 0.0, 1.0), clampf(green.g * k, 0.0, 1.0), clampf(green.b * k, 0.0, 1.0), 1.0)
+			out.set_pixel(x, y, young.lerp(Color(c.r, c.g, c.b, 1.0), ripeness))
 	return out
 
 

@@ -182,7 +182,7 @@ Replace `[Material]` with **Leather**, **Iron Ingot**, **Gold Ingot**, or **Diam
 #### Wooden Door (2-Block Swinging Door)
 ```
 [ Planks ] [ Planks ] [        ]
-[ Planks ] [ Planks ] [        ]  -->  1x Wooden Door
+[ Planks ] [ Planks ] [        ]  -->  3x Wooden Doors
 [ Planks ] [ Planks ] [        ]
 ```
 

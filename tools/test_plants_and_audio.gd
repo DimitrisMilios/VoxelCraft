@@ -107,9 +107,11 @@ func _init() -> void:
 		print("PASS: Raycast voxel ray-march successfully targeted the passable WHEAT_SPROUT.")
 
 	# 4. Sprout Growth: Simulate growth ticking to full maturity
-	assert(world_mgr._active_crops.has(test_crop_pos), "WorldManager must track planted sprout in _active_crops")
-	world_mgr._active_crops[test_crop_pos] = 11.5
-	world_mgr._process_crop_growth(1.0)
+	# Crops grow through 7 stages on random ticks; force enough ticks to ripen it.
+	for i in range(3000):
+		if world_mgr.get_block_world(test_crop_pos) != BlockRegistry.BlockId.WHEAT_SPROUT:
+			break
+		world_mgr.random_tick_block(test_crop_pos)
 	var matured_id: int = world_mgr.get_block_world(test_crop_pos)
 	assert(matured_id == BlockRegistry.BlockId.WHEAT_CROPS, "Sprout must grow into mature WHEAT_CROPS (got %d)" % matured_id)
 	print("PASS: Sprout successfully grew to mature WHEAT_CROPS over time.")
@@ -145,8 +147,10 @@ func _init() -> void:
 	interactor.select_slot(3)
 	interactor._try_interact_or_place_block()
 	assert(world_mgr.get_block_world(test_crop_pos) == BlockRegistry.BlockId.POTATO_SPROUT, "Planting Potato must place POTATO_SPROUT")
-	world_mgr._active_crops[test_crop_pos] = 11.5
-	world_mgr._process_crop_growth(1.0)
+	for i in range(3000):
+		if world_mgr.get_block_world(test_crop_pos) != BlockRegistry.BlockId.POTATO_SPROUT:
+			break
+		world_mgr.random_tick_block(test_crop_pos)
 	assert(world_mgr.get_block_world(test_crop_pos) == BlockRegistry.BlockId.POTATO_CROPS, "Potato Sprout must grow into POTATO_CROPS")
 
 	# Right-click harvest potatoes

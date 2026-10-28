@@ -718,7 +718,7 @@ static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: i
 	if not can_harvest_block(equipped_item_id, broken_block_id):
 		return 0
 	match broken_block_id:
-		BlockRegistry.BlockId.BEDROCK, BlockRegistry.BlockId.ICE, BlockRegistry.BlockId.MONSTER_SPAWNER:
+		BlockRegistry.BlockId.BEDROCK, BlockRegistry.BlockId.ICE, BlockRegistry.BlockId.MONSTER_SPAWNER, BlockRegistry.BlockId.GLASS:
 			return 0
 		BlockRegistry.BlockId.STONE:
 			return BlockRegistry.BlockId.COBBLESTONE
@@ -2046,7 +2046,7 @@ func _match_crafting_grid() -> Dictionary:
 	# 7. 2x3 Patterns (Axes, Hoes, Wooden Door)
 	if box_w == 2 and box_h == 3:
 		if pattern == [P, P, P, P, P, P]:
-			return {"id": BlockRegistry.BlockId.DOOR_CLOSED, "count": 2}
+			return {"id": BlockRegistry.BlockId.DOOR_CLOSED, "count": 3}
 
 		# Axes (both left and right mirror)
 		var axe_mats: Array[Array] = [
@@ -2409,7 +2409,7 @@ static func _get_smelt_result(input_id: int) -> int:
 		BlockRegistry.BlockId.WOOD_LOG, BlockRegistry.BlockId.PINE_LOG, BlockRegistry.BlockId.BIRCH_LOG:
 			return ItemId.COAL # Charcoal
 		BlockRegistry.BlockId.SAND:
-			return BlockRegistry.BlockId.GLOWSTONE
+			return BlockRegistry.BlockId.GLASS
 		_:
 			return 0
 

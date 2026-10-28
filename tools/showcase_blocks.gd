@@ -85,6 +85,12 @@ func _build() -> void:
 		_put_block(Vector3i(x, 2, 3), B.SUGAR_CANE)
 	_put_block(Vector3i(10, 3, 3), B.SUGAR_CANE)
 	_put_block(Vector3i(11, 1, 2), B.TORCH)
+	# Wheat at every growth stage, then ripe; a glass window.
+	for age in range(7):
+		_put_block(Vector3i(age, 0, 1), B.FARMLAND)
+		_put_block(Vector3i(age, 1, 1), B.WHEAT_SPROUT, age)
+	_put_block(Vector3i(13, 1, 2), B.GLASS)
+	_put_block(Vector3i(13, 2, 2), B.GLASS)
 
 
 func _process(_delta: float) -> bool:

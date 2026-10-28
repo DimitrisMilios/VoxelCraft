@@ -22,6 +22,8 @@ func _initialize() -> void:
 	_test_sugar_cane(wm)
 	_test_logs_and_leaf_decay(wm)
 	_test_lighting(wm)
+	_test_crops(wm)
+	_test_glass_and_recipes()
 	_test_generated_sugar_cane()
 	wm.free()
 
@@ -245,3 +247,50 @@ func _test_generated_sugar_cane() -> void:
 			chunk.free()
 	print("  (found %d sugar cane stalks)" % cane_total)
 	_check(bad == 0, "Every generated stalk has water beside its base")
+
+
+func _test_crops(wm: WorldManager) -> void:
+	print("[9] Crop growth stages")
+	var soil := Vector3i(13, 63, 13)
+	var crop := soil + Vector3i(0, 1, 0)
+	wm.set_block_world(soil, B.FARMLAND)
+	wm.set_block_world(crop, B.WHEAT_SPROUT)
+	_check(BlockRegistry.get_tile_index(B.WHEAT_SPROUT, 0, 3) == BlockRegistry.TILE_WHEAT_STAGE_0 + 3, "Each wheat age has its own texture")
+	_check(not wm.is_farmland_hydrated(soil), "Farmland without water nearby is dry")
+	var ticks_dry: int = 0
+	while wm.get_block_world(crop) == B.WHEAT_SPROUT and ticks_dry < 5000:
+		wm.random_tick_block(crop)
+		ticks_dry += 1
+	_check(wm.get_block_world(crop) == B.WHEAT_CROPS, "Wheat ripens through random ticks")
+	wm.set_block_world(soil + Vector3i(2, 0, 0), B.WATER)
+	_check(wm.is_farmland_hydrated(soil), "Water within 4 blocks hydrates farmland")
+	# Average over several plantings: watered farmland should ripen in far fewer ticks.
+	var total_wet: int = 0
+	var total_dry: int = ticks_dry
+	for i in range(6):
+		wm.set_block_world(crop, B.WHEAT_SPROUT)
+		var t: int = 0
+		while wm.get_block_world(crop) == B.WHEAT_SPROUT and t < 5000:
+			wm.random_tick_block(crop)
+			t += 1
+		total_wet += t
+	print("  (dry: %d ticks once, watered: %.1f ticks on average; 7 stages)" % [total_dry, total_wet / 6.0])
+	_check(total_wet / 6.0 > 7.0 * 3.0 and total_wet / 6.0 < 7.0 * 14.0, "Watered wheat needs about 7 x 7 random ticks")
+	wm.set_block_world(soil + Vector3i(2, 0, 0), B.GRASS)
+	wm.set_block_world(crop, B.AIR)
+
+
+func _test_glass_and_recipes() -> void:
+	print("[10] Glass and recipes")
+	_check(InventoryManager._get_smelt_result(B.SAND) == B.GLASS, "Sand smelts into glass")
+	_check(BlockRegistry.render_type_table[B.GLASS] == BlockRegistry.RenderType.CUBE_CUTOUT and not BlockRegistry.is_occluder(B.GLASS), "Glass is see-through")
+	_check(VoxelLighting.get_block_opacity(B.GLASS) == 0, "Light passes through glass")
+	_check(InventoryManager.get_dropped_item_for_block(B.GLASS, I.DIAMOND_PICKAXE) == 0, "Broken glass drops nothing")
+	var inv := InventoryManager.new()
+	inv.set_crafting_grid_dimension(3)
+	for r in range(3):
+		for c in range(2):
+			inv.craft_grid[r * 3 + c] = {"id": B.WOOD_PLANKS, "count": 1}
+	var out: Dictionary = inv._match_crafting_grid()
+	_check(int(out.get("id", 0)) == B.DOOR_CLOSED and int(out.get("count", 0)) == 3, "Six planks craft 3 doors")
+	inv.free()

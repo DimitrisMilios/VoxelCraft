@@ -198,7 +198,7 @@ static func _init_flags() -> PackedByteArray:
 		if BlockRegistry.is_log(id):
 			f |= 2
 		match id:
-			BlockRegistry.BlockId.WOOD_LOG, BlockRegistry.BlockId.PINE_LOG, BlockRegistry.BlockId.BIRCH_LOG, BlockRegistry.BlockId.WOOL, BlockRegistry.BlockId.SLAB, BlockRegistry.BlockId.WOOD_STAIRS, BlockRegistry.BlockId.COBBLE_STAIRS, BlockRegistry.BlockId.DOOR_CLOSED, BlockRegistry.BlockId.DOOR_OPEN:
+			BlockRegistry.BlockId.WOOD_LOG, BlockRegistry.BlockId.PINE_LOG, BlockRegistry.BlockId.BIRCH_LOG, BlockRegistry.BlockId.WOOL, BlockRegistry.BlockId.SLAB, BlockRegistry.BlockId.WOOD_STAIRS, BlockRegistry.BlockId.COBBLE_STAIRS, BlockRegistry.BlockId.DOOR_CLOSED, BlockRegistry.BlockId.DOOR_OPEN, BlockRegistry.BlockId.WHEAT_SPROUT, BlockRegistry.BlockId.POTATO_SPROUT:
 				f |= 4
 		arr[id] = f
 	return arr
@@ -277,7 +277,8 @@ static func build_sub_chunk(sub_idx: int, padded: Array, meta: PackedByteArray, 
 					var tile_k: int = BlockRegistry.resolve_tile(tiles[(id << 7) | (meta_v << 3) | BlockRegistry.FaceDir.NORTH])
 					_emit_crop(cutout, x - 1, ly, z - 1, tile_k, pl[p])
 				elif rt == RT_BOX:
-					_emit_block_boxes(opaque, col, pv, pl, occ, tiles, p, x - 1, ly, z - 1, id, meta_v)
+					# Doors use the alpha-tested surface so their window panes are see-through.
+					_emit_block_boxes(cutout if BlockRegistry.is_door(id) else opaque, col, pv, pl, occ, tiles, p, x - 1, ly, z - 1, id, meta_v)
 
 	var result: Dictionary = {"mesh": null, "water_mesh": null, "shape": null}
 	if not water_only:
@@ -542,6 +543,8 @@ static func _emit_block_boxes(
 				if occ[pv[nb_p]] == 0:
 					light_packed = pl[nb_p]
 			var tile: int = BlockRegistry.resolve_tile(tiles[(id << 7) | (meta_v << 3) | f])
+			if door_upper:
+				tile = BlockRegistry.resolve_tile(BlockRegistry.TILE_DOOR_TOP)
 			var shade: float = FACE_SHADE[f]
 			var color := Color(tint.r * shade, tint.g * shade, tint.b * shade, float(tile) / 255.0)
 			var l: Vector2 = _light_vec(light_packed)
@@ -576,15 +579,10 @@ static func _emit_block_boxes(
 					u_a = 1.0 - b1.x; u_b = 1.0 - b0.x; v_a = 1.0 - b1.y; v_b = 1.0 - b0.y
 			if full_tile_uv:
 				u_a = 0.0; u_b = 1.0; v_a = 0.0; v_b = 1.0
-			if is_door:
-				# The door tile holds the upper half on top and the lower half below.
-				var half: float = 0.0 if door_upper else 0.5
-				v_a = half + v_a * 0.5
-				v_b = half + v_b * 0.5
-				if flip_u:
-					var tmp: float = u_a
-					u_a = u_b
-					u_b = tmp
+			if flip_u:
+				var tmp: float = u_a
+				u_a = u_b
+				u_b = tmp
 			_push_quad(
 				s, o + v0, o + v1, o + v2, o + v3,
 				Vector2(u_a, v_a), Vector2(u_b, v_a), Vector2(u_b, v_b), Vector2(u_a, v_b),

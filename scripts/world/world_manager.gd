@@ -67,10 +67,6 @@ var _water_flow_queue: Array[Vector3i] = []
 var _water_flow_pending: Dictionary = {}
 var _water_tick_timer: float = 0.0
 
-## Active crop growth tracker (`Vector3i` -> seconds elapsed)
-var _active_crops: Dictionary = {}
-var _crop_tick_timer: float = 0.0
-
 ## Blocks that receive random ticks, per chunk: `Vector2i -> {Vector3i: true}`.
 var _tickables: Dictionary = {}
 var _random_tick_timer: float = 0.0
@@ -216,7 +212,6 @@ func _process(delta: float) -> void:
 	_process_collision_queue()
 	_process_villager_queue()
 	_process_water_flow(delta)
-	_process_crop_growth(delta)
 	_process_random_ticks(delta)
 	_process_leaf_decay(delta)
 	_flush_remesh_requests()
@@ -805,11 +800,6 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 
 	var previous_id: int = chunk.get_block_local(lx, world_block_pos.y, lz)
 
-	if actual_block_id == BlockRegistry.BlockId.WHEAT_SPROUT or actual_block_id == BlockRegistry.BlockId.POTATO_SPROUT:
-		_active_crops[world_block_pos] = 0.0
-	elif _active_crops.has(world_block_pos):
-		_active_crops.erase(world_block_pos)
-
 	chunk.set_block_local(lx, world_block_pos.y, lz, actual_block_id, false)
 	chunk.set_metadata_local(lx, world_block_pos.y, lz, meta, false)
 	_track_tickable(world_block_pos, actual_block_id)
@@ -1059,7 +1049,13 @@ static func sapling_for_leaves(leaf_id: int) -> int:
 # ============================================================================
 
 static func _is_random_tick_block(id: int) -> bool:
-	return id == BlockRegistry.BlockId.SUGAR_CANE or id == BlockRegistry.BlockId.CACTUS or BlockRegistry.is_sapling(id)
+	return (
+		id == BlockRegistry.BlockId.SUGAR_CANE
+		or id == BlockRegistry.BlockId.CACTUS
+		or id == BlockRegistry.BlockId.WHEAT_SPROUT
+		or id == BlockRegistry.BlockId.POTATO_SPROUT
+		or BlockRegistry.is_sapling(id)
+	)
 
 
 func _register_tickables(coord: Vector2i, chunk: VoxelChunk) -> void:
@@ -1068,7 +1064,7 @@ func _register_tickables(coord: Vector2i, chunk: VoxelChunk) -> void:
 	if not vox.is_empty():
 		var ox: int = coord.x * VoxelChunk.CHUNK_SIZE_X
 		var oz: int = coord.y * VoxelChunk.CHUNK_SIZE_Z
-		for tick_id in [BlockRegistry.BlockId.SUGAR_CANE, BlockRegistry.BlockId.CACTUS, BlockRegistry.BlockId.SAPLING, BlockRegistry.BlockId.PINE_SAPLING, BlockRegistry.BlockId.BIRCH_SAPLING]:
+		for tick_id in [BlockRegistry.BlockId.SUGAR_CANE, BlockRegistry.BlockId.CACTUS, BlockRegistry.BlockId.SAPLING, BlockRegistry.BlockId.PINE_SAPLING, BlockRegistry.BlockId.BIRCH_SAPLING, BlockRegistry.BlockId.WHEAT_SPROUT, BlockRegistry.BlockId.POTATO_SPROUT]:
 			var idx: int = vox.find(tick_id)
 			while idx != -1:
 				set_for_chunk[Vector3i(ox + (idx & 15), idx >> 8, oz + ((idx >> 4) & 15))] = true
@@ -1111,6 +1107,8 @@ func random_tick_block(pos: Vector3i) -> void:
 		_tick_stalk_plant(pos, id)
 	elif BlockRegistry.is_sapling(id):
 		_tick_sapling(pos, id)
+	elif id == BlockRegistry.BlockId.WHEAT_SPROUT or id == BlockRegistry.BlockId.POTATO_SPROUT:
+		_tick_crop(pos, id)
 
 
 ## Sugar cane and cactus: age 0..15 in metadata; at 15 a new block grows on top (max 3 tall).
@@ -1131,6 +1129,44 @@ func _tick_stalk_plant(pos: Vector3i, id: int) -> void:
 			_check_support(above)
 	else:
 		set_metadata_world(pos, age + 1, false)
+
+
+## Crops: with light 9+ above them, each random tick has a 1 / (floor(25 / speed) + 1) chance to
+## advance one of 7 growth stages. Speed is 1, plus 3 for watered farmland underneath (1 if dry),
+## plus a quarter of that for each farmland block around it. On average a crop on watered farmland
+## ripens in roughly half an hour to an hour of play, faster in big fields.
+func _tick_crop(pos: Vector3i, id: int) -> void:
+	var above := pos + Vector3i(0, 1, 0)
+	if maxi(get_sky_light_world(above), get_block_light_world(above)) < 9:
+		return
+	var below := pos + Vector3i(0, -1, 0)
+	if get_block_world(below) != BlockRegistry.BlockId.FARMLAND:
+		return
+	var speed: float = 1.0
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var soil := below + Vector3i(dx, 0, dz)
+			if get_block_world(soil) != BlockRegistry.BlockId.FARMLAND:
+				continue
+			var bonus: float = 3.0 if is_farmland_hydrated(soil) else 1.0
+			speed += bonus if (dx == 0 and dz == 0) else bonus / 4.0
+	if randf() >= 1.0 / (floorf(25.0 / speed) + 1.0):
+		return
+	var age: int = get_metadata_world(pos)
+	if age < BlockRegistry.CROP_MAX_SPROUT_AGE:
+		set_metadata_world(pos, age + 1)
+	else:
+		set_block_world(pos, BlockRegistry.BlockId.WHEAT_CROPS if id == BlockRegistry.BlockId.WHEAT_SPROUT else BlockRegistry.BlockId.POTATO_CROPS)
+
+
+## Farmland is watered when there is water up to 4 blocks away horizontally, level with it or one above.
+func is_farmland_hydrated(soil: Vector3i) -> bool:
+	for dy in range(0, 2):
+		for dx in range(-4, 5):
+			for dz in range(-4, 5):
+				if BlockRegistry.is_water(get_block_world(soil + Vector3i(dx, dy, dz))):
+					return true
+	return false
 
 
 ## Saplings need light 9+; each qualifying tick has a 1-in-7 chance to advance (two stages, then a tree).
@@ -1460,34 +1496,6 @@ func _process_water_flow(delta: float) -> void:
 						_enqueue_water_pos(nb)
 
 	_queue_dirty_remesh(dirty_water, true)
-
-
-## Automatically ticks crop growth, transitioning young sprouts to mature crops over ~12 seconds.
-func _process_crop_growth(delta: float) -> void:
-	if _active_crops.is_empty():
-		return
-	_crop_tick_timer += delta
-	if _crop_tick_timer < 1.0:
-		return
-	_crop_tick_timer = 0.0
-
-	var matured_crops: Array[Vector3i] = []
-	for c_pos in _active_crops.keys():
-		var pos_i: Vector3i = c_pos as Vector3i
-		var current_id: int = get_block_world(pos_i)
-		if current_id != BlockRegistry.BlockId.WHEAT_SPROUT and current_id != BlockRegistry.BlockId.POTATO_SPROUT:
-			matured_crops.append(pos_i)
-			continue
-
-		var progress: float = float(_active_crops[pos_i]) + 1.0
-		_active_crops[pos_i] = progress
-		if progress >= 12.0: # 12 seconds to fully mature
-			var mature_id: int = BlockRegistry.BlockId.WHEAT_CROPS if current_id == BlockRegistry.BlockId.WHEAT_SPROUT else BlockRegistry.BlockId.POTATO_CROPS
-			set_block_world(pos_i, mature_id)
-			matured_crops.append(pos_i)
-
-	for m_pos in matured_crops:
-		_active_crops.erase(m_pos)
 
 
 ## Returns the 3D directional water current vector at `world_pos` (pointing downhill / toward corners & waterfalls).

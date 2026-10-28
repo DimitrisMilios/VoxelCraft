@@ -78,6 +78,7 @@ enum BlockId {
 	SAPLING = 74,
 	PINE_SAPLING = 75,
 	BIRCH_SAPLING = 76,
+	GLASS = 77,
 }
 
 const WOOL_COLORS: Array[Color] = [
@@ -130,7 +131,7 @@ const TOOL_SHOVEL: int = 3
 const ATLAS_COLUMNS: int = 29
 const ATLAS_ROWS: int = 1
 const TILE_PIXEL_SIZE: int = 32
-const ATLAS_TILE_COUNT: int = 66
+const ATLAS_TILE_COUNT: int = 79
 
 const TILE_DOOR: int = 23
 const TILE_PINE_LOG_TOP: int = 61
@@ -138,6 +139,14 @@ const TILE_BIRCH_LOG_TOP: int = 62
 const TILE_OAK_SAPLING: int = 63
 const TILE_PINE_SAPLING: int = 64
 const TILE_BIRCH_SAPLING: int = 65
+const TILE_GLASS: int = 66
+const TILE_DOOR_TOP: int = 67
+const TILE_DOOR_BOTTOM: int = 68
+## Growth stages: wheat ages 0..6 use tiles 69..75 (age 7 is WHEAT_CROPS), potatoes 76..78.
+const TILE_WHEAT_STAGE_0: int = 69
+const TILE_POTATO_STAGE_0: int = 76
+## Crops are sprout blocks with an age (0..6) in their metadata; one more growth step makes them mature.
+const CROP_MAX_SPROUT_AGE: int = 6
 
 ## Actual column count of the loaded atlas (set by VoxelAtlasBuilder when the atlas loads).
 static var atlas_columns: int = 0
@@ -177,6 +186,11 @@ const EXTENDED_TILE_FALLBACK: Dictionary = {
 	63: 6,  # Oak Sapling -> Leaves
 	64: 54, # Pine Sapling -> Pine Leaves
 	65: 56, # Birch Sapling -> Birch Leaves
+	66: 48, # Glass -> Ice
+	67: 23, # Door Top -> combined door tile
+	68: 23, # Door Bottom -> combined door tile
+	69: 44, 70: 44, 71: 44, 72: 44, 73: 44, 74: 44, 75: 44, # Wheat stages -> Wheat Sprout
+	76: 45, 77: 45, 78: 45, # Potato stages -> Potato Sprout
 }
 
 
@@ -231,11 +245,11 @@ static func _calc_render_type(id: int) -> int:
 			return RenderType.CROSS
 		BlockId.WHEAT_CROPS, BlockId.POTATO_CROPS, BlockId.WHEAT_SPROUT, BlockId.POTATO_SPROUT:
 			return RenderType.CROP
-		BlockId.LAVA, BlockId.ICE, BlockId.MONSTER_SPAWNER:
+		BlockId.LAVA, BlockId.ICE, BlockId.MONSTER_SPAWNER, BlockId.GLASS:
 			return RenderType.CUBE_CUTOUT
 		BlockId.TORCH, BlockId.REDSTONE_TORCH, BlockId.SLAB, BlockId.LEVER, BlockId.BUTTON, BlockId.BED, BlockId.BED_HEAD, BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN, BlockId.LADDER, BlockId.FARMLAND, BlockId.WOOD_STAIRS, BlockId.COBBLE_STAIRS, BlockId.CACTUS:
 			return RenderType.BOX
-	if id > BlockId.BIRCH_SAPLING:
+	if id > BlockId.GLASS:
 		return RenderType.NONE
 	return RenderType.CUBE
 
@@ -261,7 +275,7 @@ static func _calc_light_opacity(id: int) -> int:
 		RenderType.CUBE:
 			return 15
 		RenderType.CUBE_CUTOUT:
-			return 0 if id == BlockId.LAVA else 1
+			return 0 if (id == BlockId.LAVA or id == BlockId.GLASS) else 1
 		_:
 			return 0
 
@@ -453,7 +467,7 @@ static func get_block_hardness(block_id: int) -> float:
 			return 0.0
 		BlockId.LEAVES, BlockId.PINE_LEAVES, BlockId.BIRCH_LEAVES, BlockId.SNOW, BlockId.BED, BlockId.BED_HEAD:
 			return 0.2
-		BlockId.GLOWSTONE:
+		BlockId.GLOWSTONE, BlockId.GLASS:
 			return 0.3
 		BlockId.CACTUS, BlockId.LADDER:
 			return 0.4
@@ -614,7 +628,7 @@ static func get_selection_box(block_id: int, meta: int = 0) -> AABB:
 			return AABB(Vector3(0.1875, 0.0, 0.1875), Vector3(0.625, 0.8125, 0.625))
 		RenderType.CROP:
 			if block_id == BlockId.WHEAT_SPROUT or block_id == BlockId.POTATO_SPROUT:
-				return AABB(Vector3.ZERO, Vector3(1.0, 0.25, 1.0))
+				return AABB(Vector3.ZERO, Vector3(1.0, 0.125 + 0.75 * float(mini(meta, CROP_MAX_SPROUT_AGE) + 1) / 8.0, 1.0))
 			return AABB(Vector3.ZERO, Vector3(1.0, 0.875, 1.0))
 		_:
 			return AABB(Vector3.ZERO, Vector3.ONE)
@@ -758,6 +772,8 @@ static func get_block_name(block_id: int) -> String:
 			return "Spruce Sapling"
 		BlockId.BIRCH_SAPLING:
 			return "Birch Sapling"
+		BlockId.GLASS:
+			return "Glass"
 		_:
 			return "Unknown"
 
@@ -888,6 +904,8 @@ static func get_block_color(block_id: int, meta: int = 0) -> Color:
 			return Color(0.52, 0.54, 0.56)
 		BlockId.SAPLING, BlockId.PINE_SAPLING, BlockId.BIRCH_SAPLING:
 			return Color(0.30, 0.55, 0.20)
+		BlockId.GLASS:
+			return Color(0.80, 0.90, 0.95)
 		_:
 			return Color.GRAY
 
@@ -998,7 +1016,7 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 		BlockId.BED, BlockId.BED_HEAD:
 			return 22
 		BlockId.DOOR_CLOSED, BlockId.DOOR_OPEN:
-			return TILE_DOOR
+			return TILE_DOOR_BOTTOM # the mesher uses TILE_DOOR_TOP for the upper half
 		BlockId.LADDER:
 			return 24
 		BlockId.TNT:
@@ -1032,9 +1050,9 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 		BlockId.POTATO_CROPS:
 			return 39
 		BlockId.WHEAT_SPROUT:
-			return 44
+			return TILE_WHEAT_STAGE_0 + mini(meta, CROP_MAX_SPROUT_AGE)
 		BlockId.POTATO_SPROUT:
-			return 45
+			return TILE_POTATO_STAGE_0 + mini(meta, CROP_MAX_SPROUT_AGE) * 3 / 7
 		BlockId.LAVA:
 			return 40
 		BlockId.OBSIDIAN:
@@ -1075,6 +1093,8 @@ static func get_tile_index(block_id: int, face_dir: int, meta: int = 0) -> int:
 			return TILE_PINE_SAPLING
 		BlockId.BIRCH_SAPLING:
 			return TILE_BIRCH_SAPLING
+		BlockId.GLASS:
+			return TILE_GLASS
 		_:
 			return 3
 
