@@ -712,16 +712,17 @@ func handle_armor_slot_click(slot_idx: int, _is_right_click: bool = false) -> vo
 		inventory_updated.emit()
 
 
-## Returns the item ID dropped when `broken_block_id` is broken with `equipped_item_id` (0 if unharvestable).
+## Returns the main item dropped when `broken_block_id` is broken with `equipped_item_id` (0 if nothing).
+## Deterministic (no random extras); see `get_block_drops` for the full randomized drop list.
 static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: int) -> int:
 	if not can_harvest_block(equipped_item_id, broken_block_id):
 		return 0
 	match broken_block_id:
-		BlockRegistry.BlockId.BEDROCK:
+		BlockRegistry.BlockId.BEDROCK, BlockRegistry.BlockId.ICE, BlockRegistry.BlockId.MONSTER_SPAWNER:
 			return 0
 		BlockRegistry.BlockId.STONE:
 			return BlockRegistry.BlockId.COBBLESTONE
-		BlockRegistry.BlockId.GRASS:
+		BlockRegistry.BlockId.GRASS, BlockRegistry.BlockId.FARMLAND:
 			return BlockRegistry.BlockId.DIRT
 		BlockRegistry.BlockId.COAL_ORE:
 			return ItemId.COAL
@@ -739,92 +740,141 @@ static func get_dropped_item_for_block(broken_block_id: int, equipped_item_id: i
 			return ItemId.CLAY_BALL
 		BlockRegistry.BlockId.WOOL:
 			return ItemId.WOOL
-		BlockRegistry.BlockId.FARMLAND:
-			return BlockRegistry.BlockId.DIRT
 		BlockRegistry.BlockId.WHEAT_CROPS:
 			return ItemId.WHEAT
-		BlockRegistry.BlockId.POTATO_CROPS:
+		BlockRegistry.BlockId.POTATO_CROPS, BlockRegistry.BlockId.POTATO_SPROUT:
 			return ItemId.POTATO
 		BlockRegistry.BlockId.WHEAT_SPROUT:
 			return ItemId.WHEAT_SEEDS
-		BlockRegistry.BlockId.POTATO_SPROUT:
-			return ItemId.POTATO
-		BlockRegistry.BlockId.ICE:
-			return 0
-		BlockRegistry.BlockId.MONSTER_SPAWNER:
-			return 0
-		BlockRegistry.BlockId.PINE_LEAVES, BlockRegistry.BlockId.BIRCH_LEAVES:
-			return 0
+		BlockRegistry.BlockId.DOOR_OPEN:
+			return BlockRegistry.BlockId.DOOR_CLOSED
+		BlockRegistry.BlockId.BED_HEAD:
+			return BlockRegistry.BlockId.BED
+		BlockRegistry.BlockId.LEAVES, BlockRegistry.BlockId.PINE_LEAVES, BlockRegistry.BlockId.BIRCH_LEAVES, BlockRegistry.BlockId.SEAGRASS:
+			# Only shears collect the block itself.
+			return broken_block_id if equipped_item_id == ItemId.SHEARS else 0
 		_:
 			return broken_block_id
 
 
-## Checks whether the equipped item can harvest drops from `block_id` (Minecraft harvest rules).
-static func can_harvest_block(equipped_item_id: int, block_id: int) -> bool:
+## Full drop list for breaking a block: Array of [item_id, count] pairs, including random extras
+## (flint from gravel, extra redstone/lapis, wheat seeds, saplings and apples from leaves...).
+static func get_block_drops(broken_block_id: int, equipped_item_id: int) -> Array:
+	var drops: Array = []
+	var main_id: int = get_dropped_item_for_block(broken_block_id, equipped_item_id)
+	match broken_block_id:
+		BlockRegistry.BlockId.REDSTONE_ORE:
+			if main_id > 0:
+				drops.append([main_id, randi_range(4, 5)])
+		BlockRegistry.BlockId.LAPIS_ORE:
+			if main_id > 0:
+				drops.append([main_id, randi_range(4, 8)])
+		BlockRegistry.BlockId.CLAY:
+			drops.append([ItemId.CLAY_BALL, 4])
+		BlockRegistry.BlockId.GRAVEL:
+			drops.append([ItemId.FLINT if randf() < 0.10 else BlockRegistry.BlockId.GRAVEL, 1])
+		BlockRegistry.BlockId.GRASS:
+			drops.append([main_id, 1])
+			if randf() < 0.125:
+				drops.append([ItemId.WHEAT_SEEDS, 1])
+		BlockRegistry.BlockId.WHEAT_CROPS:
+			drops.append([ItemId.WHEAT, 1])
+			var seeds: int = randi_range(0, 3)
+			if seeds > 0:
+				drops.append([ItemId.WHEAT_SEEDS, seeds])
+		BlockRegistry.BlockId.POTATO_CROPS:
+			drops.append([ItemId.POTATO, randi_range(2, 4)])
+		BlockRegistry.BlockId.LEAVES, BlockRegistry.BlockId.PINE_LEAVES, BlockRegistry.BlockId.BIRCH_LEAVES:
+			if main_id > 0:
+				drops.append([main_id, 1])
+			else:
+				if randf() < 0.05:
+					drops.append([WorldManager.sapling_for_leaves(broken_block_id), 1])
+				if broken_block_id == BlockRegistry.BlockId.LEAVES and randf() < 0.005:
+					drops.append([ItemId.APPLE, 1])
+		_:
+			if main_id > 0:
+				drops.append([main_id, 1])
+	return drops
+
+
+## Harvest level of a tool: wood and gold 0, stone 1, iron 2, diamond 3 (-1 = hand / not a tool).
+static func get_harvest_level(item_id: int) -> int:
+	match get_tool_tier(item_id):
+		1, 5:
+			return 0
+		2:
+			return 1
+		3:
+			return 2
+		4:
+			return 3
+		_:
+			return -1
+
+
+## Checks whether the equipped item can harvest drops from `block_id`. Stone-type blocks need a
+## pickaxe of a high enough level: any for stone/coal, stone+ for iron/lapis, iron+ for
+## gold/diamond/redstone, diamond for obsidian.
+static func can_harvest_block(equipped_item_id: int, block_id: int, meta: int = 0) -> bool:
 	if block_id == BlockRegistry.BlockId.BEDROCK:
 		return false
+	var required: int = BlockRegistry.get_required_harvest_level(block_id, meta)
+	if required < 0:
+		return true
+	return get_tool_category(equipped_item_id) == ToolCategory.PICKAXE and get_harvest_level(equipped_item_id) >= required
 
+
+## Tool material speeds: hand 1, wood 2, stone 4, iron 6, diamond 8, gold 12.
+const TOOL_MATERIAL_SPEED: Array[float] = [1.0, 2.0, 4.0, 6.0, 8.0, 12.0]
+
+
+## Mining speed of `equipped_item_id` against `target_block_id` (the tool's material speed when it
+## is the right tool for the block, otherwise 1; swords cut leaves 1.5x, shears leaves 15x / wool 5x).
+static func get_mining_speed_multiplier(equipped_item_id: int, target_block_id: int, meta: int = 0) -> float:
 	var cat: int = get_tool_category(equipped_item_id)
-	var tier: int = get_tool_tier(equipped_item_id)
-	var is_pick: bool = (cat == ToolCategory.PICKAXE)
-
-	match block_id:
-		BlockRegistry.BlockId.STONE, BlockRegistry.BlockId.COBBLESTONE, BlockRegistry.BlockId.COAL_ORE, BlockRegistry.BlockId.FURNACE, BlockRegistry.BlockId.LAPIS_ORE, BlockRegistry.BlockId.COBBLE_STAIRS, BlockRegistry.BlockId.SLAB:
-			return is_pick and (tier >= 1)
-		BlockRegistry.BlockId.IRON_ORE, BlockRegistry.BlockId.REDSTONE_ORE, BlockRegistry.BlockId.GOLD_BLOCK, BlockRegistry.BlockId.IRON_BLOCK, BlockRegistry.BlockId.LAPIS_BLOCK:
-			return is_pick and (tier >= 2 and tier != 5)
-		BlockRegistry.BlockId.GOLD_ORE, BlockRegistry.BlockId.DIAMOND_ORE, BlockRegistry.BlockId.DIAMOND_BLOCK, BlockRegistry.BlockId.OBSIDIAN:
-			return is_pick and (tier == 3 or tier == 4)
-		BlockRegistry.BlockId.MONSTER_SPAWNER:
-			return is_pick and (tier >= 1)
-		_:
-			# Wood, dirt, grass, sand, leaves, snow, crafting table, glowstone can be harvested by hand
-			return true
-
-
-## Returns mining speed multiplier when breaking `target_block_id` with `equipped_item_id`.
-static func get_mining_speed_multiplier(equipped_item_id: int, target_block_id: int) -> float:
-	var cat: int = get_tool_category(equipped_item_id)
-	var tier: int = get_tool_tier(equipped_item_id)
-	var tier_speed: float = 1.0
-	match tier:
-		1:
-			tier_speed = 2.4
-		2:
-			tier_speed = 4.0
-		3:
-			tier_speed = 6.2
-		4:
-			tier_speed = 9.5
-		5:
-			tier_speed = 12.0 # Gold tools have highest speed
-
-	if BlockRegistry.is_stone_Or_ore(target_block_id):
-		if cat == ToolCategory.PICKAXE and can_harvest_block(equipped_item_id, target_block_id):
-			return tier_speed
-		# Penalty when punching stone/ore without the required Pickaxe tier
-		return 0.28
-
-	if (
-		target_block_id == BlockRegistry.BlockId.WOOD_LOG
-		or target_block_id == BlockRegistry.BlockId.WOOD_PLANKS
-		or target_block_id == BlockRegistry.BlockId.CRAFTING_TABLE
-	):
-		if cat == ToolCategory.AXE:
-			return tier_speed
-		return 1.0
-
-	if (
-		target_block_id == BlockRegistry.BlockId.DIRT
-		or target_block_id == BlockRegistry.BlockId.GRASS
-		or target_block_id == BlockRegistry.BlockId.SAND
-		or target_block_id == BlockRegistry.BlockId.SNOW
-	):
-		if cat == ToolCategory.SHOVEL:
-			return tier_speed
-		return 1.0
-
+	var effective: int = BlockRegistry.get_effective_tool(target_block_id, meta)
+	if effective != BlockRegistry.TOOL_NONE and cat == effective:
+		return TOOL_MATERIAL_SPEED[get_tool_tier(equipped_item_id)]
+	if equipped_item_id == ItemId.SHEARS:
+		if BlockRegistry.is_leaves(target_block_id):
+			return 15.0
+		if target_block_id == BlockRegistry.BlockId.WOOL:
+			return 5.0
+	if cat == ToolCategory.SWORD and BlockRegistry.is_leaves(target_block_id):
+		return 1.5
 	return 1.0
+
+
+## Game ticks (1/20 s) needed to break a block: hardness * 30 / speed with the right tool for drops,
+## hardness * 100 / speed otherwise; 5x slower underwater and 5x slower while not standing on ground.
+## Returns 0 for instant breaks and -1 for unbreakable blocks.
+static func get_break_ticks(
+	equipped_item_id: int, block_id: int, meta: int = 0, head_in_water: bool = false, on_ground: bool = true
+) -> int:
+	var hardness: float = BlockRegistry.get_block_hardness(block_id)
+	if hardness < 0.0:
+		return -1
+	if hardness == 0.0:
+		return 0
+	var speed: float = get_mining_speed_multiplier(equipped_item_id, block_id, meta)
+	if head_in_water:
+		speed /= 5.0
+	if not on_ground:
+		speed /= 5.0
+	var divisor: float = 30.0 if can_harvest_block(equipped_item_id, block_id, meta) else 100.0
+	var progress_per_tick: float = speed / hardness / divisor
+	if progress_per_tick >= 1.0:
+		return 0
+	return int(ceil(1.0 / progress_per_tick))
+
+
+## Seconds needed to break a block (see `get_break_ticks`); 0 = instant, -1 = unbreakable.
+static func get_break_time(
+	equipped_item_id: int, block_id: int, meta: int = 0, head_in_water: bool = false, on_ground: bool = true
+) -> float:
+	var ticks: int = get_break_ticks(equipped_item_id, block_id, meta, head_in_water, on_ground)
+	return -1.0 if ticks < 0 else float(ticks) / 20.0
 
 
 static func get_item_name(item_id: int) -> String:
@@ -2356,7 +2406,7 @@ static func _get_smelt_result(input_id: int) -> int:
 			return ItemId.BAKED_POTATO
 		BlockRegistry.BlockId.COBBLESTONE:
 			return BlockRegistry.BlockId.STONE
-		BlockRegistry.BlockId.WOOD_LOG:
+		BlockRegistry.BlockId.WOOD_LOG, BlockRegistry.BlockId.PINE_LOG, BlockRegistry.BlockId.BIRCH_LOG:
 			return ItemId.COAL # Charcoal
 		BlockRegistry.BlockId.SAND:
 			return BlockRegistry.BlockId.GLOWSTONE
@@ -2370,11 +2420,11 @@ static func _get_fuel_burn_duration(fuel_id: int) -> float:
 			return 100.0 # Extreme smelting heat (100 items!)
 		ItemId.COAL:
 			return 16.0
-		BlockRegistry.BlockId.WOOD_LOG:
+		BlockRegistry.BlockId.WOOD_LOG, BlockRegistry.BlockId.PINE_LOG, BlockRegistry.BlockId.BIRCH_LOG:
 			return 8.0
-		BlockRegistry.BlockId.WOOD_PLANKS:
+		BlockRegistry.BlockId.WOOD_PLANKS, BlockRegistry.BlockId.WOOD_STAIRS, BlockRegistry.BlockId.CRAFTING_TABLE, BlockRegistry.BlockId.CHEST:
 			return 4.0
-		ItemId.STICK:
+		ItemId.STICK, BlockRegistry.BlockId.SAPLING, BlockRegistry.BlockId.PINE_SAPLING, BlockRegistry.BlockId.BIRCH_SAPLING:
 			return 2.0
 		_:
 			return 0.0

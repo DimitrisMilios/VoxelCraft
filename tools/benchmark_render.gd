@@ -85,7 +85,12 @@ func _process(_delta: float) -> bool:
 			var now: int = Time.get_ticks_usec()
 			_frame_times.append((now - _last_usec) / 1000.0)
 			if (now - _last_usec) > 12000:
-				print("[SPIKE] frame %d: %.1f ms, nodes %d, mobs %d" % [_frame, (now - _last_usec) / 1000.0, int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)), _main.get_tree().get_nodes_in_group("mobs").size()])
+				print("[SPIKE] frame %d: %.1f ms (scripts %.1f ms, physics %.1f ms), nodes %d" % [
+					_frame, (now - _last_usec) / 1000.0,
+					Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+					Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+					int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
+				])
 			_last_usec = now
 			_draw_calls = maxi(_draw_calls, int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)))
 			_primitives = maxi(_primitives, int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)))

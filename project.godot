@@ -54,3 +54,7 @@ vc_block_tint={
 "type": "vec3",
 "value": Vector3(1, 0.92, 0.78)
 }
+
+[physics]
+
+3d/physics_engine="Jolt Physics"

@@ -112,7 +112,8 @@ func _update_held_visual(item_id: int) -> void:
 		_hand_root.visible = true
 		return
 
-	if InventoryManager.is_placeable_block(item_id):
+	# Plants (saplings, flowers, sugar cane) are held as flat sprites like items, not as cubes.
+	if InventoryManager.is_placeable_block(item_id) and BlockRegistry.render_type_table[item_id] != BlockRegistry.RenderType.CROSS:
 		_mesh_instance.visible = true
 		_rebuild_held_cube_mesh(item_id)
 		return

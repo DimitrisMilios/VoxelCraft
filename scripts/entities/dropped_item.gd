@@ -185,7 +185,7 @@ func _build_visual_mesh() -> void:
 	_visual_root.position = Vector3(0.0, 0.16, 0.0)
 	add_child(_visual_root)
 
-	if InventoryManager.is_placeable_block(item_id):
+	if InventoryManager.is_placeable_block(item_id) and BlockRegistry.render_type_table[item_id] != BlockRegistry.RenderType.CROSS:
 		var mi := MeshInstance3D.new()
 		mi.material_override = VoxelAtlasBuilder.get_shared_voxel_material()
 		mi.mesh = _build_mini_block_mesh(item_id)

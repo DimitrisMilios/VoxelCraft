@@ -811,8 +811,7 @@ func set_block_world(world_block_pos: Vector3i, block_id: int, rebuild_mode: int
 	if rebuild_mode == 2:
 		var dirty: Dictionary = {}
 		if _changes_light(previous_id, actual_block_id):
-			VoxelLighting.update_light_at(self, world_block_pos, dirty)
-			_bump_light_versions(dirty)
+			VoxelLighting.update_light_at(self, world_block_pos, dirty, previous_id)
 		VoxelLighting.mark_remesh(dirty, world_block_pos)
 		_queue_dirty_remesh(dirty)
 	elif rebuild_mode == 1:
@@ -835,12 +834,6 @@ static func _changes_light(old_id: int, new_id: int) -> bool:
 		or BlockRegistry.luminance_table[old_id & 0xFF] != BlockRegistry.luminance_table[new_id & 0xFF]
 	)
 
-
-func _bump_light_versions(dirty: Dictionary) -> void:
-	for coord_variant in dirty.keys():
-		var c: VoxelChunk = find_loaded_chunk(coord_variant)
-		if c != null:
-			c.light_version += 1
 
 
 func _play_sfx_at(sfx_name: String, pos: Vector3, volume_db: float = 1.0) -> void:
@@ -1691,7 +1684,6 @@ func create_explosion(center: Vector3, radius: float = 3.8, is_tnt: bool = true,
 		for e in cleared_emitters:
 			VoxelLighting.update_light_at(self, e, dirty)
 		VoxelLighting.refill_cleared(self, cleared_positions, dirty)
-		_bump_light_versions(dirty)
 		_queue_dirty_remesh(dirty)
 		for bpos in cleared_positions:
 			_enqueue_water_neighborhood(bpos)

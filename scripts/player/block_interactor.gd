@@ -37,6 +37,11 @@ var _crack_textures: Array[ImageTexture] = []
 var _targeted_mob: PassiveMob = null
 var _last_mining_pos: Vector3i = Vector3i(999999, 999999, 999999)
 var _swing_repeat_timer: float = 0.0
+## Pause between finishing one block and starting the next while holding attack (5 ticks).
+const BREAK_DELAY: float = 0.25
+var _break_cooldown: float = 0.0
+var _mining_item_id: int = -1
+var _last_hit_point: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
@@ -238,6 +243,7 @@ func _update_raycast_target() -> void:
 
 	if solid_hit:
 		var hit_point: Vector3 = _raycast.get_collision_point()
+		_last_hit_point = hit_point
 		var hit_normal: Vector3 = _raycast.get_collision_normal()
 		hit_dist = ray_origin.distance_to(hit_point)
 
@@ -250,9 +256,11 @@ func _update_raycast_target() -> void:
 	# to check for passable blocks (Crops, Sprouts, Torches, Sugar Cane, Seagrass)
 	var found_passable: bool = false
 	var passable_pos := Vector3i.ZERO
+	var passable_place := Vector3i.ZERO
 	if _world_manager != null:
 		var step_dist: float = 0.35
 		var max_search_dist: float = minf(hit_dist, 5.2)
+		var prev_cell := Vector3i(floori(ray_origin.x), floori(ray_origin.y), floori(ray_origin.z))
 		while step_dist < max_search_dist:
 			var sample_p: Vector3 = ray_origin + ray_dir * step_dist
 			var vpos := Vector3i(floori(sample_p.x), floori(sample_p.y), floori(sample_p.z))
@@ -260,12 +268,16 @@ func _update_raycast_target() -> void:
 			if BlockRegistry.is_passable_block(bid) and bid != BlockRegistry.BlockId.AIR and not BlockRegistry.is_liquid(bid):
 				found_passable = true
 				passable_pos = vpos
+				passable_place = prev_cell
+				_last_hit_point = sample_p
 				break
+			prev_cell = vpos
 			step_dist += 0.08
 
 	if found_passable:
 		target_block_pos = passable_pos
-		place_block_pos = passable_pos
+		# Placing while aiming at a plant or torch puts the block beside it, not on top of it.
+		place_block_pos = passable_place
 		has_target = true
 	elif solid_hit:
 		target_block_pos = solid_target_pos
@@ -284,11 +296,17 @@ func _update_raycast_target() -> void:
 
 	if _selection_box != null:
 		_selection_box.visible = true
+		# Outline the block's real shape (door panel, slab, plant...), not always a full cube.
+		var sel_id: int = _world_manager.get_block_world(target_block_pos) if _world_manager != null else BlockRegistry.BlockId.STONE
+		var sel_meta: int = _world_manager.get_metadata_world(target_block_pos) if _world_manager != null else 0
+		var sel: AABB = BlockRegistry.get_selection_box(sel_id, sel_meta)
+		_selection_box.scale = sel.size
 		if _selection_box.is_inside_tree():
-			_selection_box.global_position = Vector3(target_block_pos)
+			_selection_box.global_position = Vector3(target_block_pos) + sel.position
 			_selection_box.global_rotation = Vector3.ZERO
+			_selection_box.scale = sel.size
 		else:
-			_selection_box.position = Vector3(target_block_pos)
+			_selection_box.position = Vector3(target_block_pos) + sel.position
 
 
 func _on_left_click_pressed() -> void:
@@ -311,7 +329,12 @@ func _on_left_click_pressed() -> void:
 		_complete_break_block()
 
 
+## Breaks blocks while the attack button is held. Break time follows the classic rules
+## (InventoryManager.get_break_ticks): hardness, tool type and tier, underwater and airborne
+## penalties. After a block breaks there is a 5-tick (0.25 s) pause before the next one starts.
 func _process_continuous_mining(delta: float) -> void:
+	if _break_cooldown > 0.0:
+		_break_cooldown = maxf(0.0, _break_cooldown - delta)
 	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		_reset_mining_progress()
 		return
@@ -327,10 +350,26 @@ func _process_continuous_mining(delta: float) -> void:
 		return
 
 	var equipped_id: int = get_selected_item_id()
-	var can_harvest: bool = InventoryManager.can_harvest_block(equipped_id, target_id)
-	var hardness: float = BlockRegistry.get_block_hardness(target_id)
-	var speed_mult: float = InventoryManager.get_mining_speed_multiplier(equipped_id, target_id)
-	var break_duration: float = maxf(0.10, hardness / speed_mult)
+	if equipped_id != _mining_item_id:
+		# Switching items restarts the break, like the classic game.
+		_reset_mining_progress()
+		_mining_item_id = equipped_id
+	var meta: int = _world_manager.get_metadata_world(target_block_pos)
+	var can_harvest: bool = InventoryManager.can_harvest_block(equipped_id, target_id, meta)
+	var in_water: bool = _player_body != null and _player_body.is_head_underwater
+	var on_ground: bool = _player_body == null or _player_body.is_on_floor() or _player_body.is_in_water
+	var ticks: int = InventoryManager.get_break_ticks(equipped_id, target_id, meta, in_water, on_ground)
+	if ticks < 0:
+		_reset_mining_progress()
+		return
+	if ticks == 0:
+		# Instant-break blocks (plants, torches...) go on the first tick, with no extra delay.
+		_complete_break_block()
+		_reset_mining_progress()
+		return
+	if _break_cooldown > 0.0:
+		return
+	var break_duration: float = float(ticks) / 20.0
 
 	mining_progress += delta / break_duration
 	_swing_repeat_timer -= delta
@@ -358,6 +397,7 @@ func _process_continuous_mining(delta: float) -> void:
 	if mining_progress >= 1.0:
 		_complete_break_block()
 		_reset_mining_progress()
+		_break_cooldown = BREAK_DELAY
 
 
 func _reset_mining_progress() -> void:
@@ -380,86 +420,62 @@ func _complete_break_block() -> void:
 	var equipped_id: int = get_selected_item_id()
 	var is_creative: bool = _player_body != null and _player_body.is_flying
 
-	if _world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.AIR):
-		if previous_id == BlockRegistry.BlockId.CHEST and _inventory != null:
-			_inventory.drop_chest_contents_at(_world_manager, broken_pos)
-		# Clean up partner door block if breaking top or bottom door
-		if previous_id == BlockRegistry.BlockId.DOOR_CLOSED or previous_id == BlockRegistry.BlockId.DOOR_OPEN:
-			for dy in [-1, 1]:
-				var adj: Vector3i = broken_pos + Vector3i(0, dy, 0)
-				var adj_id: int = _world_manager.get_block_world(adj)
-				if adj_id == BlockRegistry.BlockId.DOOR_CLOSED or adj_id == BlockRegistry.BlockId.DOOR_OPEN:
-					_world_manager.set_block_world(adj, BlockRegistry.BlockId.AIR)
-		# Clean up partner bed block if breaking foot or head of bed
-		elif previous_id == BlockRegistry.BlockId.BED or previous_id == BlockRegistry.BlockId.BED_HEAD:
-			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
-				var adj: Vector3i = broken_pos + d
-				var adj_id: int = _world_manager.get_block_world(adj)
-				if adj_id == BlockRegistry.BlockId.BED or adj_id == BlockRegistry.BlockId.BED_HEAD:
-					_world_manager.set_block_world(adj, BlockRegistry.BlockId.AIR)
-			if _player_body != null and _player_body.has_custom_respawn:
-				var b_int := Vector3i(floori(_player_body.custom_respawn_pos.x), floori(_player_body.custom_respawn_pos.y), floori(_player_body.custom_respawn_pos.z))
-				if b_int == broken_pos or (absi(b_int.x - broken_pos.x) + absi(b_int.z - broken_pos.z) <= 1 and b_int.y == broken_pos.y):
-					_player_body.has_custom_respawn = false
-					_player_body.custom_respawn_pos = Vector3.ZERO
-					loot_notification.emit("Bed broken! Respawn point removed.")
+	# A door is two blocks: find the other half before anything changes.
+	var door_partner := Vector3i(0, -9999, 0)
+	if BlockRegistry.is_door(previous_id):
+		var below := broken_pos + Vector3i(0, -1, 0)
+		var above := broken_pos + Vector3i(0, 1, 0)
+		if BlockRegistry.is_door(_world_manager.get_block_world(below)):
+			door_partner = below
+		elif BlockRegistry.is_door(_world_manager.get_block_world(above)):
+			door_partner = above
 
-		var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if is_creative else equipped_id
-		var drop_id: int = InventoryManager.get_dropped_item_for_block(previous_id, effective_tool)
-		if drop_id == BlockRegistry.BlockId.DOOR_OPEN:
-			drop_id = BlockRegistry.BlockId.DOOR_CLOSED
-		elif drop_id == BlockRegistry.BlockId.BED_HEAD or previous_id == BlockRegistry.BlockId.BED_HEAD:
-			drop_id = BlockRegistry.BlockId.BED
-		if drop_id > 0:
-			DroppedItem.spawn_drop(
-				_world_manager,
-				Vector3(broken_pos) + Vector3(0.5, 0.38, 0.5),
-				drop_id,
-				1
-			)
-			if previous_id == BlockRegistry.BlockId.LEAVES and randf() < 0.25:
-				DroppedItem.spawn_drop(
-					_world_manager,
-					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
-					InventoryManager.ItemId.APPLE,
-					1
-				)
-			elif previous_id == BlockRegistry.BlockId.GRASS and randf() < 0.40:
-				DroppedItem.spawn_drop(
-					_world_manager,
-					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
-					InventoryManager.ItemId.WHEAT_SEEDS,
-					1
-				)
-				loot_notification.emit("Found Wheat Seeds!")
-			elif previous_id == BlockRegistry.BlockId.WHEAT_CROPS:
-				DroppedItem.spawn_drop(
-					_world_manager,
-					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
-					InventoryManager.ItemId.WHEAT_SEEDS,
-					randi_range(1, 2)
-				)
-				loot_notification.emit("Harvested Wheat & Seeds!")
-			elif previous_id == BlockRegistry.BlockId.WHEAT_SPROUT:
-				loot_notification.emit("Harvested Wheat Seeds!")
-			elif previous_id == BlockRegistry.BlockId.POTATO_CROPS:
-				DroppedItem.spawn_drop(
-					_world_manager,
-					Vector3(broken_pos) + Vector3(0.5, 0.45, 0.5),
-					InventoryManager.ItemId.POTATO,
-					randi_range(1, 2)
-				)
-				loot_notification.emit("Harvested Potatoes!")
-		else:
-			loot_notification.emit("Broken! (Requires proper Pickaxe tier to harvest)")
+	if not _world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.AIR):
+		return
 
-		# Apply tool durability wear when mining in Survival mode
-		if not is_creative and _inventory != null and InventoryManager.get_max_durability(equipped_id) > 0:
-			if _inventory.damage_hotbar_tool(selected_slot, 1):
+	if previous_id == BlockRegistry.BlockId.CHEST and _inventory != null:
+		_inventory.drop_chest_contents_at(_world_manager, broken_pos)
+	if door_partner.y != -9999 and BlockRegistry.is_door(_world_manager.get_block_world(door_partner)):
+		_world_manager.set_block_world(door_partner, BlockRegistry.BlockId.AIR)
+	# Clean up partner bed block if breaking foot or head of bed
+	elif previous_id == BlockRegistry.BlockId.BED or previous_id == BlockRegistry.BlockId.BED_HEAD:
+		for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+			var adj: Vector3i = broken_pos + d
+			var adj_id: int = _world_manager.get_block_world(adj)
+			if adj_id == BlockRegistry.BlockId.BED or adj_id == BlockRegistry.BlockId.BED_HEAD:
+				_world_manager.set_block_world(adj, BlockRegistry.BlockId.AIR)
+		if _player_body != null and _player_body.has_custom_respawn:
+			var b_int := Vector3i(floori(_player_body.custom_respawn_pos.x), floori(_player_body.custom_respawn_pos.y), floori(_player_body.custom_respawn_pos.z))
+			if b_int == broken_pos or (absi(b_int.x - broken_pos.x) + absi(b_int.z - broken_pos.z) <= 1 and b_int.y == broken_pos.y):
+				_player_body.has_custom_respawn = false
+				_player_body.custom_respawn_pos = Vector3.ZERO
+				loot_notification.emit("Bed broken! Respawn point removed.")
+
+	# Broken ice leaves water behind unless there is nothing underneath it.
+	if previous_id == BlockRegistry.BlockId.ICE and not is_creative:
+		if _world_manager.get_block_world(broken_pos + Vector3i(0, -1, 0)) != BlockRegistry.BlockId.AIR:
+			_world_manager.set_block_world(broken_pos, BlockRegistry.BlockId.WATER)
+
+	var effective_tool: int = InventoryManager.ItemId.DIAMOND_PICKAXE if is_creative else equipped_id
+	var drops: Array = InventoryManager.get_block_drops(previous_id, effective_tool)
+	for drop in drops:
+		DroppedItem.spawn_drop(_world_manager, Vector3(broken_pos) + Vector3(0.5, 0.38, 0.5), int(drop[0]), int(drop[1]))
+	if drops.is_empty() and BlockRegistry.get_required_harvest_level(previous_id) >= 0 and not InventoryManager.can_harvest_block(equipped_id, previous_id):
+		loot_notification.emit("Broken! (Requires proper Pickaxe tier to harvest)")
+	elif previous_id == BlockRegistry.BlockId.WHEAT_CROPS:
+		loot_notification.emit("Harvested Wheat & Seeds!")
+	elif previous_id == BlockRegistry.BlockId.POTATO_CROPS:
+		loot_notification.emit("Harvested Potatoes!")
+
+	# Tools wear by 1 per block that takes time to break (swords by 2); instant blocks are free.
+	if not is_creative and _inventory != null and InventoryManager.get_max_durability(equipped_id) > 0:
+		if BlockRegistry.get_block_hardness(previous_id) > 0.0:
+			var wear: int = 2 if InventoryManager.get_tool_category(equipped_id) == InventoryManager.ToolCategory.SWORD else 1
+			if _inventory.damage_hotbar_tool(selected_slot, wear):
 				loot_notification.emit("Your %s broke!" % InventoryManager.get_item_name(equipped_id))
 
-		block_broken.emit(broken_pos, previous_id)
-		_update_raycast_target()
+	block_broken.emit(broken_pos, previous_id)
+	_update_raycast_target()
 
 
 func _toss_selected_item() -> void:
@@ -729,15 +745,18 @@ func _try_interact_or_place_block() -> void:
 					_update_raycast_target()
 				return
 
-	# Right-clicking a Wooden Door swings it open/closed
-	if targeted_id == BlockRegistry.BlockId.DOOR_CLOSED or targeted_id == BlockRegistry.BlockId.DOOR_OPEN:
+	# Right-clicking a Wooden Door swings both halves open/closed around the hinge (sneaking is not
+	# required: doors never take a block placement).
+	if BlockRegistry.is_door(targeted_id):
 		var next_door: int = BlockRegistry.BlockId.DOOR_OPEN if targeted_id == BlockRegistry.BlockId.DOOR_CLOSED else BlockRegistry.BlockId.DOOR_CLOSED
-		_world_manager.set_block_world(target_block_pos, next_door)
-		for dy in [-1, 1]:
-			var adj: Vector3i = target_block_pos + Vector3i(0, dy, 0)
-			var adj_id: int = _world_manager.get_block_world(adj)
-			if adj_id == BlockRegistry.BlockId.DOOR_CLOSED or adj_id == BlockRegistry.BlockId.DOOR_OPEN:
-				_world_manager.set_block_world(adj, next_door)
+		var lower: Vector3i = target_block_pos
+		if BlockRegistry.is_door(_world_manager.get_block_world(target_block_pos + Vector3i(0, -1, 0))):
+			lower = target_block_pos + Vector3i(0, -1, 0)
+		var upper: Vector3i = lower + Vector3i(0, 1, 0)
+		var door_meta: int = _world_manager.get_metadata_world(lower)
+		_world_manager.set_block_world(lower, next_door, 2, door_meta)
+		if BlockRegistry.is_door(_world_manager.get_block_world(upper)):
+			_world_manager.set_block_world(upper, next_door, 2, door_meta)
 		if next_door == BlockRegistry.BlockId.DOOR_OPEN:
 			station_opened.emit(BlockRegistry.BlockId.DOOR_OPEN)
 		else:
@@ -783,20 +802,29 @@ func _try_interact_or_place_block() -> void:
 		if int(slot_data.get("count", 0)) <= 0:
 			return
 
-	# Special placement: Wooden Door (2 blocks tall)
+	if not _is_replaceable(_world_manager.get_block_world(place_block_pos)):
+		return
+
+	# Special placement: Wooden Door (2 blocks tall, needs a solid floor). It faces the way the
+	# player looks; the hinge goes on the side with more solid blocks (or opposite a neighboring
+	# door, making a double door), falling back to which half of the block was clicked.
 	if selected_item == BlockRegistry.BlockId.DOOR_CLOSED:
 		var top_door_pos: Vector3i = place_block_pos + Vector3i(0, 1, 0)
-		var top_blk: int = _world_manager.get_block_world(top_door_pos)
-		if top_blk != BlockRegistry.BlockId.AIR and not BlockRegistry.is_liquid(top_blk):
+		if not _is_replaceable(_world_manager.get_block_world(top_door_pos)):
 			loot_notification.emit("Not enough space to place Door!")
+			return
+		var floor_id: int = _world_manager.get_block_world(place_block_pos + Vector3i(0, -1, 0))
+		if not BlockRegistry.is_solid(floor_id) or BlockRegistry.is_door(floor_id):
 			return
 		if _player_body != null:
 			var player_pos: Vector3 = _player_body.global_position
 			var player_aabb := AABB(player_pos + Vector3(-0.32, 0.05, -0.32), Vector3(0.64, 1.72, 0.64))
-			if AABB(Vector3(place_block_pos), Vector3.ONE).intersects(player_aabb) or AABB(Vector3(top_door_pos), Vector3.ONE).intersects(player_aabb):
+			var door_box: AABB = BlockRegistry.get_door_box(BlockRegistry.door_meta_from_dir(_get_player_horizontal_facing(), false), false)
+			if AABB(Vector3(place_block_pos) + door_box.position, door_box.size + Vector3(0, 1, 0)).intersects(player_aabb):
 				return
-		if _world_manager.set_block_world(place_block_pos, BlockRegistry.BlockId.DOOR_CLOSED):
-			_world_manager.set_block_world(top_door_pos, BlockRegistry.BlockId.DOOR_CLOSED)
+		var door_meta: int = _compute_door_meta(place_block_pos)
+		if _world_manager.set_block_world(place_block_pos, BlockRegistry.BlockId.DOOR_CLOSED, 2, door_meta):
+			_world_manager.set_block_world(top_door_pos, BlockRegistry.BlockId.DOOR_CLOSED, 2, door_meta)
 			if not is_creative and _inventory != null:
 				_inventory.consume_from_hotbar_slot(selected_slot, 1)
 			block_placed.emit(place_block_pos, BlockRegistry.BlockId.DOOR_CLOSED)
@@ -849,6 +877,17 @@ func _try_interact_or_place_block() -> void:
 
 	var placed_pos: Vector3i = place_block_pos
 	var placed_meta: int = 0
+	if BlockRegistry.is_log(selected_item):
+		# Logs lie along the axis of the face they are placed against.
+		var normal: Vector3i = place_block_pos - target_block_pos
+		if normal.x != 0:
+			placed_meta = 1
+		elif normal.z != 0:
+			placed_meta = 2
+	elif BlockRegistry.is_leaves(selected_item):
+		placed_meta = 8 # Player-placed leaves never decay
+	elif BlockRegistry.needs_support_below(selected_item) and not _can_place_plant(selected_item, placed_pos):
+		return
 	if selected_item == BlockRegistry.BlockId.WOOD_STAIRS or selected_item == BlockRegistry.BlockId.COBBLE_STAIRS:
 		var facing: Vector3i = _get_player_horizontal_facing()
 		if facing == Vector3i(1, 0, 0):
@@ -877,6 +916,74 @@ func _try_interact_or_place_block() -> void:
 			_inventory.consume_from_hotbar_slot(selected_slot, 1)
 		block_placed.emit(placed_pos, selected_item)
 		_update_raycast_target()
+
+
+## Blocks that a placed block may take the place of.
+static func _is_replaceable(block_id: int) -> bool:
+	return block_id == BlockRegistry.BlockId.AIR or BlockRegistry.is_liquid(block_id) or block_id == BlockRegistry.BlockId.SEAGRASS
+
+
+## Placement rules for plants, torches and other blocks that need something underneath.
+func _can_place_plant(block_id: int, pos: Vector3i) -> bool:
+	var below: int = _world_manager.get_block_world(pos + Vector3i(0, -1, 0))
+	match block_id:
+		BlockRegistry.BlockId.SUGAR_CANE:
+			if not _world_manager.can_sugar_cane_stay(pos):
+				loot_notification.emit("Sugar cane needs water right next to the block it stands on")
+				return false
+			return true
+		BlockRegistry.BlockId.CACTUS:
+			if below != BlockRegistry.BlockId.SAND and below != BlockRegistry.BlockId.CACTUS:
+				return false
+			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				if BlockRegistry.is_solid(_world_manager.get_block_world(pos + d)):
+					return false
+			return true
+		BlockRegistry.BlockId.SAPLING, BlockRegistry.BlockId.PINE_SAPLING, BlockRegistry.BlockId.BIRCH_SAPLING, BlockRegistry.BlockId.DANDELION, BlockRegistry.BlockId.ROSE:
+			return below == BlockRegistry.BlockId.GRASS or below == BlockRegistry.BlockId.DIRT or below == BlockRegistry.BlockId.FARMLAND
+		BlockRegistry.BlockId.BROWN_MUSHROOM, BlockRegistry.BlockId.RED_MUSHROOM:
+			return BlockRegistry.is_opaque_full_cube(below)
+		BlockRegistry.BlockId.TORCH, BlockRegistry.BlockId.REDSTONE_TORCH, BlockRegistry.BlockId.LEVER:
+			if BlockRegistry.is_solid(below):
+				return true
+			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				if BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + d)):
+					return true
+			return false
+		_:
+			return BlockRegistry.is_solid(below)
+
+
+## Door metadata for a new door at `pos`: facing = where the player looks; hinge side from the
+## neighbors (solid blocks / an existing door next to it), else from the clicked half of the block.
+func _compute_door_meta(pos: Vector3i) -> int:
+	var facing: Vector3i = _get_player_horizontal_facing()
+	var left := Vector3i(facing.z, 0, -facing.x)
+	var right := -left
+	var up := Vector3i(0, 1, 0)
+	var score: int = 0
+	if BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + left)):
+		score -= 1
+	if BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + left + up)):
+		score -= 1
+	if BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + right)):
+		score += 1
+	if BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + right + up)):
+		score += 1
+	var door_left: bool = BlockRegistry.is_door(_world_manager.get_block_world(pos + left))
+	var door_right: bool = BlockRegistry.is_door(_world_manager.get_block_world(pos + right))
+	var hinge_right: bool
+	if (door_left and not door_right) or score > 0:
+		hinge_right = true
+	elif (door_right and not door_left) or score < 0:
+		hinge_right = false
+	else:
+		# Tie: hinge on the side of the block face the player clicked.
+		var local: Vector3 = _last_hit_point - Vector3(pos)
+		var along_right: float = local.x * float(right.x) + local.z * float(right.z)
+		var offset: float = 1.0 if (right.x + right.z) < 0 else 0.0
+		hinge_right = (along_right + offset) > 0.5
+	return BlockRegistry.door_meta_from_dir(facing, hinge_right)
 
 
 func _get_player_horizontal_facing() -> Vector3i:

@@ -207,64 +207,150 @@ static func stitch_inflow(light: PackedByteArray, vox: PackedByteArray, nb_light
 # ============================================================================
 # INCREMENTAL WORLD LIGHTING (main thread)
 # ============================================================================
+#
+# Edits are relit inside the 3x3 chunks around the edited block: light travels at most 15 blocks,
+# so that region always contains every cell an edit can affect. Cells are addressed with a packed
+# region key `(y << 12) | (rz << 6) | rx` (rx, rz in 0..47), and buffers are read directly.
 
-## Per-update scratch state: chunk lookup cache and the set of sub-chunks touched.
-class LightCtx:
-	var wm: Node
-	var chunks: Dictionary = {}
-	## Vector2i chunk coord -> {sub_idx: true}
-	var dirty: Dictionary = {}
+const REGION: int = 48
 
-	func _init(world: Node, dirty_out: Dictionary) -> void:
-		wm = world
-		dirty = dirty_out
 
-	func chunk_at(cx: int, cz: int) -> VoxelChunk:
-		var key := Vector2i(cx, cz)
-		if chunks.has(key):
-			return chunks[key]
-		var c: VoxelChunk = wm.find_loaded_chunk(key)
-		if c != null and c._lighting.is_empty():
-			VoxelLighting.compute_chunk_lighting(c)
-		chunks[key] = c
-		return c
+## The 3x3 chunk buffers around an edit, plus which (chunk, sub-chunk) cells changed.
+class LightRegion:
+	var cx0: int
+	var cz0: int
+	var chunks: Array = []
+	var vox: Array = []
+	var light: Array = []
+	## Per (chunk index * 16 + sub): bit 0 = changed, bits 1..6 = touched -x, +x, -z, +z, -y, +y edges.
+	var changed := PackedByteArray()
 
-	func block_at(p: Vector3i) -> int:
-		if p.y < 0:
-			return BlockRegistry.BlockId.BEDROCK
-		if p.y > 255:
-			return BlockRegistry.BlockId.AIR
-		var c: VoxelChunk = chunk_at(p.x >> 4, p.z >> 4)
-		if c == null or c._voxels.is_empty():
-			return BlockRegistry.BlockId.BEDROCK
-		return c._voxels[(p.y << 8) | ((p.z & 15) << 4) | (p.x & 15)]
+	func _init(wm: Node, center: Vector2i) -> void:
+		cx0 = center.x - 1
+		cz0 = center.y - 1
+		changed.resize(9 * 16)
+		for dz in range(3):
+			for dx in range(3):
+				var c: VoxelChunk = wm.find_loaded_chunk(Vector2i(cx0 + dx, cz0 + dz))
+				if c != null and not c._voxels.is_empty() and c._lighting.is_empty():
+					VoxelLighting.compute_chunk_lighting(c)
+				chunks.append(c)
+				vox.append(c._voxels if c != null else PackedByteArray())
+				light.append(c._lighting if c != null and not c._voxels.is_empty() else PackedByteArray())
 
-	## Returns -1 for positions that cannot hold light (outside the world or unloaded).
-	func get_light(p: Vector3i, sky: bool) -> int:
-		if p.y > 255:
-			return 15 if sky else 0
-		if p.y < 0:
-			return -1
-		var c: VoxelChunk = chunk_at(p.x >> 4, p.z >> 4)
-		if c == null:
-			return -1
-		var v: int = c._lighting[(p.y << 8) | ((p.z & 15) << 4) | (p.x & 15)]
-		return (v >> 4) if sky else (v & 15)
+	func key_of(p: Vector3i) -> int:
+		return (p.y << 12) | ((p.z - cz0 * 16) << 6) | (p.x - cx0 * 16)
 
-	func set_light(p: Vector3i, val: int, sky: bool) -> void:
-		var c: VoxelChunk = chunk_at(p.x >> 4, p.z >> 4)
-		if c == null:
-			return
-		var idx: int = (p.y << 8) | ((p.z & 15) << 4) | (p.x & 15)
-		var cur: int = c._lighting[idx]
-		var nv: int = ((val << 4) | (cur & 15)) if sky else ((cur & 0xF0) | val)
-		if nv == cur:
-			return
-		c._lighting[idx] = nv
-		mark_dirty(p)
+	## Records a light write at region key `k` for remeshing.
+	func touch(k: int) -> void:
+		var rx: int = k & 63
+		var rz: int = (k >> 6) & 63
+		var y: int = k >> 12
+		var lx: int = rx & 15
+		var lz: int = rz & 15
+		var ly: int = y & 15
+		var bits: int = 1
+		if lx == 0:
+			bits |= 2
+		elif lx == 15:
+			bits |= 4
+		if lz == 0:
+			bits |= 8
+		elif lz == 15:
+			bits |= 16
+		if ly == 0:
+			bits |= 32
+		elif ly == 15:
+			bits |= 64
+		var slot: int = (((rz >> 4) * 3 + (rx >> 4)) << 4) | (y >> 4)
+		changed[slot] = changed[slot] | bits
 
-	func mark_dirty(p: Vector3i) -> void:
-		VoxelLighting.mark_remesh(dirty, p)
+	## Converts the change flags into remesh requests (`Vector2i -> {sub: true}`) and bumps light versions.
+	func flush_dirty(dirty: Dictionary) -> void:
+		for slot in range(9 * 16):
+			var bits: int = changed[slot]
+			if bits == 0:
+				continue
+			var ci: int = slot >> 4
+			var sub: int = slot & 15
+			var cx: int = cx0 + ci % 3
+			var cz: int = cz0 + ci / 3
+			var c: VoxelChunk = chunks[ci]
+			if c != null:
+				c.light_version += 1
+			var dxs: Array[int] = [0]
+			var dzs: Array[int] = [0]
+			var subs: Array[int] = [sub]
+			if bits & 2:
+				dxs.append(-1)
+			if bits & 4:
+				dxs.append(1)
+			if bits & 8:
+				dzs.append(-1)
+			if bits & 16:
+				dzs.append(1)
+			if (bits & 32) and sub > 0:
+				subs.append(sub - 1)
+			if (bits & 64) and sub < 15:
+				subs.append(sub + 1)
+			for dx in dxs:
+				for dz in dzs:
+					var key := Vector2i(cx + dx, cz + dz)
+					if not dirty.has(key):
+						dirty[key] = {}
+					for s in subs:
+						dirty[key][s] = true
+
+
+## Reads the light nibble at region key `k` (-1 if outside the region or unloaded).
+static func _rget(r: LightRegion, k: int, sky: bool) -> int:
+	var rx: int = k & 63
+	var rz: int = (k >> 6) & 63
+	if rx >= REGION or rz >= REGION:
+		return -1
+	var buf: PackedByteArray = r.light[(rz >> 4) * 3 + (rx >> 4)]
+	if buf.is_empty():
+		return -1
+	var v: int = buf[((k >> 12) << 8) | ((rz & 15) << 4) | (rx & 15)]
+	return (v >> 4) if sky else (v & 15)
+
+
+static func _rset(r: LightRegion, k: int, val: int, sky: bool) -> void:
+	var rx: int = k & 63
+	var rz: int = (k >> 6) & 63
+	var buf: PackedByteArray = r.light[(rz >> 4) * 3 + (rx >> 4)]
+	var li: int = ((k >> 12) << 8) | ((rz & 15) << 4) | (rx & 15)
+	var cur: int = buf[li]
+	var nv: int = ((val << 4) | (cur & 15)) if sky else ((cur & 0xF0) | val)
+	if nv != cur:
+		buf[li] = nv
+		r.touch(k)
+
+
+static func _rblock(r: LightRegion, k: int) -> int:
+	var rx: int = k & 63
+	var rz: int = (k >> 6) & 63
+	var buf: PackedByteArray = r.vox[(rz >> 4) * 3 + (rx >> 4)]
+	if buf.is_empty():
+		return BlockRegistry.BlockId.BEDROCK
+	return buf[((k >> 12) << 8) | ((rz & 15) << 4) | (rx & 15)]
+
+
+## Neighbor key in direction `dir` (0..5), or -1 if it leaves the region / world.
+static func _rstep(k: int, dir: int) -> int:
+	match dir:
+		0:
+			return k + 4096 if (k >> 12) < 255 else -1
+		1:
+			return k - 4096 if (k >> 12) > 0 else -1
+		2:
+			return k + 1 if (k & 63) < REGION - 1 else -1
+		3:
+			return k - 1 if (k & 63) > 0 else -1
+		4:
+			return k + 64 if ((k >> 6) & 63) < REGION - 1 else -1
+		_:
+			return k - 64 if ((k >> 6) & 63) > 0 else -1
 
 
 ## Records that the block at world position `p` changed, flagging its sub-chunk and any neighbor
@@ -300,114 +386,168 @@ static func mark_remesh(dirty: Dictionary, p: Vector3i) -> void:
 				dirty[key][s] = true
 
 
-## Re-lights around `pos` after its block changed (both channels). Touched sub-chunks are added to
-## `dirty` (Vector2i -> {sub_idx: true}).
-static func update_light_at(wm: Node, pos: Vector3i, dirty: Dictionary) -> void:
-	var ctx := LightCtx.new(wm, dirty)
-	_update_channel(ctx, pos, false)
-	_update_channel(ctx, pos, true)
+## Re-lights around `pos` after its block changed from `old_id`. Touched sub-chunks are added to
+## `dirty` (Vector2i -> {sub_idx: true}). Only the channels the change can affect are updated.
+static func update_light_at(wm: Node, pos: Vector3i, dirty: Dictionary, old_id: int = -1) -> void:
+	if pos.y < 0 or pos.y > 255:
+		return
+	var r := LightRegion.new(wm, Vector2i(pos.x >> 4, pos.z >> 4))
+	if r.light[4].is_empty():
+		return
+	var k: int = r.key_of(pos)
+	var new_id: int = _rblock(r, k)
+	var opacity_changed: bool = old_id < 0 or get_block_opacity(old_id) != get_block_opacity(new_id)
+	var emit_changed: bool = old_id < 0 or get_block_luminance(old_id) != get_block_luminance(new_id)
+	if opacity_changed or emit_changed:
+		_update_channel(r, k, false)
+	if opacity_changed:
+		_update_channel(r, k, true)
+	r.flush_dirty(dirty)
 
 
 ## Light-adding pass for many cells that just became transparent at once (explosions).
 static func refill_cleared(wm: Node, cleared: Array[Vector3i], dirty: Dictionary) -> void:
-	var ctx := LightCtx.new(wm, dirty)
-	for sky in [false, true]:
-		var add_q: Array[Vector3i] = []
-		for p in cleared:
-			for d in NEIGHBORS_6:
-				var n: Vector3i = p + d
-				if ctx.get_light(n, sky) > 0:
-					add_q.append(n)
-		_flood_add(ctx, add_q, sky)
-
-
-static func _update_channel(ctx: LightCtx, pos: Vector3i, sky: bool) -> void:
-	if pos.y < 0 or pos.y > 255:
+	if cleared.is_empty():
 		return
-	var cur: int = ctx.get_light(pos, sky)
+	var r := LightRegion.new(wm, Vector2i(cleared[0].x >> 4, cleared[0].z >> 4))
+	for sky in [false, true]:
+		var add_q := PackedInt32Array()
+		for p in cleared:
+			if (p.x >> 4) < r.cx0 or (p.x >> 4) > r.cx0 + 2 or (p.z >> 4) < r.cz0 or (p.z >> 4) > r.cz0 + 2:
+				continue
+			var k: int = r.key_of(p)
+			for dir in range(6):
+				var n: int = _rstep(k, dir)
+				if n >= 0 and _rget(r, n, sky) > 0:
+					add_q.append(n)
+		_flood_add(r, add_q, sky)
+	r.flush_dirty(dirty)
+
+
+static func _update_channel(r: LightRegion, k: int, sky: bool) -> void:
+	var cur: int = _rget(r, k, sky)
 	if cur < 0:
 		return
-	var add_q: Array[Vector3i] = []
+	var add_q := PackedInt32Array()
 
 	# 1. Remove the light that flowed through this cell.
 	if cur > 0:
-		ctx.set_light(pos, 0, sky)
-		_flood_remove(ctx, pos, cur, sky, add_q)
+		_rset(r, k, 0, sky)
+		_flood_remove(r, k, cur, sky, add_q)
 
 	# 2. Re-seed: emitters, open sky directly above, and every lit neighbor flowing back in.
-	var id: int = ctx.block_at(pos)
+	var id: int = _rblock(r, k)
 	var op: int = get_block_opacity(id)
 	if not sky:
 		var emit: int = get_block_luminance(id)
 		if emit > 0:
-			ctx.set_light(pos, emit, false)
-			add_q.append(pos)
+			_rset(r, k, emit, false)
+			add_q.append(k)
 	if op < 15:
-		if sky and pos.y == 255:
-			ctx.set_light(pos, 15 - op, true)
-			add_q.append(pos)
-		for d in NEIGHBORS_6:
-			var n: Vector3i = pos + d
-			if ctx.get_light(n, sky) > 0:
+		if sky and (k >> 12) == 255:
+			_rset(r, k, 15 - op, true)
+			add_q.append(k)
+		for dir in range(6):
+			var n: int = _rstep(k, dir)
+			if n >= 0 and _rget(r, n, sky) > 0:
 				add_q.append(n)
-	_flood_add(ctx, add_q, sky)
+	_flood_add(r, add_q, sky)
 
 
-static func _flood_remove(ctx: LightCtx, start: Vector3i, start_val: int, sky: bool, add_q: Array[Vector3i]) -> void:
-	var q_pos: Array[Vector3i] = [start]
-	var q_val: PackedInt32Array = PackedInt32Array([start_val])
+static func _flood_remove(r: LightRegion, start: int, start_val: int, sky: bool, add_q: PackedInt32Array) -> void:
+	var q_key := PackedInt32Array([start])
+	var q_val := PackedInt32Array([start_val])
 	var head: int = 0
-	while head < q_pos.size():
-		var p: Vector3i = q_pos[head]
+	while head < q_key.size():
+		var k: int = q_key[head]
 		var val: int = q_val[head]
 		head += 1
-		for i in range(6):
-			var d: Vector3i = NEIGHBORS_6[i]
-			var n: Vector3i = p + d
-			if n.y < 0 or n.y > 255:
+		for dir in range(6):
+			var n: int = _rstep(k, dir)
+			if n < 0:
 				continue
-			var nl: int = ctx.get_light(n, sky)
+			var nl: int = _rget(r, n, sky)
 			if nl <= 0:
 				continue
-			var dependent: bool = nl < val
-			if sky and i == 1 and val == 15 and nl == 15:
-				dependent = true
+			var dependent: bool = nl < val or (sky and dir == 1 and val == 15 and nl == 15)
 			if dependent:
-				# Keep emitters lit; they are re-added below.
-				if not sky and get_block_luminance(ctx.block_at(n)) > 0:
+				# Keep emitters lit; they are re-added afterwards.
+				if not sky and get_block_luminance(_rblock(r, n)) > 0:
 					add_q.append(n)
 					continue
-				ctx.set_light(n, 0, sky)
-				q_pos.append(n)
+				_rset(r, n, 0, sky)
+				q_key.append(n)
 				q_val.append(nl)
 			else:
 				add_q.append(n)
 
 
-static func _flood_add(ctx: LightCtx, queue: Array[Vector3i], sky: bool) -> void:
+## Spreads light outward from every key in `queue`. This is the hot loop of every light update, so
+## neighbor addressing is written out inline instead of going through the helper functions.
+static func _flood_add(r: LightRegion, queue: PackedInt32Array, sky: bool) -> void:
+	var opacity: PackedByteArray = BlockRegistry.light_opacity_table
+	var lights: Array = r.light
+	var voxes: Array = r.vox
+	var shift: int = 4 if sky else 0
+	var keep_mask: int = 0x0F if sky else 0xF0
 	var head: int = 0
 	while head < queue.size():
-		var p: Vector3i = queue[head]
+		var k: int = queue[head]
 		head += 1
-		var val: int = ctx.get_light(p, sky)
+		var rx: int = k & 63
+		var rz: int = (k >> 6) & 63
+		var y: int = k >> 12
+		var own: PackedByteArray = lights[(rz >> 4) * 3 + (rx >> 4)]
+		var val: int = (own[(y << 8) | ((rz & 15) << 4) | (rx & 15)] >> shift) & 15
 		if val <= 1:
 			continue
-		for i in range(6):
-			var n: Vector3i = p + NEIGHBORS_6[i]
-			if n.y < 0 or n.y > 255:
+		for dir in range(6):
+			var nx: int = rx
+			var nz: int = rz
+			var ny: int = y
+			match dir:
+				0:
+					ny += 1
+					if ny > 255:
+						continue
+				1:
+					ny -= 1
+					if ny < 0:
+						continue
+				2:
+					nx += 1
+					if nx >= REGION:
+						continue
+				3:
+					nx -= 1
+					if nx < 0:
+						continue
+				4:
+					nz += 1
+					if nz >= REGION:
+						continue
+				_:
+					nz -= 1
+					if nz < 0:
+						continue
+			var ci: int = (nz >> 4) * 3 + (nx >> 4)
+			var buf: PackedByteArray = lights[ci]
+			if buf.is_empty():
 				continue
-			var nl: int = ctx.get_light(n, sky)
-			if nl < 0:
-				continue
-			var op: int = get_block_opacity(ctx.block_at(n))
+			var li: int = (ny << 8) | ((nz & 15) << 4) | (nx & 15)
+			var vbuf: PackedByteArray = voxes[ci]
+			var op: int = opacity[vbuf[li]]
 			if op >= 15:
 				continue
 			var nv: int = val - maxi(op, 1)
-			if sky and i == 1 and val == 15 and op == 0:
+			if sky and dir == 1 and val == 15 and op == 0:
 				nv = 15
-			if nv > nl:
-				ctx.set_light(n, nv, sky)
-				queue.append(n)
+			var cur: int = buf[li]
+			if nv > ((cur >> shift) & 15):
+				buf[li] = (cur & keep_mask) | (nv << shift)
+				var nk: int = (ny << 12) | (nz << 6) | nx
+				r.touch(nk)
+				queue.append(nk)
 
 
 # ============================================================================

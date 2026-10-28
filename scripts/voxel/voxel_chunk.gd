@@ -1142,11 +1142,20 @@ func dispatch_sub_rebuild(sub_idx: int, job: Dictionary, water_only: bool) -> vo
 		_sub_versions[sub_idx] += 1
 	var ver: int = _sub_versions[sub_idx]
 	var water_ver: int = _water_versions[sub_idx]
+	# The chunk may be unloaded before the worker finishes: refer to it by id, and let the deferred
+	# call (which is skipped for freed objects) do the rest on the main thread.
+	var chunk_id: int = get_instance_id()
 	WorkerThreadPool.add_task(func() -> void:
 		var padded: Array = ChunkMesher.build_padded(sub_idx, job["vox"], job["light"], int(job["y_origin"]))
 		var data: Dictionary = ChunkMesher.build_sub_chunk(sub_idx, padded, job["meta"], water_only)
-		_apply_versioned_sub_chunk.call_deferred(sub_idx, data, ver, water_ver, water_only)
+		Callable(VoxelChunk, "_apply_rebuild_result").call_deferred(chunk_id, sub_idx, data, ver, water_ver, water_only)
 	, false, "SubChunkMesh")
+
+
+static func _apply_rebuild_result(chunk_id: int, sub_idx: int, data: Dictionary, ver: int, water_ver: int, water_only: bool) -> void:
+	var chunk: VoxelChunk = instance_from_id(chunk_id) as VoxelChunk
+	if chunk != null:
+		chunk._apply_versioned_sub_chunk(sub_idx, data, ver, water_ver, water_only)
 
 
 func _apply_versioned_sub_chunk(sub_idx: int, data: Dictionary, ver: int, water_ver: int, water_only: bool) -> void:
