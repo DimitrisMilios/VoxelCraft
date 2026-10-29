@@ -350,6 +350,7 @@ func deserialize_chests(chests_data: Dictionary) -> void:
 					c_slots.append({
 						"id": int(item.get("id", 0)),
 						"count": int(item.get("count", 0)),
+						"durability": int(item.get("durability", -1))
 					})
 			while c_slots.size() < CHEST_SIZE:
 				c_slots.append({"id": 0, "count": 0})
@@ -448,9 +449,12 @@ func _process(delta: float) -> void:
 
 ## Sets crafting grid to 2x2 (4 slots, Player Inventory E) or 3x3 (9 slots, Crafting Table).
 func set_crafting_grid_dimension(dim: int) -> void:
+	var target_dim: int = 3 if dim == 3 else 2
+	if craft_grid_size == target_dim and craft_grid.size() == target_dim * target_dim:
+		return
 	# Return any items currently inside the crafting grid back to the player's inventory first
 	return_crafting_grid_to_inventory()
-	craft_grid_size = 3 if dim == 3 else 2
+	craft_grid_size = target_dim
 	var cell_count: int = craft_grid_size * craft_grid_size
 	craft_grid.resize(cell_count)
 	for i in range(cell_count):
@@ -1820,10 +1824,12 @@ func click_craft_output_slot(is_shift: bool = false) -> void:
 
 	# Consume 1 item from every occupied cell in the crafting grid
 	for i in range(craft_grid.size()):
-		if int(craft_grid[i]["id"]) != 0:
-			craft_grid[i]["count"] = int(craft_grid[i]["count"]) - 1
-			if int(craft_grid[i]["count"]) <= 0:
+		if int(craft_grid[i].get("id", 0)) != 0:
+			var prev_cnt: int = int(craft_grid[i].get("count", 1))
+			if prev_cnt <= 1:
 				craft_grid[i] = {"id": 0, "count": 0}
+			else:
+				craft_grid[i]["count"] = prev_cnt - 1
 
 	_recalculate_crafting_output()
 	inventory_updated.emit()
@@ -2360,7 +2366,13 @@ func autofill_recipe_pattern(recipe_key: String) -> String:
 
 	match recipe_key:
 		"planks":
-			target_grid = [BlockRegistry.BlockId.WOOD_LOG]
+			var log_id: int = BlockRegistry.BlockId.WOOD_LOG
+			if get_total_count(log_id) <= 0:
+				if get_total_count(BlockRegistry.BlockId.PINE_LOG) > 0:
+					log_id = BlockRegistry.BlockId.PINE_LOG
+				elif get_total_count(BlockRegistry.BlockId.BIRCH_LOG) > 0:
+					log_id = BlockRegistry.BlockId.BIRCH_LOG
+			target_grid = [log_id]
 		"sticks":
 			if craft_grid_size == 2:
 				target_grid = [P, 0, P, 0]
@@ -2372,13 +2384,29 @@ func autofill_recipe_pattern(recipe_key: String) -> String:
 			else:
 				target_grid = [P, P, 0, P, P, 0, 0, 0, 0]
 		"glowstone":
+			var coal_id: int = ItemId.COAL
 			if craft_grid_size == 2:
-				target_grid = [ItemId.COAL, 0, S, 0]
+				target_grid = [coal_id, 0, S, 0]
 			else:
-				target_grid = [0, ItemId.COAL, 0, 0, S, 0, 0, 0, 0]
+				target_grid = [0, coal_id, 0, 0, S, 0, 0, 0, 0]
 		"furnace":
 			requires_3x3 = true
 			target_grid = [C, C, C, C, 0, C, C, C, C]
+		"iron_helmet":
+			requires_3x3 = true
+			target_grid = [FE, FE, FE, FE, 0, FE, 0, 0, 0]
+		"iron_chestplate":
+			requires_3x3 = true
+			target_grid = [FE, 0, FE, FE, FE, FE, FE, FE, FE]
+		"iron_leggings":
+			requires_3x3 = true
+			target_grid = [FE, FE, FE, FE, 0, FE, FE, 0, FE]
+		"iron_boots":
+			requires_3x3 = true
+			target_grid = [FE, 0, FE, FE, 0, FE, 0, 0, 0]
+		"diamond_chestplate":
+			requires_3x3 = true
+			target_grid = [D, 0, D, D, D, D, D, D, D]
 		"wood_pickaxe":
 			requires_3x3 = true
 			target_grid = [P, P, P, 0, S, 0, 0, S, 0]

@@ -360,29 +360,31 @@ func _on_station_opened(station_block_id: int) -> void:
 			_inventory.is_chest_open = false
 			_inventory.is_furnace_open = false
 			_inventory.set_crafting_grid_dimension(3)
-		_modal_title_label.text = "CRAFTING TABLE (3x3 WORKBENCH)"
-		_modal_feedback_label.text = "Left-Click to pick/place stack | Right-Click to place 1 item per cell"
+		if _modal_title_label != null: _modal_title_label.text = "CRAFTING TABLE (3x3 WORKBENCH)"
+		if _modal_feedback_label != null: _modal_feedback_label.text = "Left-Click to pick/place stack | Right-Click to place 1 item per cell"
 	elif station_block_id == BlockRegistry.BlockId.FURNACE:
 		_modal_mode = ModalMode.FURNACE_OVEN
 		if _inventory != null:
 			_inventory.open_furnace()
-		_modal_title_label.text = "FURNACE (OVEN SMELTING)"
-		_modal_feedback_label.text = "Place Ore/Meat in Top Slot + Coal/Wood in Bottom Fuel Slot to smelt/cook!"
+		if _modal_title_label != null: _modal_title_label.text = "FURNACE (OVEN SMELTING)"
+		if _modal_feedback_label != null: _modal_feedback_label.text = "Place Ore/Meat in Top Slot + Coal/Wood in Bottom Fuel Slot to smelt/cook!"
 	elif station_block_id == BlockRegistry.BlockId.CHEST:
 		_modal_mode = ModalMode.CHEST_27
 		if _inventory != null:
 			_inventory.is_chest_open = true
 			_inventory.is_furnace_open = false
-		_modal_title_label.text = "WOODEN CHEST (27-SLOT WORLD STORAGE)"
-		_modal_feedback_label.text = "Store items in this Chest! Contents stay at this block position."
-	else:
+		if _modal_title_label != null: _modal_title_label.text = "WOODEN CHEST (27-SLOT WORLD STORAGE)"
+		if _modal_feedback_label != null: _modal_feedback_label.text = "Store items in this Chest! Contents stay at this block position."
+	elif station_block_id == 0:
 		_modal_mode = ModalMode.PLAYER_INV_2X2
 		if _inventory != null:
 			_inventory.is_chest_open = false
 			_inventory.is_furnace_open = false
 			_inventory.set_crafting_grid_dimension(2)
-		_modal_title_label.text = "PLAYER INVENTORY (2x2 CRAFTING)"
-		_modal_feedback_label.text = "Punch Wood -> Place in 2x2 Grid -> Craft Planks, Sticks & Crafting Table!"
+		if _modal_title_label != null: _modal_title_label.text = "PLAYER INVENTORY (2x2 CRAFTING)"
+		if _modal_feedback_label != null: _modal_feedback_label.text = "Punch Wood -> Place in 2x2 Grid -> Craft Planks, Sticks & Crafting Table!"
+	else:
+		return
 
 	if _modal_overlay != null:
 		_modal_overlay.visible = true
@@ -947,7 +949,7 @@ func _build_2x2_crafting_view() -> Control:
 	# Shield / Off-hand slot under character preview
 	var shield_row := HBoxContainer.new()
 	shield_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	var shield_slot := _create_interactive_slot_widget(46, 46, func(_btn: int) -> void:
+	var shield_slot := _create_interactive_slot_widget(46, 46, func(_btn: int, _is_shift: bool = false) -> void:
 		pass
 	)
 	var shield_icon: TextureRect = shield_slot.get("icon", null) as TextureRect
@@ -1249,6 +1251,11 @@ func _rebuild_recipe_book_buttons() -> void:
 		["iron_pickaxe", "[3x3] Iron Pick (3 Iron+2 Stick)"],
 		["iron_sword", "[3x3] Iron Sword (2 Iron+1 Stick)"],
 		["bucket", "[3x3] Iron Bucket (3 Iron V-Shape)"],
+		["iron_helmet", "[3x3] Iron Helmet (5 Iron)"],
+		["iron_chestplate", "[3x3] Iron Chestplate (8 Iron)"],
+		["iron_leggings", "[3x3] Iron Leggings (7 Iron)"],
+		["iron_boots", "[3x3] Iron Boots (4 Iron)"],
+		["diamond_chestplate", "[3x3] Diam. Chest (8 Diam)"],
 		["diamond_pickaxe", "[3x3] Diamond Pick (3 Diam+2 Stick)"],
 		["diamond_sword", "[3x3] Diamond Sword (2 Diam+1 Stick)"],
 	]
@@ -1603,7 +1610,7 @@ func _apply_faithful_button_style(btn: Button) -> void:
 
 
 func _play_ui_click() -> void:
-	if get_tree() == null:
+	if not is_inside_tree() or get_tree() == null:
 		return
 	var sfx: Node = get_tree().get_first_node_in_group("sfx_player")
 	if sfx != null and sfx.has_method("play_sfx"):
@@ -1675,7 +1682,7 @@ func _build_pause_menu() -> void:
 	vbox.add_child(slider)
 
 	# 3D render resolution: Auto lowers it only when the GPU cannot keep 60 FPS; the HUD stays sharp.
-	var video: Node = get_node_or_null("/root/VideoSettings")
+	var video: Node = get_node_or_null("/root/VideoSettings") if is_inside_tree() else null
 	var scale_btn := Button.new()
 	scale_btn.text = "Render Scale: %s" % (video.call("describe_render_scale") if video != null else "100%")
 	scale_btn.custom_minimum_size = Vector2(0, 32)

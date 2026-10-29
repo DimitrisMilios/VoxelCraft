@@ -761,10 +761,9 @@ func _try_interact_or_place_block() -> void:
 		_world_manager.set_block_world(lower, next_door, 2, door_meta)
 		if BlockRegistry.is_door(_world_manager.get_block_world(upper)):
 			_world_manager.set_block_world(upper, next_door, 2, door_meta)
-		if next_door == BlockRegistry.BlockId.DOOR_OPEN:
-			station_opened.emit(BlockRegistry.BlockId.DOOR_OPEN)
-		else:
-			station_opened.emit(BlockRegistry.BlockId.DOOR_CLOSED)
+		var sfx: Node = get_tree().get_first_node_in_group("sfx_player") if is_inside_tree() and get_tree() != null else null
+		if sfx != null and sfx.has_method("play_sfx"):
+			sfx.play_sfx("door_open" if next_door == BlockRegistry.BlockId.DOOR_OPEN else "door_close", -1.0)
 		mob_interacted.emit(false, 0)
 		_update_raycast_target()
 		return
