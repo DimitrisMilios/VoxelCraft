@@ -1805,13 +1805,18 @@ func click_craft_output_slot(is_shift: bool = false) -> void:
 	var cur_count: int = int(cursor_stack.get("count", 0))
 	var max_stk: int = 1 if is_tool_item(out_id) else MAX_STACK
 
-	if cur_id != 0 and (cur_id != out_id or cur_count + out_count > max_stk):
-		return
-
 	if cur_id == 0:
 		cursor_stack = {"id": out_id, "count": out_count, "durability": get_max_durability(out_id)}
-	else:
+	elif cur_id == out_id and cur_count + out_count <= max_stk:
 		cursor_stack["count"] = cur_count + out_count
+	else:
+		# Cursor holds a different item or cursor stack is full (e.g. leftover logs from splitting a stack).
+		# Directly deposit the crafted output into the player's inventory!
+		if not can_fit_item(out_id, out_count):
+			return
+		var unplaced: int = add_item_stack(out_id, out_count, get_max_durability(out_id))
+		if unplaced > 0:
+			return
 
 	# Consume 1 item from every occupied cell in the crafting grid
 	for i in range(craft_grid.size()):
@@ -1851,6 +1856,12 @@ func click_furnace_slot(furnace_slot_type: int, mouse_button: int, is_shift: boo
 					elif cur_id == out_id and cur_cnt + out_cnt <= MAX_STACK:
 						cursor_stack["count"] = cur_cnt + out_cnt
 						furnace_output = {"id": 0, "count": 0}
+					else:
+						var rem: int = add_item_stack(out_id, out_cnt)
+						if rem <= 0:
+							furnace_output = {"id": 0, "count": 0}
+						else:
+							furnace_output["count"] = rem
 	_sync_active_furnace_to_dict()
 	furnace_updated.emit()
 	inventory_updated.emit()

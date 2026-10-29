@@ -181,6 +181,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_tree().paused = false
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 			get_viewport().set_input_as_handled()
+		elif not get_tree().paused and event.physical_keycode == KEY_ESCAPE:
+			get_tree().paused = true
+			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+			get_viewport().set_input_as_handled()
 
 
 func _process(delta: float) -> void:
@@ -342,8 +346,13 @@ func _on_station_opened(station_block_id: int) -> void:
 		return
 
 	if _modal_mode != ModalMode.NONE:
-		_close_modal()
-		return
+		if station_block_id == 0:
+			# Pressing E toggles inventory closed if any modal was open
+			_close_modal()
+			return
+		# Switching between interactive stations (e.g. Chest, Workbench, Furnace): return grid items first
+		if _inventory != null:
+			_inventory.return_crafting_grid_to_inventory()
 
 	if station_block_id == BlockRegistry.BlockId.CRAFTING_TABLE:
 		_modal_mode = ModalMode.CRAFTING_TABLE_3X3
@@ -375,6 +384,8 @@ func _on_station_opened(station_block_id: int) -> void:
 		_modal_title_label.text = "PLAYER INVENTORY (2x2 CRAFTING)"
 		_modal_feedback_label.text = "Punch Wood -> Place in 2x2 Grid -> Craft Planks, Sticks & Crafting Table!"
 
+	if _modal_overlay != null:
+		_modal_overlay.visible = true
 	_craft_2x2_container.visible = (_modal_mode == ModalMode.PLAYER_INV_2X2)
 	_craft_3x3_container.visible = (_modal_mode == ModalMode.CRAFTING_TABLE_3X3)
 	_furnace_container.visible = (_modal_mode == ModalMode.FURNACE_OVEN)
@@ -390,9 +401,13 @@ func _close_modal() -> void:
 	_hide_slot_tooltip()
 	if _inventory != null:
 		_inventory.return_crafting_grid_to_inventory()
+		_inventory.is_chest_open = false
+		_inventory.is_furnace_open = false
 	_modal_mode = ModalMode.NONE
 	if _cursor_float != null:
 		_cursor_float.visible = false
+	if _modal_overlay != null:
+		_modal_overlay.visible = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 
@@ -1459,7 +1474,7 @@ func _refresh_furnace_visuals() -> void:
 
 
 func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
-	if widget.is_empty():
+	if widget == null or widget.is_empty():
 		return
 	var id: int = int(slot_data.get("id", 0))
 	var cnt: int = int(slot_data.get("count", 0))
@@ -1475,8 +1490,8 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 
 	var panel: PanelContainer = widget.get("panel", null) as PanelContainer
 	var icon_rect: TextureRect = widget.get("icon", null) as TextureRect
-	var swatch: ColorRect = widget["swatch"]
-	var label: Label = widget["label"]
+	var swatch: ColorRect = widget.get("swatch", null) as ColorRect
+	var label: Label = widget.get("label", null) as Label
 	var dur_bar: ColorRect = widget.get("dur_bar", null) as ColorRect
 
 	if id == 0 or cnt <= 0:
@@ -1485,8 +1500,10 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 		if icon_rect != null:
 			icon_rect.texture = null
 			icon_rect.visible = false
-		swatch.visible = false
-		label.text = ""
+		if swatch != null:
+			swatch.visible = false
+		if label != null:
+			label.text = ""
 		if dur_bar != null:
 			dur_bar.visible = false
 		return
@@ -1498,19 +1515,23 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 	if icon_rect != null and icon_tex != null:
 		icon_rect.texture = icon_tex
 		icon_rect.visible = true
-		swatch.visible = false
+		if swatch != null:
+			swatch.visible = false
 	else:
 		if icon_rect != null:
 			icon_rect.visible = false
-		swatch.visible = true
-		swatch.color = InventoryManager.get_item_color(id)
+		if swatch != null:
+			swatch.visible = true
+			swatch.color = InventoryManager.get_item_color(id)
 
 	if InventoryManager.is_tool_item(id):
-		label.text = ""
+		if label != null:
+			label.text = ""
 		if dur_bar != null:
 			_update_durability_bar(dur_bar, id, int(slot_data.get("durability", -1)), float(widget.get("max_bar_width", 38.0)))
 	else:
-		label.text = str(cnt) if cnt > 1 else ""
+		if label != null:
+			label.text = str(cnt) if cnt > 1 else ""
 		if dur_bar != null:
 			dur_bar.visible = false
 
