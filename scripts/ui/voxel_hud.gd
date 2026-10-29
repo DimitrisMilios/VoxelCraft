@@ -38,6 +38,13 @@ var _armor_icons: Array[TextureRect] = []
 var _armor_hbox: HBoxContainer = null
 var _armor_slot_widgets: Array[Dictionary] = []
 var _armor_slot_placeholders: Array[Texture2D] = []
+var _hotbar_slot_dicts: Array[Dictionary] = []
+
+# Instant Hover Tooltip for all Inventory & HUD Slots
+var _hover_tooltip_panel: PanelContainer = null
+var _hover_tooltip_label: Label = null
+var _hover_tooltip_sublabel: Label = null
+var _active_hovered_slot: Dictionary = {}
 
 # Cached Blender 5.2 UI & HUD Textures
 var _tex_panel_bg: Texture2D = null
@@ -115,6 +122,7 @@ func _ready() -> void:
 	_build_debug_overlay()
 	_build_minecraft_modal()
 	_build_floating_cursor_item()
+	_build_hover_tooltip()
 	_build_pause_menu()
 	call_deferred("_bind_references")
 
@@ -222,6 +230,9 @@ func _process(delta: float) -> void:
 		else:
 			_cursor_float.visible = false
 
+	if _hover_tooltip_panel != null and _hover_tooltip_panel.visible:
+		_update_tooltip_position()
+
 	_debug_refresh_timer -= delta
 	if _debug_label != null and _player != null and _debug_refresh_timer <= 0.0:
 		# Rebuilding this multi-line string re-lays-out the label; 4 times a second is plenty.
@@ -327,6 +338,9 @@ func _on_mining_progress_changed(progress: float, target_name: String, can_harve
 
 
 func _on_station_opened(station_block_id: int) -> void:
+	if BlockRegistry.is_door(station_block_id):
+		return
+
 	if _modal_mode != ModalMode.NONE:
 		_close_modal()
 		return
@@ -373,6 +387,7 @@ func _on_station_opened(station_block_id: int) -> void:
 
 
 func _close_modal() -> void:
+	_hide_slot_tooltip()
 	if _inventory != null:
 		_inventory.return_crafting_grid_to_inventory()
 	_modal_mode = ModalMode.NONE
@@ -630,45 +645,51 @@ func _build_bottom_hud() -> void:
 		panel.custom_minimum_size = Vector2(58, 58)
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-		var vbox := VBoxContainer.new()
-		vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-		vbox.add_theme_constant_override("separation", 1)
-		vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		panel.add_child(vbox)
+		var overlay := Control.new()
+		overlay.custom_minimum_size = Vector2(58, 58)
+		overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		panel.add_child(overlay)
 
 		var icon_rect := TextureRect.new()
-		icon_rect.custom_minimum_size = Vector2(34, 34)
+		icon_rect.custom_minimum_size = Vector2(36, 36)
+		icon_rect.size = Vector2(36, 36)
+		icon_rect.position = Vector2(11, 11)
 		icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon_rect.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		icon_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vbox.add_child(icon_rect)
+		overlay.add_child(icon_rect)
 
 		var swatch := ColorRect.new()
 		swatch.custom_minimum_size = Vector2(22, 22)
-		swatch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		swatch.size = Vector2(22, 22)
+		swatch.position = Vector2(18, 18)
 		swatch.color = InventoryManager.get_item_color(0)
 		swatch.visible = false
 		swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vbox.add_child(swatch)
+		overlay.add_child(swatch)
 
 		var label := Label.new()
 		label.text = ""
+		label.position = Vector2(2, 38)
+		label.size = Vector2(52, 16)
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 		label.add_theme_font_size_override("font_size", 11)
 		label.add_theme_color_override("font_color", Color(1, 1, 1, 0.98))
 		label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 		label.add_theme_constant_override("shadow_offset_x", 1)
 		label.add_theme_constant_override("shadow_offset_y", 1)
-		vbox.add_child(label)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		overlay.add_child(label)
 
 		var dur_bar := ColorRect.new()
-		dur_bar.custom_minimum_size = Vector2(44, 3)
-		dur_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		dur_bar.position = Vector2(5, 52)
+		dur_bar.size = Vector2(48, 2)
+		dur_bar.custom_minimum_size = Vector2(48, 2)
 		dur_bar.color = Color(0.2, 0.95, 0.25)
 		dur_bar.visible = false
 		dur_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vbox.add_child(dur_bar)
+		overlay.add_child(dur_bar)
 
 		hbox.add_child(panel)
 		_hotbar_panels.append(panel)
@@ -676,6 +697,20 @@ func _build_bottom_hud() -> void:
 		_hotbar_swatches.append(swatch)
 		_hotbar_labels.append(label)
 		_hotbar_dur_bars.append(dur_bar)
+
+		var hotbar_dict: Dictionary = {
+			"panel": panel,
+			"current_item_id": 0,
+			"current_durability": -1,
+		}
+		_hotbar_slot_dicts.append(hotbar_dict)
+		panel.mouse_filter = Control.MOUSE_FILTER_PASS
+		panel.mouse_entered.connect(func() -> void:
+			_show_slot_tooltip(hotbar_dict)
+		)
+		panel.mouse_exited.connect(func() -> void:
+			_hide_slot_tooltip()
+		)
 
 	_update_hotbar_visuals(0)
 
@@ -730,7 +765,7 @@ func _build_minecraft_modal() -> void:
 
 	# 2. Main Minecraft Inventory & Station Window (Blender 3D Beveled Stone Panel)
 	var main_card := PanelContainer.new()
-	main_card.custom_minimum_size = Vector2(560, 480)
+	main_card.custom_minimum_size = Vector2(560, 540)
 	var card_style := _make_blender_stylebox(_tex_panel_bg, 12.0)
 	card_style.set_content_margin_all(16)
 	main_card.add_theme_stylebox_override("panel", card_style)
@@ -755,7 +790,7 @@ func _build_minecraft_modal() -> void:
 
 	# Top Station Area (Holds 2x2 Crafting + Armor/Avatar, 3x3 Crafting Table, Furnace, or Chest)
 	var station_holder := CenterContainer.new()
-	station_holder.custom_minimum_size = Vector2(0, 168)
+	station_holder.custom_minimum_size = Vector2(0, 206)
 	main_vbox.add_child(station_holder)
 
 	_craft_2x2_container = _build_2x2_crafting_view()
@@ -786,10 +821,11 @@ func _build_minecraft_modal() -> void:
 	bp_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	main_vbox.add_child(bp_grid)
 
-	for slot_idx in range(9, InventoryManager.TOTAL_SLOTS):
-		var slot_ui: Dictionary = _create_interactive_slot_widget(50, 50, func(btn: int) -> void:
+	for i in range(9, InventoryManager.TOTAL_SLOTS):
+		var slot_idx: int = i
+		var slot_ui: Dictionary = _create_interactive_slot_widget(50, 50, func(btn: int, is_shift: bool = false) -> void:
 			if _inventory != null:
-				_inventory.click_inventory_slot(slot_idx, btn)
+				_inventory.click_inventory_slot(slot_idx, btn, is_shift)
 		)
 		bp_grid.add_child(slot_ui["panel"])
 		_inv_modal_slots[slot_idx] = slot_ui
@@ -807,10 +843,11 @@ func _build_minecraft_modal() -> void:
 	hb_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	main_vbox.add_child(hb_grid)
 
-	for slot_idx in range(0, InventoryManager.HOTBAR_SIZE):
-		var slot_ui: Dictionary = _create_interactive_slot_widget(50, 50, func(btn: int) -> void:
+	for i in range(0, InventoryManager.HOTBAR_SIZE):
+		var slot_idx: int = i
+		var slot_ui: Dictionary = _create_interactive_slot_widget(50, 50, func(btn: int, is_shift: bool = false) -> void:
 			if _inventory != null:
-				_inventory.click_inventory_slot(slot_idx, btn)
+				_inventory.click_inventory_slot(slot_idx, btn, is_shift)
 		)
 		hb_grid.add_child(slot_ui["panel"])
 		_inv_modal_slots[slot_idx] = slot_ui
@@ -821,15 +858,14 @@ func _build_2x2_crafting_view() -> Control:
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	hbox.add_theme_constant_override("separation", 18)
 
-	# Left: 4 Armor Slots (Helmet, Chestplate, Leggings, Boots) + Player Character Preview Box
-	var armor_vbox := GridContainer.new()
-	armor_vbox.columns = 2
-	armor_vbox.add_theme_constant_override("h_separation", 4)
-	armor_vbox.add_theme_constant_override("v_separation", 4)
+	# 1. Left: 4 Armor Slots in a vertical column (Helmet, Chestplate, Leggings, Boots)
+	var armor_vbox := VBoxContainer.new()
+	armor_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	armor_vbox.add_theme_constant_override("separation", 4)
 	_armor_slot_widgets.clear()
 	for i in range(4):
 		var slot_idx: int = i
-		var slot_ui: Dictionary = _create_interactive_slot_widget(46, 46, func(btn: int) -> void:
+		var slot_ui: Dictionary = _create_interactive_slot_widget(46, 46, func(btn: int, _is_shift: bool = false) -> void:
 			if _inventory != null:
 				_inventory.handle_armor_slot_click(slot_idx, btn == MOUSE_BUTTON_RIGHT)
 		)
@@ -837,44 +873,105 @@ func _build_2x2_crafting_view() -> Control:
 		_armor_slot_widgets.append(slot_ui)
 	hbox.add_child(armor_vbox)
 
-	# Player Avatar Preview Box
+	# 2. Middle: Player Avatar Preview Box + Shield/Offhand Slot below it
+	var player_col := VBoxContainer.new()
+	player_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	player_col.add_theme_constant_override("separation", 6)
+
 	var avatar_box := PanelContainer.new()
-	avatar_box.custom_minimum_size = Vector2(74, 96)
-	avatar_box.add_theme_stylebox_override("panel", _make_blender_stylebox(_tex_slot_normal, 6.0))
+	avatar_box.custom_minimum_size = Vector2(84, 142)
+	avatar_box.add_theme_stylebox_override("panel", _make_blender_stylebox(_tex_slot_normal, 4.0, Color(0.09, 0.09, 0.11, 0.98)))
 	var av_vbox := VBoxContainer.new()
 	av_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	av_vbox.add_theme_constant_override("separation", 2)
+	av_vbox.add_theme_constant_override("separation", 3)
 	avatar_box.add_child(av_vbox)
 
 	var av_head := ColorRect.new()
-	av_head.custom_minimum_size = Vector2(22, 22)
+	av_head.custom_minimum_size = Vector2(28, 28)
 	av_head.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	av_head.color = Color(0.88, 0.68, 0.52)
+	av_head.color = Color(0.76, 0.53, 0.38) # Steve skin
 	av_vbox.add_child(av_head)
 
+	var av_torso_row := HBoxContainer.new()
+	av_torso_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	av_torso_row.add_theme_constant_override("separation", 2)
+	av_vbox.add_child(av_torso_row)
+
+	var av_arm_l := ColorRect.new()
+	av_arm_l.custom_minimum_size = Vector2(10, 42)
+	av_arm_l.color = Color(0.12, 0.58, 0.62)
+	av_torso_row.add_child(av_arm_l)
+
 	var av_torso := ColorRect.new()
-	av_torso.custom_minimum_size = Vector2(26, 28)
-	av_torso.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	av_torso.color = Color(0.18, 0.62, 0.74)
-	av_vbox.add_child(av_torso)
+	av_torso.custom_minimum_size = Vector2(28, 42)
+	av_torso.color = Color(0.15, 0.68, 0.72) # Cyan shirt
+	av_torso_row.add_child(av_torso)
 
-	var av_legs := ColorRect.new()
-	av_legs.custom_minimum_size = Vector2(20, 24)
-	av_legs.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	av_legs.color = Color(0.24, 0.28, 0.58)
-	av_vbox.add_child(av_legs)
-	hbox.add_child(avatar_box)
+	var av_arm_r := ColorRect.new()
+	av_arm_r.custom_minimum_size = Vector2(10, 42)
+	av_arm_r.color = Color(0.12, 0.58, 0.62)
+	av_torso_row.add_child(av_arm_r)
 
-	# Right: 2x2 Crafting Grid -> Output Slot
+	var av_legs_row := HBoxContainer.new()
+	av_legs_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	av_legs_row.add_theme_constant_override("separation", 2)
+	av_vbox.add_child(av_legs_row)
+
+	var av_leg_l := ColorRect.new()
+	av_leg_l.custom_minimum_size = Vector2(13, 42)
+	av_leg_l.color = Color(0.20, 0.23, 0.52) # Blue pants
+	av_legs_row.add_child(av_leg_l)
+
+	var av_leg_r := ColorRect.new()
+	av_leg_r.custom_minimum_size = Vector2(13, 42)
+	av_leg_r.color = Color(0.20, 0.23, 0.52)
+	av_legs_row.add_child(av_leg_r)
+
+	player_col.add_child(avatar_box)
+
+	# Shield / Off-hand slot under character preview
+	var shield_row := HBoxContainer.new()
+	shield_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	var shield_slot := _create_interactive_slot_widget(46, 46, func(_btn: int) -> void:
+		pass
+	)
+	var shield_icon: TextureRect = shield_slot.get("icon", null) as TextureRect
+	var shield_tex := InventoryManager.load_ui_texture("res://assets/ui/hud_icons/shield.png")
+	if shield_icon != null and shield_tex != null:
+		shield_icon.texture = shield_tex
+		shield_icon.visible = true
+		shield_icon.modulate = Color(1, 1, 1, 0.35)
+	shield_row.add_child(shield_slot["panel"])
+	player_col.add_child(shield_row)
+
+	hbox.add_child(player_col)
+
+	# 3. Right: Crafting Area
+	var craft_col := VBoxContainer.new()
+	craft_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	craft_col.add_theme_constant_override("separation", 8)
+
+	var craft_lbl := Label.new()
+	craft_lbl.text = "Crafting"
+	craft_lbl.add_theme_font_size_override("font_size", 13)
+	craft_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.88))
+	craft_col.add_child(craft_lbl)
+
+	var craft_row := HBoxContainer.new()
+	craft_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	craft_row.add_theme_constant_override("separation", 14)
+	craft_col.add_child(craft_row)
+
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 6)
 	grid.add_theme_constant_override("v_separation", 6)
-	hbox.add_child(grid)
+	craft_row.add_child(grid)
 
+	_grid_2x2_slots.clear()
 	for i in range(4):
 		var cell_idx: int = i
-		var slot_ui: Dictionary = _create_interactive_slot_widget(52, 52, func(btn: int) -> void:
+		var slot_ui: Dictionary = _create_interactive_slot_widget(48, 48, func(btn: int, _is_shift: bool = false) -> void:
 			if _inventory != null:
 				_inventory.click_craft_grid_slot(cell_idx, btn)
 		)
@@ -882,15 +979,20 @@ func _build_2x2_crafting_view() -> Control:
 		_grid_2x2_slots.append(slot_ui)
 
 	var arrow := Label.new()
-	arrow.text = " ===> "
-	arrow.add_theme_font_size_override("font_size", 18)
-	hbox.add_child(arrow)
+	arrow.text = " ➔ "
+	arrow.add_theme_font_size_override("font_size", 24)
+	arrow.add_theme_color_override("font_color", Color(0.80, 0.80, 0.85))
+	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	craft_row.add_child(arrow)
 
-	_out_2x2_slot = _create_interactive_slot_widget(62, 62, func(_btn: int) -> void:
+	_out_2x2_slot = _create_interactive_slot_widget(58, 58, func(_btn: int, is_shift: bool = false) -> void:
 		if _inventory != null:
-			_inventory.click_craft_output_slot()
+			_inventory.click_craft_output_slot(is_shift)
 	, true)
-	hbox.add_child(_out_2x2_slot["panel"])
+	_out_2x2_slot["panel"].size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	craft_row.add_child(_out_2x2_slot["panel"])
+
+	hbox.add_child(craft_col)
 	return hbox
 
 
@@ -907,7 +1009,7 @@ func _build_3x3_crafting_view() -> Control:
 
 	for i in range(9):
 		var cell_idx: int = i
-		var slot_ui: Dictionary = _create_interactive_slot_widget(48, 48, func(btn: int) -> void:
+		var slot_ui: Dictionary = _create_interactive_slot_widget(48, 48, func(btn: int, _is_shift: bool = false) -> void:
 			if _inventory != null:
 				_inventory.click_craft_grid_slot(cell_idx, btn)
 		)
@@ -917,12 +1019,14 @@ func _build_3x3_crafting_view() -> Control:
 	var arrow := Label.new()
 	arrow.text = "  ===>  "
 	arrow.add_theme_font_size_override("font_size", 20)
+	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(arrow)
 
-	_out_3x3_slot = _create_interactive_slot_widget(64, 64, func(_btn: int) -> void:
+	_out_3x3_slot = _create_interactive_slot_widget(64, 64, func(_btn: int, is_shift: bool = false) -> void:
 		if _inventory != null:
-			_inventory.click_craft_output_slot()
+			_inventory.click_craft_output_slot(is_shift)
 	, true)
+	_out_3x3_slot["panel"].size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(_out_3x3_slot["panel"])
 	return hbox
 
@@ -938,9 +1042,9 @@ func _build_furnace_oven_view() -> Control:
 	hbox.add_child(left_vbox)
 
 	# Furnace Top Input Slot (Ore)
-	_furnace_in_slot = _create_interactive_slot_widget(52, 52, func(btn: int) -> void:
+	_furnace_in_slot = _create_interactive_slot_widget(52, 52, func(btn: int, is_shift: bool = false) -> void:
 		if _inventory != null:
-			_inventory.click_furnace_slot(0, btn)
+			_inventory.click_furnace_slot(0, btn, is_shift)
 	)
 	left_vbox.add_child(_furnace_in_slot["panel"])
 
@@ -959,9 +1063,9 @@ func _build_furnace_oven_view() -> Control:
 	flame_bg.add_child(_furnace_flame_bar)
 
 	# Furnace Bottom Fuel Slot (Coal / Wood)
-	_furnace_fuel_slot = _create_interactive_slot_widget(52, 52, func(btn: int) -> void:
+	_furnace_fuel_slot = _create_interactive_slot_widget(52, 52, func(btn: int, is_shift: bool = false) -> void:
 		if _inventory != null:
-			_inventory.click_furnace_slot(1, btn)
+			_inventory.click_furnace_slot(1, btn, is_shift)
 	)
 	left_vbox.add_child(_furnace_fuel_slot["panel"])
 
@@ -987,10 +1091,11 @@ func _build_furnace_oven_view() -> Control:
 	prog_bg.add_child(_furnace_progress_bar)
 
 	# Right Furnace Output Slot
-	_furnace_out_slot = _create_interactive_slot_widget(64, 64, func(btn: int) -> void:
+	_furnace_out_slot = _create_interactive_slot_widget(64, 64, func(btn: int, is_shift: bool = false) -> void:
 		if _inventory != null:
-			_inventory.click_furnace_slot(2, btn)
+			_inventory.click_furnace_slot(2, btn, is_shift)
 	, true)
+	_furnace_out_slot["panel"].size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(_furnace_out_slot["panel"])
 	return hbox
 
@@ -1003,12 +1108,13 @@ func _build_chest_storage_view() -> Control:
 	grid.visible = false
 	_chest_modal_slots.resize(InventoryManager.CHEST_SIZE)
 	for i in range(InventoryManager.CHEST_SIZE):
-		var slot_ui: Dictionary = _create_interactive_slot_widget(46, 46, func(btn: int) -> void:
+		var slot_idx: int = i
+		var slot_ui: Dictionary = _create_interactive_slot_widget(46, 46, func(btn: int, is_shift: bool = false) -> void:
 			if _inventory != null:
-				_inventory.click_chest_slot(i, btn)
+				_inventory.click_chest_slot(slot_idx, btn, is_shift)
 		)
 		grid.add_child(slot_ui["panel"])
-		_chest_modal_slots[i] = slot_ui
+		_chest_modal_slots[slot_idx] = slot_ui
 	return grid
 
 
@@ -1021,61 +1127,82 @@ func _create_interactive_slot_widget(w: float, h: float, on_click: Callable, is_
 	var style := _make_blender_stylebox(slot_tex, 6.0)
 	panel.add_theme_stylebox_override("panel", style)
 
-	var vbox := VBoxContainer.new()
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 0)
-	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(vbox)
+	var overlay := Control.new()
+	overlay.custom_minimum_size = Vector2(w, h)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(overlay)
 
 	var icon_rect := TextureRect.new()
-	var icon_sz: float = clampf(w - 14.0, 26.0, 42.0)
+	var icon_sz: float = clampf(w - 14.0, 24.0, 36.0)
+	if is_output:
+		icon_sz = clampf(w - 16.0, 32.0, 44.0)
 	icon_rect.custom_minimum_size = Vector2(icon_sz, icon_sz)
+	icon_rect.size = Vector2(icon_sz, icon_sz)
+	icon_rect.position = Vector2((w - icon_sz) * 0.5, (h - icon_sz) * 0.5)
 	icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	icon_rect.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	icon_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(icon_rect)
+	overlay.add_child(icon_rect)
 
 	var swatch := ColorRect.new()
-	swatch.custom_minimum_size = Vector2(18, 18)
-	swatch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var sw_sz: float = 20.0
+	swatch.custom_minimum_size = Vector2(sw_sz, sw_sz)
+	swatch.size = Vector2(sw_sz, sw_sz)
+	swatch.position = Vector2((w - sw_sz) * 0.5, (h - sw_sz) * 0.5)
 	swatch.color = InventoryManager.get_item_color(0)
 	swatch.visible = false
 	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(swatch)
+	overlay.add_child(swatch)
 
 	var label := Label.new()
+	label.position = Vector2(2.0, h - 17.0)
+	label.size = Vector2(w - 5.0, 15.0)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	label.add_theme_font_size_override("font_size", 10)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	label.add_theme_font_size_override("font_size", 11)
 	label.add_theme_color_override("font_color", Color(1, 1, 1, 0.98))
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	label.add_theme_constant_override("shadow_offset_x", 1)
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(label)
+	overlay.add_child(label)
 
+	var bar_w: float = w - 8.0
 	var dur_bar := ColorRect.new()
-	dur_bar.custom_minimum_size = Vector2(38, 3)
-	dur_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	dur_bar.position = Vector2(4.0, h - 5.0)
+	dur_bar.size = Vector2(bar_w, 2.0)
+	dur_bar.custom_minimum_size = Vector2(bar_w, 2.0)
 	dur_bar.color = Color(0.2, 0.95, 0.25)
 	dur_bar.visible = false
 	dur_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(dur_bar)
+	overlay.add_child(dur_bar)
 
 	panel.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed:
 			if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
 				_play_ui_click()
-				on_click.call(event.button_index)
+				on_click.call(event.button_index, event.shift_pressed)
 	)
 
-	return {
+	var widget: Dictionary = {
 		"panel": panel,
 		"icon": icon_rect,
 		"swatch": swatch,
 		"label": label,
 		"dur_bar": dur_bar,
+		"current_item_id": 0,
+		"current_durability": -1,
+		"max_bar_width": bar_w,
 	}
+
+	panel.mouse_entered.connect(func() -> void:
+		_show_slot_tooltip(widget)
+	)
+	panel.mouse_exited.connect(func() -> void:
+		_hide_slot_tooltip()
+	)
+
+	return widget
 
 
 func _rebuild_recipe_book_buttons() -> void:
@@ -1137,36 +1264,40 @@ func _build_floating_cursor_item() -> void:
 	_cursor_float.add_theme_stylebox_override("panel", style)
 	add_child(_cursor_float)
 
-	var vbox := VBoxContainer.new()
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 0)
-	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_cursor_float.add_child(vbox)
+	var overlay := Control.new()
+	overlay.custom_minimum_size = Vector2(46, 46)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cursor_float.add_child(overlay)
 
 	_cursor_icon = TextureRect.new()
 	_cursor_icon.custom_minimum_size = Vector2(36, 36)
+	_cursor_icon.size = Vector2(36, 36)
+	_cursor_icon.position = Vector2(5, 5)
 	_cursor_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_cursor_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_cursor_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_cursor_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(_cursor_icon)
+	overlay.add_child(_cursor_icon)
 
 	_cursor_swatch = ColorRect.new()
-	_cursor_swatch.custom_minimum_size = Vector2(18, 18)
-	_cursor_swatch.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_cursor_swatch.custom_minimum_size = Vector2(20, 20)
+	_cursor_swatch.size = Vector2(20, 20)
+	_cursor_swatch.position = Vector2(13, 13)
 	_cursor_swatch.visible = false
 	_cursor_swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(_cursor_swatch)
+	overlay.add_child(_cursor_swatch)
 
 	_cursor_label = Label.new()
+	_cursor_label.position = Vector2(0, 28)
+	_cursor_label.size = Vector2(42, 16)
 	_cursor_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_cursor_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	_cursor_label.add_theme_font_size_override("font_size", 11)
 	_cursor_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.98))
 	_cursor_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	_cursor_label.add_theme_constant_override("shadow_offset_x", 1)
 	_cursor_label.add_theme_constant_override("shadow_offset_y", 1)
 	_cursor_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(_cursor_label)
+	overlay.add_child(_cursor_label)
 
 
 func _refresh_all_slot_visuals() -> void:
@@ -1201,6 +1332,15 @@ func _refresh_all_slot_visuals() -> void:
 			else:
 				_hotbar_labels[i].text = str(cnt) if cnt > 1 else ""
 				_hotbar_dur_bars[i].visible = false
+
+		if i < _hotbar_slot_dicts.size():
+			_hotbar_slot_dicts[i]["current_item_id"] = id
+			_hotbar_slot_dicts[i]["current_durability"] = int(slot_data.get("durability", -1))
+			if _active_hovered_slot == _hotbar_slot_dicts[i]:
+				if id > 0:
+					_show_slot_tooltip(_hotbar_slot_dicts[i])
+				else:
+					_hide_slot_tooltip()
 
 	# 2. Refresh all 36 modal inventory slots
 	for i in range(mini(_inv_modal_slots.size(), _inventory.slots.size())):
@@ -1258,9 +1398,17 @@ func _refresh_armor_visuals() -> void:
 		var dur_bar: ColorRect = w.get("dur_bar", null) as ColorRect
 		var panel: PanelContainer = w.get("panel", null) as PanelContainer
 
+		w["current_item_id"] = aid
+		w["current_durability"] = int(item.get("durability", -1))
+		if _active_hovered_slot == w:
+			if aid > 0:
+				_show_slot_tooltip(w)
+			else:
+				_hide_slot_tooltip()
+
 		if aid > 0:
 			if panel != null:
-				panel.tooltip_text = InventoryManager.get_item_name(aid)
+				panel.tooltip_text = ""
 			var tex: Texture2D = InventoryManager.get_item_icon_texture(aid)
 			if icon_rect != null:
 				if tex != null:
@@ -1274,7 +1422,7 @@ func _refresh_armor_visuals() -> void:
 						swatch.visible = true
 						swatch.color = InventoryManager.get_item_color(aid)
 			if dur_bar != null:
-				_update_durability_bar(dur_bar, aid, int(item.get("durability", -1)), 38.0)
+				_update_durability_bar(dur_bar, aid, int(item.get("durability", -1)), float(w.get("max_bar_width", 38.0)))
 			if label != null:
 				label.text = ""
 		else:
@@ -1315,6 +1463,16 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 		return
 	var id: int = int(slot_data.get("id", 0))
 	var cnt: int = int(slot_data.get("count", 0))
+	var dur: int = int(slot_data.get("durability", -1))
+	widget["current_item_id"] = id
+	widget["current_durability"] = dur
+
+	if _active_hovered_slot == widget:
+		if id > 0:
+			_show_slot_tooltip(widget)
+		else:
+			_hide_slot_tooltip()
+
 	var panel: PanelContainer = widget.get("panel", null) as PanelContainer
 	var icon_rect: TextureRect = widget.get("icon", null) as TextureRect
 	var swatch: ColorRect = widget["swatch"]
@@ -1334,7 +1492,7 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 		return
 
 	if panel != null:
-		panel.tooltip_text = InventoryManager.get_item_name(id)
+		panel.tooltip_text = ""
 
 	var icon_tex: Texture2D = InventoryManager.get_item_icon_texture(id)
 	if icon_rect != null and icon_tex != null:
@@ -1350,7 +1508,7 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 	if InventoryManager.is_tool_item(id):
 		label.text = ""
 		if dur_bar != null:
-			_update_durability_bar(dur_bar, id, int(slot_data.get("durability", -1)), 38.0)
+			_update_durability_bar(dur_bar, id, int(slot_data.get("durability", -1)), float(widget.get("max_bar_width", 38.0)))
 	else:
 		label.text = str(cnt) if cnt > 1 else ""
 		if dur_bar != null:
@@ -1364,7 +1522,9 @@ func _update_durability_bar(bar: ColorRect, item_id: int, cur_dur: int, max_widt
 		return
 	var ratio: float = clampf(float(cur_dur) / float(max_dur), 0.0, 1.0)
 	bar.visible = true
-	bar.custom_minimum_size.x = maxf(3.0, max_width * ratio)
+	var bw: float = maxf(3.0, max_width * ratio)
+	bar.size.x = bw
+	bar.custom_minimum_size.x = bw
 	bar.color = Color(1.0 - ratio, ratio * 0.95, 0.15, 1.0)
 
 
@@ -1608,3 +1768,90 @@ func _update_hotbar_visuals(active_slot: int) -> void:
 		var tex: Texture2D = _tex_slot_selected if i == active_slot else _tex_slot_normal
 		var style := _make_blender_stylebox(tex, 6.0)
 		_hotbar_panels[i].add_theme_stylebox_override("panel", style)
+
+
+# ============================================================================
+# INSTANT MINECRAFT HOVER TOOLTIP SYSTEM
+# ============================================================================
+
+func _build_hover_tooltip() -> void:
+	_hover_tooltip_panel = PanelContainer.new()
+	_hover_tooltip_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_tooltip_panel.z_index = 150
+	_hover_tooltip_panel.visible = false
+
+	var tt_style := StyleBoxFlat.new()
+	tt_style.bg_color = Color(0.07, 0.05, 0.12, 0.96)
+	tt_style.set_border_width_all(2)
+	tt_style.border_color = Color(0.28, 0.12, 0.52, 1.0)
+	tt_style.set_corner_radius_all(3)
+	tt_style.set_content_margin_all(8)
+	_hover_tooltip_panel.add_theme_stylebox_override("panel", tt_style)
+
+	var tt_vbox := VBoxContainer.new()
+	tt_vbox.add_theme_constant_override("separation", 2)
+	tt_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_tooltip_panel.add_child(tt_vbox)
+
+	_hover_tooltip_label = Label.new()
+	_hover_tooltip_label.add_theme_font_size_override("font_size", 13)
+	_hover_tooltip_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+	_hover_tooltip_label.add_theme_color_override("font_shadow_color", Color(0.1, 0.1, 0.1, 0.9))
+	_hover_tooltip_label.add_theme_constant_override("shadow_offset_x", 1)
+	_hover_tooltip_label.add_theme_constant_override("shadow_offset_y", 1)
+	_hover_tooltip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tt_vbox.add_child(_hover_tooltip_label)
+
+	_hover_tooltip_sublabel = Label.new()
+	_hover_tooltip_sublabel.add_theme_font_size_override("font_size", 11)
+	_hover_tooltip_sublabel.add_theme_color_override("font_color", Color(0.70, 0.70, 0.75))
+	_hover_tooltip_sublabel.visible = false
+	_hover_tooltip_sublabel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tt_vbox.add_child(_hover_tooltip_sublabel)
+
+	add_child(_hover_tooltip_panel)
+
+
+func _show_slot_tooltip(widget: Dictionary) -> void:
+	if widget == null or widget.is_empty():
+		_hide_slot_tooltip()
+		return
+	_active_hovered_slot = widget
+	var id: int = int(widget.get("current_item_id", 0))
+	if id <= 0:
+		_hide_slot_tooltip()
+		return
+	var item_name: String = InventoryManager.get_item_name(id)
+	if _hover_tooltip_label != null:
+		_hover_tooltip_label.text = item_name
+	var dur: int = int(widget.get("current_durability", -1))
+	var max_dur: int = InventoryManager.get_max_durability(id)
+	if _hover_tooltip_sublabel != null:
+		if max_dur > 0 and dur >= 0:
+			_hover_tooltip_sublabel.text = "Durability: %d / %d" % [dur, max_dur]
+			_hover_tooltip_sublabel.visible = true
+		else:
+			_hover_tooltip_sublabel.visible = false
+	if _hover_tooltip_panel != null:
+		_hover_tooltip_panel.visible = true
+		_update_tooltip_position()
+
+
+func _hide_slot_tooltip() -> void:
+	_active_hovered_slot.clear()
+	if _hover_tooltip_panel != null:
+		_hover_tooltip_panel.visible = false
+
+
+func _update_tooltip_position() -> void:
+	if _hover_tooltip_panel == null or not _hover_tooltip_panel.visible:
+		return
+	var mouse_pos: Vector2 = get_viewport().get_mouse_position()
+	var vp_size: Vector2 = get_viewport().get_visible_rect().size
+	var tt_size: Vector2 = _hover_tooltip_panel.size
+	var target_pos: Vector2 = mouse_pos + Vector2(16, 16)
+	if target_pos.x + tt_size.x > vp_size.x - 8.0:
+		target_pos.x = mouse_pos.x - tt_size.x - 10.0
+	if target_pos.y + tt_size.y > vp_size.y - 8.0:
+		target_pos.y = mouse_pos.y - tt_size.y - 10.0
+	_hover_tooltip_panel.position = target_pos

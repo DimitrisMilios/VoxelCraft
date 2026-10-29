@@ -923,7 +923,20 @@ func _is_supported(pos: Vector3i, id: int) -> bool:
 			return below == BlockRegistry.BlockId.FARMLAND
 		BlockRegistry.BlockId.SAPLING, BlockRegistry.BlockId.PINE_SAPLING, BlockRegistry.BlockId.BIRCH_SAPLING, BlockRegistry.BlockId.DANDELION, BlockRegistry.BlockId.ROSE:
 			return below == BlockRegistry.BlockId.GRASS or below == BlockRegistry.BlockId.DIRT or below == BlockRegistry.BlockId.FARMLAND
-		BlockRegistry.BlockId.TORCH, BlockRegistry.BlockId.REDSTONE_TORCH, BlockRegistry.BlockId.LEVER:
+		BlockRegistry.BlockId.TORCH, BlockRegistry.BlockId.REDSTONE_TORCH:
+			var meta: int = get_metadata_world(pos)
+			match meta:
+				1:
+					return BlockRegistry.is_opaque_full_cube(get_block_world(pos + Vector3i(-1, 0, 0)))
+				2:
+					return BlockRegistry.is_opaque_full_cube(get_block_world(pos + Vector3i(1, 0, 0)))
+				3:
+					return BlockRegistry.is_opaque_full_cube(get_block_world(pos + Vector3i(0, 0, -1)))
+				4:
+					return BlockRegistry.is_opaque_full_cube(get_block_world(pos + Vector3i(0, 0, 1)))
+				_:
+					return BlockRegistry.is_solid(below)
+		BlockRegistry.BlockId.LEVER:
 			if BlockRegistry.is_solid(below):
 				return true
 			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:

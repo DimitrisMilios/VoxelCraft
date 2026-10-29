@@ -419,7 +419,7 @@ static func make_flowing_water_id(level: int) -> int:
 static func get_water_height_ratio(block_id: int) -> float:
 	if block_id == BlockId.WATER_FALLING:
 		return 1.0
-	if block_id == BlockId.WATER:
+	if block_id == BlockId.WATER or block_id == BlockId.LAVA:
 		return 0.875
 	if block_id >= BlockId.WATER_FLOW_1 and block_id <= BlockId.WATER_FLOW_7:
 		var lvl: int = block_id - BlockId.WATER_FLOW_1 + 1
@@ -562,7 +562,17 @@ static func door_meta_from_dir(dir: Vector3i, hinge_right: bool) -> int:
 static func get_shape_boxes(block_id: int, meta: int = 0) -> Array[AABB]:
 	match block_id:
 		BlockId.TORCH, BlockId.REDSTONE_TORCH:
-			return [AABB(Vector3(0.4375, 0.0, 0.4375), Vector3(0.125, 0.625, 0.125))]
+			match meta:
+				1: # West wall (-X): sticks flush against x=0
+					return [AABB(Vector3(0.0, 0.22, 0.4375), Vector3(0.25, 0.625, 0.125))]
+				2: # East wall (+X): sticks flush against x=1
+					return [AABB(Vector3(0.75, 0.22, 0.4375), Vector3(0.25, 0.625, 0.125))]
+				3: # North wall (-Z): sticks flush against z=0
+					return [AABB(Vector3(0.4375, 0.22, 0.0), Vector3(0.125, 0.625, 0.25))]
+				4: # South wall (+Z): sticks flush against z=1
+					return [AABB(Vector3(0.4375, 0.22, 0.75), Vector3(0.125, 0.625, 0.25))]
+				_: # Floor torch (meta 0 or 5)
+					return [AABB(Vector3(0.4375, 0.0, 0.4375), Vector3(0.125, 0.625, 0.125))]
 		BlockId.SLAB:
 			return [AABB(Vector3.ZERO, Vector3(1.0, 0.5, 1.0))]
 		BlockId.LEVER:

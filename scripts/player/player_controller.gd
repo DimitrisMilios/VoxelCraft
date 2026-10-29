@@ -51,6 +51,7 @@ signal player_respawned(at_bed: bool)
 # --- State ---
 var is_flying: bool = false
 var is_in_water: bool = false
+var is_in_lava: bool = false
 var is_on_ladder: bool = false
 var is_head_underwater: bool = false
 var water_submersion_depth: float = 0.0
@@ -411,20 +412,13 @@ func _update_hunger_and_oxygen(delta: float) -> void:
 				break
 
 	# 5. Lava Submersion / Contact Burn Damage
-	if _world_manager != null:
-		var feet_p := Vector3i(floori(global_position.x), floori(global_position.y + 0.15), floori(global_position.z))
-		var waist_p := Vector3i(floori(global_position.x), floori(global_position.y + 0.95), floori(global_position.z))
-		if (
-			_world_manager.get_block_world(feet_p) == BlockRegistry.BlockId.LAVA
-			or _world_manager.get_block_world(waist_p) == BlockRegistry.BlockId.LAVA
-		):
-			_lava_burn_timer += delta
-			if _lava_burn_timer >= 0.45:
-				_lava_burn_timer = 0.0
-				take_damage(4)
-				velocity *= 0.52
-		else:
+	if _world_manager != null and is_in_lava:
+		_lava_burn_timer += delta
+		if _lava_burn_timer >= 0.45:
 			_lava_burn_timer = 0.0
+			take_damage(4)
+	else:
+		_lava_burn_timer = 0.0
 
 
 func _update_health_regen(delta: float) -> void:
@@ -457,10 +451,15 @@ func _update_water_submersion() -> void:
 		floori(head.global_position.y + 0.12),
 		floori(head.global_position.z)
 	)
-	var now_in_water: bool = water_submersion_depth > 0.36
-	if water_submersion_depth > 0.08:
+	is_in_lava = (
+		_world_manager.get_block_world(feet_b) == BlockRegistry.BlockId.LAVA
+		or _world_manager.get_block_world(waist_b) == BlockRegistry.BlockId.LAVA
+		or _world_manager.get_block_world(eye_pos) == BlockRegistry.BlockId.LAVA
+	)
+	var now_in_water: bool = water_submersion_depth > 0.36 or is_in_lava
+	if water_submersion_depth > 0.08 or is_in_lava:
 		_max_fall_speed = 0.0
-	is_head_underwater = BlockRegistry.is_liquid(_world_manager.get_block_world(eye_pos))
+	is_head_underwater = BlockRegistry.is_water(_world_manager.get_block_world(eye_pos))
 
 	if now_in_water != is_in_water:
 		is_in_water = now_in_water
@@ -517,6 +516,8 @@ func _handle_swim_movement(delta: float) -> void:
 	)
 	var move_direction: Vector3 = (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()
 	var target_speed: float = swim_speed * (1.3 if Input.is_action_pressed("sprint") else 1.0)
+	if is_in_lava:
+		target_speed *= 0.65
 
 	if move_direction != Vector3.ZERO:
 		velocity.x = move_toward(velocity.x, move_direction.x * target_speed, 6.0 * delta * target_speed)

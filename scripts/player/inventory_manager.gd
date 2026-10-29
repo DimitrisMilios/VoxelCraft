@@ -168,6 +168,10 @@ const CHEST_SIZE: int = 27
 var world_chests: Dictionary = {}
 var active_chest_pos: Vector3i = Vector3i.ZERO
 
+## World-coordinate persistent Furnaces (`Vector3i -> Dictionary`).
+var world_furnaces: Dictionary = {}
+var active_furnace_pos: Vector3i = Vector3i.ZERO
+
 ## Container UI open tracking for Shift-Click stack routing
 var is_chest_open: bool = false
 var is_furnace_open: bool = false
@@ -208,7 +212,7 @@ static func get_item_icon_texture(item_id: int) -> Texture2D:
 		lookup_id = BlockRegistry.BlockId.BED
 	elif BlockRegistry.is_liquid(lookup_id):
 		lookup_id = BlockRegistry.BlockId.WATER
-	if _icon_cache.has(lookup_id):
+	if _icon_cache.has(lookup_id) and _icon_cache[lookup_id] != null:
 		return _icon_cache[lookup_id]
 	var path: String = "res://assets/ui/item_icons/item_%d.png" % lookup_id
 	var tex: Texture2D = load_ui_texture(path)
@@ -225,7 +229,8 @@ static func get_item_icon_texture(item_id: int) -> Texture2D:
 				rect.size.y * float(atlas_tex.get_height())
 			)
 			tex = sub_tex
-	_icon_cache[lookup_id] = tex
+	if tex != null:
+		_icon_cache[lookup_id] = tex
 	return tex
 
 
@@ -264,6 +269,9 @@ func _ready() -> void:
 		var chests_data: Dictionary = GameSession.active_world_data.get("world_chests", {})
 		if not chests_data.is_empty():
 			deserialize_chests(chests_data)
+		var furnaces_data: Dictionary = GameSession.active_world_data.get("world_furnaces", {})
+		if not furnaces_data.is_empty():
+			deserialize_furnaces(furnaces_data)
 
 
 func serialize_state() -> Dictionary:
@@ -348,6 +356,92 @@ func deserialize_chests(chests_data: Dictionary) -> void:
 			world_chests[c_pos] = c_slots
 
 
+func serialize_furnaces() -> Dictionary:
+	_sync_active_furnace_to_dict()
+	var result: Dictionary = {}
+	for f_pos in world_furnaces.keys():
+		var key_str: String = "%d,%d,%d" % [f_pos.x, f_pos.y, f_pos.z]
+		result[key_str] = (world_furnaces[f_pos] as Dictionary).duplicate(true)
+	return result
+
+
+func deserialize_furnaces(furnaces_data: Dictionary) -> void:
+	world_furnaces.clear()
+	for key_str in furnaces_data.keys():
+		var parts: PackedStringArray = str(key_str).split(",")
+		if parts.size() == 3:
+			var f_pos := Vector3i(parts[0].to_int(), parts[1].to_int(), parts[2].to_int())
+			world_furnaces[f_pos] = (furnaces_data[key_str] as Dictionary).duplicate(true)
+	if world_furnaces.has(active_furnace_pos):
+		_sync_active_furnace_from_dict()
+	furnace_updated.emit()
+
+
+func _create_empty_furnace_dict() -> Dictionary:
+	return {
+		"input": {"id": 0, "count": 0},
+		"fuel": {"id": 0, "count": 0},
+		"output": {"id": 0, "count": 0},
+		"burn_remaining": 0.0,
+		"burn_max": 10.0,
+		"cook_progress": 0.0
+	}
+
+
+func _sync_active_furnace_from_dict() -> void:
+	if not world_furnaces.has(active_furnace_pos):
+		world_furnaces[active_furnace_pos] = _create_empty_furnace_dict()
+	var f: Dictionary = world_furnaces[active_furnace_pos]
+	furnace_input = f.get("input", {"id": 0, "count": 0})
+	furnace_fuel = f.get("fuel", {"id": 0, "count": 0})
+	furnace_output = f.get("output", {"id": 0, "count": 0})
+	furnace_burn_remaining = float(f.get("burn_remaining", 0.0))
+	furnace_burn_max = float(f.get("burn_max", 10.0))
+	furnace_cook_progress = float(f.get("cook_progress", 0.0))
+
+
+func _sync_active_furnace_to_dict() -> void:
+	if not world_furnaces.has(active_furnace_pos):
+		world_furnaces[active_furnace_pos] = _create_empty_furnace_dict()
+	world_furnaces[active_furnace_pos] = {
+		"input": furnace_input.duplicate(true),
+		"fuel": furnace_fuel.duplicate(true),
+		"output": furnace_output.duplicate(true),
+		"burn_remaining": furnace_burn_remaining,
+		"burn_max": furnace_burn_max,
+		"cook_progress": furnace_cook_progress
+	}
+
+
+func drop_furnace_contents_at(world_manager: Node, furnace_pos: Vector3i) -> void:
+	if not world_furnaces.has(furnace_pos):
+		return
+	var f: Dictionary = world_furnaces[furnace_pos]
+	for key in ["input", "fuel", "output"]:
+		var s: Dictionary = f.get(key, {})
+		var id: int = int(s.get("id", 0))
+		var cnt: int = int(s.get("count", 0))
+		if id > 0 and cnt > 0:
+			DroppedItem.spawn_drop(
+				world_manager,
+				Vector3(furnace_pos) + Vector3(0.5, 0.45, 0.5),
+				id,
+				cnt,
+				Vector3.ZERO,
+				0.25,
+				int(s.get("durability", -1))
+			)
+	world_furnaces.erase(furnace_pos)
+	if active_furnace_pos == furnace_pos:
+		active_furnace_pos = Vector3i.ZERO
+		furnace_input = {"id": 0, "count": 0}
+		furnace_fuel = {"id": 0, "count": 0}
+		furnace_output = {"id": 0, "count": 0}
+		furnace_burn_remaining = 0.0
+		furnace_cook_progress = 0.0
+		furnace_updated.emit()
+
+
 func _process(delta: float) -> void:
 	_tick_furnace(delta)
 
@@ -367,6 +461,8 @@ func set_crafting_grid_dimension(dim: int) -> void:
 
 ## Returns any items left in the crafting grid or on the mouse cursor back into the inventory when closing UI.
 func return_crafting_grid_to_inventory() -> void:
+	if is_furnace_open:
+		_sync_active_furnace_to_dict()
 	is_chest_open = false
 	is_furnace_open = false
 	for i in range(craft_grid.size()):
@@ -386,10 +482,26 @@ func return_crafting_grid_to_inventory() -> void:
 func open_furnace() -> void:
 	is_furnace_open = true
 	is_chest_open = false
+	if not world_furnaces.has(active_furnace_pos):
+		world_furnaces[active_furnace_pos] = _create_empty_furnace_dict()
+	_sync_active_furnace_from_dict()
 	furnace_updated.emit()
 
 
+func open_furnace_at(furnace_pos: Vector3i) -> void:
+	active_furnace_pos = furnace_pos
+	is_furnace_open = true
+	is_chest_open = false
+	if not world_furnaces.has(furnace_pos):
+		world_furnaces[furnace_pos] = _create_empty_furnace_dict()
+	_sync_active_furnace_from_dict()
+	furnace_updated.emit()
+	inventory_updated.emit()
+
+
 func close_container() -> void:
+	if is_furnace_open:
+		_sync_active_furnace_to_dict()
 	is_chest_open = false
 	is_furnace_open = false
 
@@ -1522,10 +1634,11 @@ func award_block_drop(broken_block_id: int, equipped_item_id: int) -> String:
 ## - Into open Chest if Chest UI is open
 ## - Into Furnace Fuel / Input if Furnace UI is open
 ## - Between Hotbar (`0..8`) and Backpack (`9..35`)
-func click_inventory_slot(slot_idx: int, mouse_button: int) -> void:
+func click_inventory_slot(slot_idx: int, mouse_button: int, is_shift: bool = false) -> void:
 	if slot_idx < 0 or slot_idx >= TOTAL_SLOTS:
 		return
-	if mouse_button == MOUSE_BUTTON_LEFT and Input.is_key_pressed(KEY_SHIFT):
+	var shift_active: bool = is_shift or Input.is_key_pressed(KEY_SHIFT) or Input.is_physical_key_pressed(KEY_SHIFT)
+	if mouse_button == MOUSE_BUTTON_LEFT and shift_active:
 		var s: Dictionary = slots[slot_idx]
 		var id: int = int(s.get("id", 0))
 		var cnt: int = int(s.get("count", 0))
@@ -1533,8 +1646,8 @@ func click_inventory_slot(slot_idx: int, mouse_button: int) -> void:
 			var dur: int = int(s.get("durability", -1))
 
 			# 1. If Chest is open, transfer directly into active Chest!
-			if is_chest_open and world_chests.has(active_chest_pos):
-				var c_slots: Array = world_chests[active_chest_pos]
+			if is_chest_open:
+				var c_slots: Array = get_active_chest_slots()
 				var rem: int = _insert_into_slot_list(c_slots, id, cnt, dur, 0, c_slots.size())
 				if rem <= 0:
 					slots[slot_idx] = {"id": 0, "count": 0}
@@ -1579,6 +1692,7 @@ func click_inventory_slot(slot_idx: int, mouse_button: int) -> void:
 							slots[slot_idx]["count"] = cnt - move_n
 						transferred = true
 				if transferred:
+					_sync_active_furnace_to_dict()
 					furnace_updated.emit()
 					inventory_updated.emit()
 					return
@@ -1657,13 +1771,14 @@ func click_craft_grid_slot(grid_idx: int, mouse_button: int) -> void:
 
 ## Handles clicking the Crafting Output slot (consumes 1 ingredient from each non-empty craft cell).
 ## Shift-clicking will batch-craft in a while-loop until ingredients are exhausted or player inventory is full.
-func click_craft_output_slot() -> void:
+func click_craft_output_slot(is_shift: bool = false) -> void:
 	var out_id: int = int(craft_output.get("id", 0))
 	var out_count: int = int(craft_output.get("count", 0))
 	if out_id == 0 or out_count <= 0:
 		return
 
-	if Input.is_key_pressed(KEY_SHIFT):
+	var shift_active: bool = is_shift or Input.is_key_pressed(KEY_SHIFT) or Input.is_physical_key_pressed(KEY_SHIFT)
+	if shift_active:
 		var max_craft_loops: int = 64
 		var loop_idx: int = 0
 		while loop_idx < max_craft_loops:
@@ -1710,7 +1825,7 @@ func click_craft_output_slot() -> void:
 
 
 ## Handles clicking Furnace Input (`0`), Furnace Fuel (`1`), or Furnace Output (`2`).
-func click_furnace_slot(furnace_slot_type: int, mouse_button: int) -> void:
+func click_furnace_slot(furnace_slot_type: int, mouse_button: int, is_shift: bool = false) -> void:
 	match furnace_slot_type:
 		0: # Input
 			furnace_input = _interact_slot_with_cursor(furnace_input, mouse_button)
@@ -1720,7 +1835,8 @@ func click_furnace_slot(furnace_slot_type: int, mouse_button: int) -> void:
 			var out_id: int = int(furnace_output.get("id", 0))
 			var out_cnt: int = int(furnace_output.get("count", 0))
 			if out_id != 0 and out_cnt > 0:
-				if Input.is_key_pressed(KEY_SHIFT):
+				var shift_active: bool = is_shift or Input.is_key_pressed(KEY_SHIFT) or Input.is_physical_key_pressed(KEY_SHIFT)
+				if shift_active:
 					var rem: int = add_item_stack(out_id, out_cnt)
 					if rem <= 0:
 						furnace_output = {"id": 0, "count": 0}
@@ -1735,6 +1851,7 @@ func click_furnace_slot(furnace_slot_type: int, mouse_button: int) -> void:
 					elif cur_id == out_id and cur_cnt + out_cnt <= MAX_STACK:
 						cursor_stack["count"] = cur_cnt + out_cnt
 						furnace_output = {"id": 0, "count": 0}
+	_sync_active_furnace_to_dict()
 	furnace_updated.emit()
 	inventory_updated.emit()
 
@@ -1755,15 +1872,20 @@ func open_chest_at(chest_pos: Vector3i) -> void:
 
 func get_active_chest_slots() -> Array:
 	if not world_chests.has(active_chest_pos):
-		open_chest_at(active_chest_pos)
+		var c_slots: Array[Dictionary] = []
+		c_slots.resize(CHEST_SIZE)
+		for i in range(CHEST_SIZE):
+			c_slots[i] = {"id": 0, "count": 0}
+		world_chests[active_chest_pos] = c_slots
 	return world_chests[active_chest_pos]
 
 
-func click_chest_slot(slot_idx: int, mouse_button: int) -> void:
+func click_chest_slot(slot_idx: int, mouse_button: int, is_shift: bool = false) -> void:
 	var c_slots: Array = get_active_chest_slots()
 	if slot_idx < 0 or slot_idx >= c_slots.size():
 		return
-	if mouse_button == MOUSE_BUTTON_LEFT and Input.is_key_pressed(KEY_SHIFT):
+	var shift_active: bool = is_shift or Input.is_key_pressed(KEY_SHIFT) or Input.is_physical_key_pressed(KEY_SHIFT)
+	if mouse_button == MOUSE_BUTTON_LEFT and shift_active:
 		var s: Dictionary = c_slots[slot_idx]
 		var id: int = int(s.get("id", 0))
 		var cnt: int = int(s.get("count", 0))
@@ -2341,53 +2463,107 @@ func autofill_recipe_pattern(recipe_key: String) -> String:
 # ============================================================================
 
 func _tick_furnace(delta: float) -> void:
-	var changed: bool = false
+	# Ensure active open furnace is stored in world_furnaces
+	if is_furnace_open and not world_furnaces.has(active_furnace_pos):
+		_sync_active_furnace_to_dict()
 
-	if furnace_burn_remaining > 0.0:
-		furnace_burn_remaining = maxf(0.0, furnace_burn_remaining - delta)
+	var any_changed: bool = false
+	if not world_furnaces.is_empty():
+		for f_pos in world_furnaces.keys():
+			var f: Dictionary = world_furnaces[f_pos]
+			if _tick_single_furnace_dict(f, delta):
+				any_changed = true
+
+	# Keep backward-compatible standalone state ticking if world_furnaces is empty
+	if world_furnaces.is_empty():
+		var dummy: Dictionary = {
+			"input": furnace_input,
+			"fuel": furnace_fuel,
+			"output": furnace_output,
+			"burn_remaining": furnace_burn_remaining,
+			"burn_max": furnace_burn_max,
+			"cook_progress": furnace_cook_progress
+		}
+		if _tick_single_furnace_dict(dummy, delta):
+			furnace_input = dummy["input"]
+			furnace_fuel = dummy["fuel"]
+			furnace_output = dummy["output"]
+			furnace_burn_remaining = float(dummy["burn_remaining"])
+			furnace_burn_max = float(dummy["burn_max"])
+			furnace_cook_progress = float(dummy["cook_progress"])
+			any_changed = true
+
+	if is_furnace_open and world_furnaces.has(active_furnace_pos):
+		_sync_active_furnace_from_dict()
+
+	if any_changed:
+		furnace_updated.emit()
+
+
+func _tick_single_furnace_dict(f: Dictionary, delta: float) -> bool:
+	var changed: bool = false
+	var burn_rem: float = float(f.get("burn_remaining", 0.0))
+	if burn_rem > 0.0:
+		burn_rem = maxf(0.0, burn_rem - delta)
+		f["burn_remaining"] = burn_rem
 		changed = true
 
-	var smelt_result_id: int = _get_smelt_result(int(furnace_input.get("id", 0)))
+	var f_in: Dictionary = f.get("input", {"id": 0, "count": 0})
+	var f_fuel: Dictionary = f.get("fuel", {"id": 0, "count": 0})
+	var f_out: Dictionary = f.get("output", {"id": 0, "count": 0})
+	var cook_prog: float = float(f.get("cook_progress", 0.0))
+
+	var in_id: int = int(f_in.get("id", 0))
+	var in_cnt: int = int(f_in.get("count", 0))
+	var smelt_result_id: int = _get_smelt_result(in_id)
 	var can_smelt: bool = false
-	if smelt_result_id != 0 and int(furnace_input.get("count", 0)) > 0:
-		var out_id: int = int(furnace_output.get("id", 0))
-		var out_cnt: int = int(furnace_output.get("count", 0))
+	if smelt_result_id != 0 and in_cnt > 0:
+		var out_id: int = int(f_out.get("id", 0))
+		var out_cnt: int = int(f_out.get("count", 0))
 		if out_id == 0 or (out_id == smelt_result_id and out_cnt < MAX_STACK):
 			can_smelt = true
 
 	# Ignite fuel if needed
-	if can_smelt and furnace_burn_remaining <= 0.0:
-		var fuel_burn: float = _get_fuel_burn_duration(int(furnace_fuel.get("id", 0)))
-		if fuel_burn > 0.0 and int(furnace_fuel.get("count", 0)) > 0:
-			furnace_fuel["count"] = int(furnace_fuel["count"]) - 1
-			if int(furnace_fuel["count"]) <= 0:
-				furnace_fuel = {"id": 0, "count": 0}
-			furnace_burn_max = fuel_burn
-			furnace_burn_remaining = fuel_burn
+	if can_smelt and burn_rem <= 0.0:
+		var fuel_id: int = int(f_fuel.get("id", 0))
+		var fuel_cnt: int = int(f_fuel.get("count", 0))
+		var fuel_burn: float = _get_fuel_burn_duration(fuel_id)
+		if fuel_burn > 0.0 and fuel_cnt > 0:
+			f_fuel["count"] = fuel_cnt - 1
+			if int(f_fuel["count"]) <= 0:
+				f_fuel = {"id": 0, "count": 0}
+			f["fuel"] = f_fuel
+			f["burn_max"] = fuel_burn
+			f["burn_remaining"] = fuel_burn
+			burn_rem = fuel_burn
 			changed = true
 
 	# Advance cooking progress if burning and valid input
-	if can_smelt and furnace_burn_remaining > 0.0:
-		furnace_cook_progress += delta / FURNACE_COOK_TIME
+	if can_smelt and burn_rem > 0.0:
+		cook_prog += delta / FURNACE_COOK_TIME
 		changed = true
-		if furnace_cook_progress >= 1.0:
-			furnace_cook_progress = 0.0
-			furnace_input["count"] = int(furnace_input["count"]) - 1
-			if int(furnace_input["count"]) <= 0:
-				furnace_input = {"id": 0, "count": 0}
+		if cook_prog >= 1.0:
+			cook_prog = 0.0
+			f_in["count"] = in_cnt - 1
+			if int(f_in["count"]) <= 0:
+				f_in = {"id": 0, "count": 0}
+			f["input"] = f_in
 
-			if int(furnace_output.get("id", 0)) == 0:
-				furnace_output = {"id": smelt_result_id, "count": 1}
+			var out_id: int = int(f_out.get("id", 0))
+			if out_id == 0:
+				f_out = {"id": smelt_result_id, "count": 1}
 			else:
-				furnace_output["count"] = int(furnace_output["count"]) + 1
+				f_out["count"] = int(f_out.get("count", 0)) + 1
+			f["output"] = f_out
 			inventory_updated.emit()
+		f["cook_progress"] = cook_prog
 	else:
-		if furnace_cook_progress > 0.0:
-			furnace_cook_progress = maxf(0.0, furnace_cook_progress - delta * 0.5)
+		if cook_prog > 0.0:
+			cook_prog = maxf(0.0, cook_prog - delta * 0.5)
+			f["cook_progress"] = cook_prog
 			changed = true
 
-	if changed:
-		furnace_updated.emit()
+	return changed
 
 
 static func _get_smelt_result(input_id: int) -> int:

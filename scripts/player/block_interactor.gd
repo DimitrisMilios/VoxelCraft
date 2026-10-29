@@ -435,6 +435,8 @@ func _complete_break_block() -> void:
 
 	if previous_id == BlockRegistry.BlockId.CHEST and _inventory != null:
 		_inventory.drop_chest_contents_at(_world_manager, broken_pos)
+	elif previous_id == BlockRegistry.BlockId.FURNACE and _inventory != null:
+		_inventory.drop_furnace_contents_at(_world_manager, broken_pos)
 	if door_partner.y != -9999 and BlockRegistry.is_door(_world_manager.get_block_world(door_partner)):
 		_world_manager.set_block_world(door_partner, BlockRegistry.BlockId.AIR)
 	# Clean up partner bed block if breaking foot or head of bed
@@ -614,6 +616,8 @@ func _try_interact_or_place_block() -> void:
 	if BlockRegistry.is_interactive_station(targeted_id):
 		if targeted_id == BlockRegistry.BlockId.CHEST and _inventory != null:
 			_inventory.open_chest_at(target_block_pos)
+		elif targeted_id == BlockRegistry.BlockId.FURNACE and _inventory != null:
+			_inventory.open_furnace_at(target_block_pos)
 		station_opened.emit(targeted_id)
 		return
 
@@ -816,13 +820,13 @@ func _try_interact_or_place_block() -> void:
 		var floor_id: int = _world_manager.get_block_world(place_block_pos + Vector3i(0, -1, 0))
 		if not BlockRegistry.is_solid(floor_id) or BlockRegistry.is_door(floor_id):
 			return
+		var door_meta: int = _compute_door_meta(place_block_pos)
 		if _player_body != null:
 			var player_pos: Vector3 = _player_body.global_position
-			var player_aabb := AABB(player_pos + Vector3(-0.32, 0.05, -0.32), Vector3(0.64, 1.72, 0.64))
-			var door_box: AABB = BlockRegistry.get_door_box(BlockRegistry.door_meta_from_dir(_get_player_horizontal_facing(), false), false)
+			var player_aabb := AABB(player_pos + Vector3(-0.16, 0.05, -0.16), Vector3(0.32, 1.72, 0.32))
+			var door_box: AABB = BlockRegistry.get_door_box(door_meta, false)
 			if AABB(Vector3(place_block_pos) + door_box.position, door_box.size + Vector3(0, 1, 0)).intersects(player_aabb):
 				return
-		var door_meta: int = _compute_door_meta(place_block_pos)
 		if _world_manager.set_block_world(place_block_pos, BlockRegistry.BlockId.DOOR_CLOSED, 2, door_meta):
 			_world_manager.set_block_world(top_door_pos, BlockRegistry.BlockId.DOOR_CLOSED, 2, door_meta)
 			if not is_creative and _inventory != null:
@@ -877,7 +881,33 @@ func _try_interact_or_place_block() -> void:
 
 	var placed_pos: Vector3i = place_block_pos
 	var placed_meta: int = 0
-	if BlockRegistry.is_log(selected_item):
+	if selected_item == BlockRegistry.BlockId.TORCH or selected_item == BlockRegistry.BlockId.REDSTONE_TORCH:
+		var normal: Vector3i = place_block_pos - target_block_pos
+		if normal == Vector3i(1, 0, 0) and BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(target_block_pos)):
+			placed_meta = 1 # West wall
+		elif normal == Vector3i(-1, 0, 0) and BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(target_block_pos)):
+			placed_meta = 2 # East wall
+		elif normal == Vector3i(0, 0, 1) and BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(target_block_pos)):
+			placed_meta = 3 # North wall
+		elif normal == Vector3i(0, 0, -1) and BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(target_block_pos)):
+			placed_meta = 4 # South wall
+		elif normal == Vector3i(0, 1, 0) and BlockRegistry.is_solid(_world_manager.get_block_world(target_block_pos)):
+			placed_meta = 5 # Floor
+		else:
+			var below := placed_pos + Vector3i(0, -1, 0)
+			if BlockRegistry.is_solid(_world_manager.get_block_world(below)):
+				placed_meta = 5
+			elif BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(placed_pos + Vector3i(-1, 0, 0))):
+				placed_meta = 1
+			elif BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(placed_pos + Vector3i(1, 0, 0))):
+				placed_meta = 2
+			elif BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(placed_pos + Vector3i(0, 0, -1))):
+				placed_meta = 3
+			elif BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(placed_pos + Vector3i(0, 0, 1))):
+				placed_meta = 4
+			else:
+				return
+	elif BlockRegistry.is_log(selected_item):
 		# Logs lie along the axis of the face they are placed against.
 		var normal: Vector3i = place_block_pos - target_block_pos
 		if normal.x != 0:
@@ -954,10 +984,36 @@ func _can_place_plant(block_id: int, pos: Vector3i) -> bool:
 			return BlockRegistry.is_solid(below)
 
 
-## Door metadata for a new door at `pos`: facing = where the player looks; hinge side from the
-## neighbors (solid blocks / an existing door next to it), else from the clicked half of the block.
+## Door metadata for a new door at `pos`: detects doorways and double doors to align flush with walls;
+## hinge side from neighbors (solid blocks / an existing door next to it), else from the clicked half of the block.
 func _compute_door_meta(pos: Vector3i) -> int:
-	var facing: Vector3i = _get_player_horizontal_facing()
+	var fwd_dir: Vector3i = _get_player_horizontal_facing()
+	var facing: Vector3i = fwd_dir
+
+	# 1. Double door pairing: align facing with neighboring door
+	for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+		var nb_id: int = _world_manager.get_block_world(pos + d)
+		if BlockRegistry.is_door(nb_id):
+			var nb_meta: int = _world_manager.get_metadata_world(pos + d)
+			var nb_facing: Vector3i = BlockRegistry.door_facing_dir(nb_meta)
+			var dot: int = d.x * nb_facing.x + d.z * nb_facing.z
+			if dot == 0:
+				facing = nb_facing
+				var left_dir := Vector3i(facing.z, 0, -facing.x)
+				var hinge_on_right: bool = (d != left_dir)
+				return BlockRegistry.door_meta_from_dir(facing, hinge_on_right)
+
+	# 2. Doorway jamb detection: automatically span across the doorway frame
+	var solid_x_pos: bool = BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + Vector3i(1, 0, 0)))
+	var solid_x_neg: bool = BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + Vector3i(-1, 0, 0)))
+	var solid_z_pos: bool = BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + Vector3i(0, 0, 1)))
+	var solid_z_neg: bool = BlockRegistry.is_opaque_full_cube(_world_manager.get_block_world(pos + Vector3i(0, 0, -1)))
+
+	if solid_x_pos and solid_x_neg and not (solid_z_pos and solid_z_neg):
+		facing = Vector3i(0, 0, -1) if fwd_dir.z <= 0 else Vector3i(0, 0, 1)
+	elif solid_z_pos and solid_z_neg and not (solid_x_pos and solid_x_neg):
+		facing = Vector3i(-1, 0, 0) if fwd_dir.x <= 0 else Vector3i(1, 0, 0)
+
 	var left := Vector3i(facing.z, 0, -facing.x)
 	var right := -left
 	var up := Vector3i(0, 1, 0)

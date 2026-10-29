@@ -198,7 +198,7 @@ static func _init_flags() -> PackedByteArray:
 		if BlockRegistry.is_log(id):
 			f |= 2
 		match id:
-			BlockRegistry.BlockId.WOOD_LOG, BlockRegistry.BlockId.PINE_LOG, BlockRegistry.BlockId.BIRCH_LOG, BlockRegistry.BlockId.WOOL, BlockRegistry.BlockId.SLAB, BlockRegistry.BlockId.WOOD_STAIRS, BlockRegistry.BlockId.COBBLE_STAIRS, BlockRegistry.BlockId.DOOR_CLOSED, BlockRegistry.BlockId.DOOR_OPEN, BlockRegistry.BlockId.WHEAT_SPROUT, BlockRegistry.BlockId.POTATO_SPROUT:
+			BlockRegistry.BlockId.WOOD_LOG, BlockRegistry.BlockId.PINE_LOG, BlockRegistry.BlockId.BIRCH_LOG, BlockRegistry.BlockId.WOOL, BlockRegistry.BlockId.SLAB, BlockRegistry.BlockId.WOOD_STAIRS, BlockRegistry.BlockId.COBBLE_STAIRS, BlockRegistry.BlockId.DOOR_CLOSED, BlockRegistry.BlockId.DOOR_OPEN, BlockRegistry.BlockId.WHEAT_SPROUT, BlockRegistry.BlockId.POTATO_SPROUT, BlockRegistry.BlockId.TORCH, BlockRegistry.BlockId.REDSTONE_TORCH:
 				f |= 4
 		arr[id] = f
 	return arr
@@ -253,6 +253,9 @@ static func build_sub_chunk(sub_idx: int, padded: Array, meta: PackedByteArray, 
 					meta_v = _meta_at(meta, (ly << 8) | ((z - 1) << 4) | (x - 1))
 
 				if rt == RT_CUBE or rt == RT_CUBE_CUTOUT:
+					if id == BlockRegistry.BlockId.LAVA:
+						_emit_lava(cutout, pv, pl, occ, tiles, p, x - 1, ly, z - 1, id)
+						continue
 					var surf: Surf = opaque if rt == RT_CUBE else cutout
 					var solid: bool = (fl & 1) != 0
 					var is_log: bool = (fl & 2) != 0
@@ -590,6 +593,60 @@ static func _emit_block_boxes(
 			)
 			if solid:
 				col.append_array(PackedVector3Array([o + v0, o + v1, o + v2, o + v0, o + v2, o + v3]))
+
+
+static func _emit_lava(s: Surf, pv: PackedByteArray, pl: PackedByteArray, occ: PackedByteArray, tiles: PackedByteArray, p: int, lx: int, ly: int, lz: int, id: int) -> void:
+	var h: float = 1.0 if pv[p + PA] == BlockRegistry.BlockId.LAVA else 0.875
+	var o := Vector3(lx, ly, lz)
+	var tile: int = BlockRegistry.resolve_tile(tiles[(id << 7) | BlockRegistry.FaceDir.TOP])
+	var layer: float = float(tile) / 255.0
+	var own_l: Vector2 = _light_vec(pl[p])
+
+	# Top face
+	if pv[p + PA] != BlockRegistry.BlockId.LAVA:
+		var c := Color(1.0, 1.0, 1.0, layer)
+		_push_quad(s, o + Vector3(0, h, 0), o + Vector3(1, h, 0), o + Vector3(1, h, 1), o + Vector3(0, h, 1),
+			Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1), c, own_l)
+
+	# Bottom face
+	var nb_bot: int = pv[p - PA]
+	if nb_bot != BlockRegistry.BlockId.LAVA and occ[nb_bot] == 0:
+		var shade: float = FACE_SHADE[BlockRegistry.FaceDir.BOTTOM]
+		var c := Color(shade, shade, shade, layer)
+		_push_quad(s, o + Vector3(0, 0, 1), o + Vector3(1, 0, 1), o + Vector3(1, 0, 0), o + Vector3(0, 0, 0),
+			Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1), c, own_l)
+
+	# East (+X)
+	var nb_e: int = pv[p + 1]
+	if nb_e != BlockRegistry.BlockId.LAVA and occ[nb_e] == 0:
+		var shade: float = FACE_SHADE[BlockRegistry.FaceDir.EAST]
+		var c := Color(shade, shade, shade, layer)
+		_push_quad(s, o + Vector3(1, h, 1), o + Vector3(1, h, 0), o + Vector3(1, 0, 0), o + Vector3(1, 0, 1),
+			Vector2(0, 1.0 - h), Vector2(1, 1.0 - h), Vector2(1, 1), Vector2(0, 1), c, own_l)
+
+	# West (-X)
+	var nb_w: int = pv[p - 1]
+	if nb_w != BlockRegistry.BlockId.LAVA and occ[nb_w] == 0:
+		var shade: float = FACE_SHADE[BlockRegistry.FaceDir.WEST]
+		var c := Color(shade, shade, shade, layer)
+		_push_quad(s, o + Vector3(0, h, 0), o + Vector3(0, h, 1), o + Vector3(0, 0, 1), o + Vector3(0, 0, 0),
+			Vector2(0, 1.0 - h), Vector2(1, 1.0 - h), Vector2(1, 1), Vector2(0, 1), c, own_l)
+
+	# South (+Z)
+	var nb_s: int = pv[p + P]
+	if nb_s != BlockRegistry.BlockId.LAVA and occ[nb_s] == 0:
+		var shade: float = FACE_SHADE[BlockRegistry.FaceDir.SOUTH]
+		var c := Color(shade, shade, shade, layer)
+		_push_quad(s, o + Vector3(0, h, 1), o + Vector3(1, h, 1), o + Vector3(1, 0, 1), o + Vector3(0, 0, 1),
+			Vector2(0, 1.0 - h), Vector2(1, 1.0 - h), Vector2(1, 1), Vector2(0, 1), c, own_l)
+
+	# North (-Z)
+	var nb_n: int = pv[p - P]
+	if nb_n != BlockRegistry.BlockId.LAVA and occ[nb_n] == 0:
+		var shade: float = FACE_SHADE[BlockRegistry.FaceDir.NORTH]
+		var c := Color(shade, shade, shade, layer)
+		_push_quad(s, o + Vector3(1, h, 0), o + Vector3(0, h, 0), o + Vector3(0, 0, 0), o + Vector3(1, 0, 0),
+			Vector2(0, 1.0 - h), Vector2(1, 1.0 - h), Vector2(1, 1), Vector2(0, 1), c, own_l)
 
 
 # ============================================================================

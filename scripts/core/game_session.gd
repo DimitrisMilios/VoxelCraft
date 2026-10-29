@@ -140,6 +140,7 @@ static func create_world(world_name: String, custom_seed_str: String = "") -> St
 			"day": 1,
 		},
 		"world_chests": {},
+		"world_furnaces": {},
 	}
 
 	_write_json_file(world_dir + "/level.json", initial_data)
@@ -245,6 +246,18 @@ static func save_world_state(
 				var key_str: String = "%d,%d,%d" % [c_pos.x, c_pos.y, c_pos.z]
 				chest_serialized[key_str] = chests[c_pos]
 			data["world_chests"] = chest_serialized
+
+		# 3b. Placed World Furnaces
+		if inventory.has_method("serialize_furnaces"):
+			data["world_furnaces"] = inventory.serialize_furnaces()
+		else:
+			var furnaces: Dictionary = inventory.get("world_furnaces")
+			var furnace_serialized: Dictionary = {}
+			if furnaces is Dictionary:
+				for f_pos in furnaces.keys():
+					var key_str: String = "%d,%d,%d" % [f_pos.x, f_pos.y, f_pos.z]
+					furnace_serialized[key_str] = furnaces[f_pos]
+			data["world_furnaces"] = furnace_serialized
 
 	# 4. Day / Night Cycle (only overwrite if valid node provided)
 	if day_night != null and is_instance_valid(day_night):

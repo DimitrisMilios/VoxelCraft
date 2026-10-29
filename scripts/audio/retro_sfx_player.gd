@@ -365,7 +365,10 @@ func _on_player_jumped() -> void:
 
 func _on_water_state_changed(in_water: bool) -> void:
 	if in_water:
-		play_sfx("splash", -1.0)
+		if _player != null and bool(_player.get("is_in_lava")):
+			play_sfx("lava_cool", -1.0)
+		else:
+			play_sfx("splash", -1.0)
 
 
 func _on_player_damaged(_amount: int) -> void:
