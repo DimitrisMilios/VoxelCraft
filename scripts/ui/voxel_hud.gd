@@ -1358,11 +1358,8 @@ func _refresh_all_slot_visuals() -> void:
 		if i < _hotbar_slot_dicts.size():
 			_hotbar_slot_dicts[i]["current_item_id"] = id
 			_hotbar_slot_dicts[i]["current_durability"] = int(slot_data.get("durability", -1))
-			if _active_hovered_slot == _hotbar_slot_dicts[i]:
-				if id > 0:
-					_show_slot_tooltip(_hotbar_slot_dicts[i])
-				else:
-					_hide_slot_tooltip()
+			if is_same(_active_hovered_slot, _hotbar_slot_dicts[i]):
+				_show_slot_tooltip(_hotbar_slot_dicts[i])
 
 	# 2. Refresh all 36 modal inventory slots
 	for i in range(mini(_inv_modal_slots.size(), _inventory.slots.size())):
@@ -1422,11 +1419,8 @@ func _refresh_armor_visuals() -> void:
 
 		w["current_item_id"] = aid
 		w["current_durability"] = int(item.get("durability", -1))
-		if _active_hovered_slot == w:
-			if aid > 0:
-				_show_slot_tooltip(w)
-			else:
-				_hide_slot_tooltip()
+		if is_same(_active_hovered_slot, w):
+			_show_slot_tooltip(w)
 
 		if aid > 0:
 			if panel != null:
@@ -1489,11 +1483,8 @@ func _paint_slot_widget(widget: Dictionary, slot_data: Dictionary) -> void:
 	widget["current_item_id"] = id
 	widget["current_durability"] = dur
 
-	if _active_hovered_slot == widget:
-		if id > 0:
-			_show_slot_tooltip(widget)
-		else:
-			_hide_slot_tooltip()
+	if is_same(_active_hovered_slot, widget):
+		_show_slot_tooltip(widget)
 
 	var panel: PanelContainer = widget.get("panel", null) as PanelContainer
 	var icon_rect: TextureRect = widget.get("icon", null) as TextureRect
@@ -1844,10 +1835,12 @@ func _show_slot_tooltip(widget: Dictionary) -> void:
 	if widget == null or widget.is_empty():
 		_hide_slot_tooltip()
 		return
+	# Keep tracking the hovered slot even while it is empty, so the tooltip appears once an item lands in it.
 	_active_hovered_slot = widget
 	var id: int = int(widget.get("current_item_id", 0))
 	if id <= 0:
-		_hide_slot_tooltip()
+		if _hover_tooltip_panel != null:
+			_hover_tooltip_panel.visible = false
 		return
 	var item_name: String = InventoryManager.get_item_name(id)
 	if _hover_tooltip_label != null:
@@ -1866,7 +1859,9 @@ func _show_slot_tooltip(widget: Dictionary) -> void:
 
 
 func _hide_slot_tooltip() -> void:
-	_active_hovered_slot.clear()
+	# Reassign instead of clear(): _active_hovered_slot shares the slot widget dictionary by reference,
+	# and clearing it would wipe that slot's panel/icon/label refs so it never repaints again.
+	_active_hovered_slot = {}
 	if _hover_tooltip_panel != null:
 		_hover_tooltip_panel.visible = false
 
